@@ -1,14 +1,18 @@
 import sys
 import os
 import shutil
+import json
+import hashlib
+import re
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
                              QPushButton, QFileDialog, QListWidget, QListWidgetItem,
                              QListView, QCheckBox, QSpinBox, QLabel, QDial,
                              QSlider, QDialog, QMenu, QInputDialog, QMessageBox,
-                             QAbstractItemView, QStackedWidget, QComboBox)
+                             QAbstractItemView, QStackedWidget, QComboBox, QLineEdit,
+                             QRubberBand)
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QVideoWidget
-from PyQt6.QtCore import QUrl, Qt, QThread, pyqtSignal, QSize, QSettings
+from PyQt6.QtCore import QUrl, Qt, QThread, pyqtSignal, QSize, QSettings, QPoint, QRect
 from PyQt6.QtGui import QImage, QPixmap, QIcon, QMovie
 
 try:
@@ -17,6 +21,27 @@ try:
     CV2_AVAILABLE = True
 except ImportError:
     CV2_AVAILABLE = False
+
+try:
+    import pytesseract
+    from PIL import Image
+    from deep_translator import GoogleTranslator
+    import tempfile
+    
+    # On Windows, automatically point to the default Tesseract install path if not in system PATH
+    if os.name == 'nt' and not shutil.which('tesseract'):
+        # Check common and custom installation paths
+        for path in [r'D:\Programs\Tesseract-OCR\tesseract.exe', r'C:\Program Files\Tesseract-OCR\tesseract.exe']:
+            if os.path.exists(path):
+                pytesseract.pytesseract.tesseract_cmd = path
+                break
+            
+    TRANSLATION_AVAILABLE = True
+except ImportError:
+    TRANSLATION_AVAILABLE = False
+
+def natural_sort_key(s):
+    return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', s)]
 
 # Custom Video Widget for double-click full screen toggle
 class CustomVideoWidget(QVideoWidget):
@@ -143,6 +168,64 @@ class ThumbnailWorker(QThread):
             
         return None
 
+class SelectableImageLabel(QLabel):
+    selection_made = pyqtSignal(QRect)
+    selection_cleared = pyqtSignal()
+    
+    def __init__(self):
+        super().__init__()
+        self.rubber_band = QRubberBand(QRubberBand.Shape.Rectangle, self)
+        self.origin = QPoint()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.origin = event.pos()
+            self.rubber_band.setGeometry(QRect(self.origin, QSize()))
+            self.rubber_band.show()
+        elif event.button() == Qt.MouseButton.RightButton:
+            self.rubber_band.hide()
+            self.selection_cleared.emit()
+
+    def mouseMoveEvent(self, event):
+        if not self.origin.isNull():
+            self.rubber_band.setGeometry(QRect(self.origin, event.pos()).normalized())
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.rubber_band.hide()
+            rect = self.rubber_band.geometry()
+            if rect.width() > 10 and rect.height() > 10:
+                self.selection_made.emit(rect)
+            self.origin = QPoint()
+
+class TranslationWorker(QThread):
+    result_ready = pyqtSignal(str, str)
+    error_occurred = pyqtSignal(str)
+
+    def __init__(self, image):
+        super().__init__()
+        self.tmp_path = ""
+        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        tmp.close()
+        image.save(tmp.name, "PNG")
+        self.tmp_path = tmp.name
+
+    def run(self):
+        try:
+            pil_img = Image.open(self.tmp_path)
+            jp_text = pytesseract.image_to_string(pil_img, lang='jpn_vert+jpn', config='--psm 5').strip()
+            if not jp_text:
+                self.error_occurred.emit("No text recognized. Try selecting a tighter box around the text.")
+                return
+                
+            en_text = GoogleTranslator(source='ja', target='en').translate(jp_text)
+            self.result_ready.emit(jp_text, en_text)
+        except Exception as e:
+            self.error_occurred.emit(str(e))
+        finally:
+            try: os.remove(self.tmp_path)
+            except: pass
+
 class FavoritesWindow(QDialog):
     def __init__(self, favorites, parent=None):
         super().__init__(parent)
@@ -254,6 +337,253 @@ class FavoritesWindow(QDialog):
         self.sample_player.stop()
         super().closeEvent(event)
 
+class MangaViewerWindow(QDialog):
+    def __init__(self, directory, image_paths, parent=None):
+        super().__init__(parent)
+        self.directory = directory
+        self.image_paths = image_paths
+        self.current_index = 0
+        self.json_path = os.path.join(self.directory, "manga_info.json")
+        self.current_pixmap = None
+        
+        self.setWindowTitle("Manga Viewer")
+        self.showFullScreen()
+        self.setStyleSheet("background-color: black; color: white;")
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        
+        layout = QVBoxLayout(self)
+        
+        # Top Bar
+        top_layout = QHBoxLayout()
+        self.name_edit = QLineEdit()
+        self.name_edit.setPlaceholderText("Enter Manga Name...")
+        self.name_edit.setStyleSheet("background-color: #333; color: white; padding: 5px; border-radius: 3px;")
+        top_layout.addWidget(QLabel("Manga Name:"))
+        top_layout.addWidget(self.name_edit)
+        
+        self.btn_save = QPushButton("Save Info")
+        self.btn_save.setStyleSheet("background-color: #333; color: white; padding: 5px; border-radius: 3px;")
+        self.btn_save.clicked.connect(self.save_manga_info)
+        top_layout.addWidget(self.btn_save)
+        
+        self.btn_close = QPushButton("Close Viewer")
+        self.btn_close.setStyleSheet("background-color: #333; color: white; padding: 5px; border-radius: 3px;")
+        self.btn_close.clicked.connect(self.close)
+        top_layout.addWidget(self.btn_close)
+        
+        layout.addLayout(top_layout)
+        
+        # Image Display
+        self.image_label = SelectableImageLabel()
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image_label.selection_made.connect(self.process_translation)
+        self.image_label.selection_cleared.connect(self.hide_translation)
+        layout.addWidget(self.image_label, stretch=1)
+        
+        # Translation Overlay
+        self.translation_overlay = QLabel(self)
+        self.translation_overlay.setStyleSheet("background-color: rgba(0, 0, 0, 220); color: #fff200; font-size: 22px; font-weight: bold; padding: 15px; border-radius: 8px;")
+        self.translation_overlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.translation_overlay.setWordWrap(True)
+        self.translation_overlay.setMaximumWidth(800)
+        self.translation_overlay.hide()
+        
+        self.load_manga_info()
+        self.load_current_image()
+        self.setFocus()
+        
+    def load_manga_info(self):
+        if os.path.exists(self.json_path):
+            try:
+                with open(self.json_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    if 'name' in data:
+                        self.name_edit.setText(data['name'])
+                    if 'order' in data:
+                        saved_order = data['order']
+                        valid_saved = [os.path.join(self.directory, p) for p in saved_order if os.path.exists(os.path.join(self.directory, p))]
+                        for img in self.image_paths:
+                            if img not in valid_saved:
+                                valid_saved.append(img)
+                        self.image_paths = valid_saved
+            except Exception as e:
+                print(f"Error loading manga info: {e}")
+                
+    def save_manga_info(self):
+        data = {
+            "name": self.name_edit.text(),
+            "order": [os.path.basename(p) for p in self.image_paths]
+        }
+        try:
+            with open(self.json_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=4)
+            QMessageBox.information(self, "Saved", "Manga info saved successfully!")
+            self.name_edit.clearFocus()
+            self.setFocus()
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to save: {e}")
+            
+    def load_current_image(self):
+        if 0 <= self.current_index < len(self.image_paths):
+            self.hide_translation()
+            path = self.image_paths[self.current_index]
+            self.current_pixmap = QPixmap(path)
+            self.update_image_view()
+            
+    def hide_translation(self):
+        if hasattr(self, 'translation_overlay'):
+            self.translation_overlay.hide()
+
+    def process_translation(self, rect):
+        if not self.current_pixmap: return
+        if not TRANSLATION_AVAILABLE:
+            QMessageBox.warning(self, "Dependencies Missing", "Please run: pip install pytesseract Pillow deep-translator\n\nNote: Tesseract-OCR must also be installed on your OS with Japanese language support.")
+            return
+            
+        cropped = self.image_label.grab(rect).toImage()
+        self.translation_worker = TranslationWorker(cropped)
+        self.translation_worker.result_ready.connect(self.show_translation)
+        self.translation_worker.error_occurred.connect(self.show_translation_error)
+        self.translation_worker.start()
+        self.setWindowTitle(f"Manga Viewer - TRANSLATING...")
+        self.hide_translation()
+
+    def show_translation(self, orig, translated):
+        self.update_image_view() # Restore title
+        self.translation_overlay.setText(f"{orig}\n\n{translated}")
+        self.translation_overlay.adjustSize()
+        
+        ox = (self.width() - self.translation_overlay.width()) // 2
+        oy = self.height() - self.translation_overlay.height() - 50
+        self.translation_overlay.move(ox, oy)
+        self.translation_overlay.show()
+        
+    def show_translation_error(self, err):
+        self.update_image_view()
+        QMessageBox.warning(self, "Translation Error", f"Could not translate:\n{err}")
+            
+    def update_image_view(self):
+        if self.current_pixmap and not self.current_pixmap.isNull():
+            scaled_pixmap = self.current_pixmap.scaled(self.image_label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            self.image_label.setPixmap(scaled_pixmap)
+            self.setWindowTitle(f"Manga Viewer - {self.name_edit.text() or 'Unknown'} - ({self.current_index + 1}/{len(self.image_paths)})")
+            
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.update_image_view()
+        
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Right:
+            if self.current_index < len(self.image_paths) - 1:
+                self.current_index += 1
+                self.load_current_image()
+        elif event.key() == Qt.Key.Key_Left:
+            if self.current_index > 0:
+                self.current_index -= 1
+                self.load_current_image()
+        elif event.key() == Qt.Key.Key_Escape:
+            self.close()
+        else:
+            super().keyPressEvent(event)
+            
+    def wheelEvent(self, event):
+        if event.angleDelta().y() > 0:
+            if self.current_index > 0:
+                self.current_index -= 1
+                self.load_current_image()
+        elif event.angleDelta().y() < 0:
+            if self.current_index < len(self.image_paths) - 1:
+                self.current_index += 1
+                self.load_current_image()
+        else:
+            super().wheelEvent(event)
+
+class MoveTargetsDialog(QDialog):
+    def __init__(self, targets, parent=None):
+        super().__init__(parent)
+        self.targets = targets
+        self.setWindowTitle("Configure Move Targets")
+        self.resize(500, 300)
+        self.setStyleSheet("background-color: #222; color: white;")
+        
+        layout = QVBoxLayout(self)
+        
+        self.list_widget = QListWidget()
+        self.list_widget.setStyleSheet("background-color: #111; color: white;")
+        self.update_list()
+        layout.addWidget(self.list_widget)
+        
+        form_layout = QHBoxLayout()
+        self.name_edit = QLineEdit()
+        self.name_edit.setPlaceholderText("Name (e.g., Manga)")
+        self.name_edit.setStyleSheet("background-color: #333; color: white; padding: 5px; border-radius: 3px;")
+        
+        self.path_edit = QLineEdit()
+        self.path_edit.setPlaceholderText("Target Path")
+        self.path_edit.setStyleSheet("background-color: #333; color: white; padding: 5px; border-radius: 3px;")
+        
+        self.btn_browse = QPushButton("Browse")
+        self.btn_browse.setStyleSheet("background-color: #333; color: white; padding: 5px; border-radius: 3px;")
+        self.btn_browse.clicked.connect(self.browse_path)
+        
+        form_layout.addWidget(self.name_edit)
+        form_layout.addWidget(self.path_edit)
+        form_layout.addWidget(self.btn_browse)
+        
+        layout.addLayout(form_layout)
+        
+        btn_layout = QHBoxLayout()
+        self.btn_add = QPushButton("Add / Update")
+        self.btn_add.setStyleSheet("background-color: #333; color: white; padding: 5px; border-radius: 3px;")
+        self.btn_add.clicked.connect(self.add_target)
+        self.btn_remove = QPushButton("Remove Selected")
+        self.btn_remove.setStyleSheet("background-color: #333; color: white; padding: 5px; border-radius: 3px;")
+        self.btn_remove.clicked.connect(self.remove_target)
+        self.btn_close = QPushButton("Close")
+        self.btn_close.setStyleSheet("background-color: #333; color: white; padding: 5px; border-radius: 3px;")
+        self.btn_close.clicked.connect(self.accept)
+        
+        btn_layout.addWidget(self.btn_add)
+        btn_layout.addWidget(self.btn_remove)
+        btn_layout.addWidget(self.btn_close)
+        
+        layout.addLayout(btn_layout)
+        self.list_widget.itemClicked.connect(self.on_item_clicked)
+        
+    def update_list(self):
+        self.list_widget.clear()
+        for name, path in self.targets.items():
+            self.list_widget.addItem(f"{name}  ->  {path}")
+            
+    def browse_path(self):
+        path = QFileDialog.getExistingDirectory(self, "Select Target Directory")
+        if path:
+            self.path_edit.setText(path)
+            
+    def add_target(self):
+        name = self.name_edit.text().strip()
+        path = self.path_edit.text().strip()
+        if name and path:
+            self.targets[name] = path
+            self.update_list()
+            self.name_edit.clear()
+            self.path_edit.clear()
+            
+    def remove_target(self):
+        item = self.list_widget.currentItem()
+        if item:
+            text = item.text()
+            name = text.split("  ->  ")[0]
+            if name in self.targets:
+                del self.targets[name]
+                self.update_list()
+                
+    def on_item_clicked(self, item):
+        text = item.text()
+        name, path = text.split("  ->  ")
+        self.name_edit.setText(name)
+        self.path_edit.setText(path)
+
 class MediaPlayer(QWidget):
     def __init__(self, filepath=None):
         super().__init__()
@@ -268,6 +598,11 @@ class MediaPlayer(QWidget):
             self.favorites = list(favs)
         self.favorites = [f for f in self.favorites if os.path.isfile(f)]
         
+        try:
+            self.move_targets = json.loads(self.settings.value("move_targets", defaultValue="{}"))
+        except Exception:
+            self.move_targets = {}
+            
         self.setWindowTitle("Simple Media Player")
         self.setGeometry(100, 100, 1280, 720)
         self.setStyleSheet("background-color: black; color: white;")
@@ -322,19 +657,22 @@ class MediaPlayer(QWidget):
         # Controls Layout
         controls_layout = QHBoxLayout()
         controls_layout.setContentsMargins(10, 5, 10, 5)
-        self.btn_open = QPushButton("Open File")
+        self.btn_open = QPushButton("Load Folder/File")
         self.combo_sort = QComboBox()
         self.combo_sort.addItems(["Sort: Name", "Sort: Date", "Sort: Size"])
         self.combo_sort.currentIndexChanged.connect(self.apply_sorting)
         self.btn_show_favs = QPushButton("Play Favorites")
         self.btn_play_unfavs = QPushButton("Play Unfavorites")
+        self.btn_read_manga = QPushButton("📖 Read Manga")
+        self.btn_move_targets = QPushButton("📂 Move Targets")
+        self.btn_delete_dupes = QPushButton("🗑️ Delete Dupes")
         self.btn_play_pause = QPushButton("Play / Pause")
         self.btn_prev = QPushButton("Previous")
         self.btn_next = QPushButton("Next")
         self.btn_fav_toggle = QPushButton("☆ Favorite")
         
         button_style = "background-color: #333; padding: 10px; border-radius: 5px; color: white;"
-        for btn in [self.btn_open, self.combo_sort, self.btn_show_favs, self.btn_play_unfavs, self.btn_play_pause, self.btn_prev, self.btn_next, self.btn_fav_toggle]:
+        for btn in [self.btn_open, self.combo_sort, self.btn_show_favs, self.btn_play_unfavs, self.btn_read_manga, self.btn_move_targets, self.btn_delete_dupes, self.btn_play_pause, self.btn_prev, self.btn_next, self.btn_fav_toggle]:
             btn.setStyleSheet(button_style)
             btn.setFocusPolicy(Qt.FocusPolicy.NoFocus) 
             controls_layout.addWidget(btn)
@@ -400,6 +738,9 @@ class MediaPlayer(QWidget):
         self.btn_next.clicked.connect(self.next_video)
         self.btn_show_favs.clicked.connect(self.play_favorites)
         self.btn_play_unfavs.clicked.connect(self.play_unfavorites)
+        self.btn_read_manga.clicked.connect(self.open_manga_viewer)
+        self.btn_move_targets.clicked.connect(self.open_move_targets_dialog)
+        self.btn_delete_dupes.clicked.connect(self.delete_duplicates)
         self.btn_fav_toggle.clicked.connect(self.toggle_favorite)
         
         self.playlist = []
@@ -482,7 +823,7 @@ class MediaPlayer(QWidget):
                 
         sort_text = self.combo_sort.currentText()
         if "Name" in sort_text:
-            self.playlist.sort()
+            self.playlist.sort(key=natural_sort_key)
         elif "Date" in sort_text:
             self.playlist.sort(key=lambda x: os.path.getmtime(x) if os.path.exists(x) else 0)
         elif "Size" in sort_text:
@@ -503,7 +844,7 @@ class MediaPlayer(QWidget):
         
         sort_text = self.combo_sort.currentText()
         if "Name" in sort_text:
-            self.playlist.sort()
+            self.playlist.sort(key=natural_sort_key)
         elif "Date" in sort_text:
             self.playlist.sort(key=lambda x: os.path.getmtime(x) if os.path.exists(x) else 0)
         elif "Size" in sort_text:
@@ -663,7 +1004,7 @@ class MediaPlayer(QWidget):
                 if full_path not in self.favorites:
                     unfav_playlist.append(full_path)
                     
-        unfav_playlist.sort()
+        unfav_playlist.sort(key=natural_sort_key)
         
         if not unfav_playlist:
             QMessageBox.information(self, "No Unfavorites", "All videos in this folder are already favorited!")
@@ -672,6 +1013,33 @@ class MediaPlayer(QWidget):
         self.playlist = unfav_playlist
         self.current_index = 0
         self.play_current()
+
+    def open_manga_viewer(self):
+        if not self.playlist:
+            return
+            
+        directory = os.path.dirname(self.playlist[self.current_index]) if self.current_index >= 0 else os.path.dirname(self.playlist[0])
+        
+        image_exts = {'.jpg', '.jpeg', '.png', '.webp', '.gif'}
+        images = [p for p in self.playlist if os.path.splitext(p)[1].lower() in image_exts]
+        
+        if not images:
+            QMessageBox.information(self, "No Images", "No images found in this folder for Manga Viewer.")
+            return
+            
+        images.sort(key=natural_sort_key)
+        
+        if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self.media_player.pause()
+            
+        dialog = MangaViewerWindow(directory, images, self)
+        dialog.exec()
+
+    def open_move_targets_dialog(self):
+        dialog = MoveTargetsDialog(self.move_targets.copy(), self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.move_targets = dialog.targets
+            self.settings.setValue("move_targets", json.dumps(self.move_targets))
 
     def change_volume(self, value):
         self.audio_output.setVolume(value / 100.0)
@@ -683,11 +1051,13 @@ class MediaPlayer(QWidget):
             self.showFullScreen()
 
     def open_file(self):
+        last_dir = self.settings.value("last_directory", defaultValue="")
         filepath, _ = QFileDialog.getOpenFileName(
-            self, "Open Video", "", 
+            self, "Open Media", last_dir, 
             "Media Files (*.mp4 *.avi *.mkv *.mov *.wmv *.flv *.webm *.mpg *.mpeg *.jpg *.jpeg *.png *.webp *.gif);;All Files (*)"
         )
         if filepath:
+            self.settings.setValue("last_directory", os.path.dirname(filepath))
             self.load_directory(filepath)
             
     def toggle_play_pause(self):
@@ -711,8 +1081,52 @@ class MediaPlayer(QWidget):
             self.toggle_play_pause()
         elif event.key() == Qt.Key.Key_Escape:
             self.close()
+        elif event.key() == Qt.Key.Key_Home:
+            if self.playlist:
+                self.current_index = 0
+                self.play_current()
+        elif event.key() == Qt.Key.Key_End:
+            if self.playlist:
+                self.current_index = len(self.playlist) - 1
+                self.play_current()
+        elif event.key() == Qt.Key.Key_F2:
+            items = self.playlist_widget.selectedItems()
+            if not items and self.current_index in self.list_items_map:
+                items = [self.list_items_map[self.current_index]]
+            if items:
+                self.rename_files(items)
+        elif event.key() == Qt.Key.Key_Delete:
+            items = self.playlist_widget.selectedItems()
+            if not items and self.current_index in self.list_items_map:
+                items = [self.list_items_map[self.current_index]]
+            if items:
+                self.delete_files(items)
+        elif event.key() == Qt.Key.Key_F3:
+            items = self.playlist_widget.selectedItems()
+            if not items and self.current_index in self.list_items_map:
+                items = [self.list_items_map[self.current_index]]
+            if items:
+                self.move_files(items)
+        elif event.key() in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
+            rate = self.media_player.playbackRate()
+            self.media_player.setPlaybackRate(min(4.0, rate + 0.25))
+            if self.playlist and self.current_index >= 0:
+                self.setWindowTitle(f"Playing: {os.path.basename(self.playlist[self.current_index])} - Speed: {self.media_player.playbackRate()}x")
+        elif event.key() == Qt.Key.Key_Minus:
+            rate = self.media_player.playbackRate()
+            self.media_player.setPlaybackRate(max(0.25, rate - 0.25))
+            if self.playlist and self.current_index >= 0:
+                self.setWindowTitle(f"Playing: {os.path.basename(self.playlist[self.current_index])} - Speed: {self.media_player.playbackRate()}x")
         else:
             super().keyPressEvent(event)
+
+    def wheelEvent(self, event):
+        if event.angleDelta().y() > 0:
+            self.prev_video()
+        elif event.angleDelta().y() < 0:
+            self.next_video()
+        else:
+            super().wheelEvent(event)
             
     def next_video(self):
         if not self.playlist: return
@@ -783,10 +1197,21 @@ class MediaPlayer(QWidget):
         paths = self.get_selected_filepaths(items)
         if not paths: return
         
-        folder_name, ok = QInputDialog.getText(self, "Move Files", "Target folder name (created if missing):")
-        if ok and folder_name:
+        options = list(self.move_targets.keys())
+        target_name, ok = QInputDialog.getItem(
+            self, "Move Files", 
+            "Select target or type new subfolder name:", 
+            options, 0, True
+        )
+        
+        if ok and target_name:
             current_playing = self.playlist[self.current_index]
-            target_dir = os.path.join(os.path.dirname(paths[0]), folder_name)
+            
+            if target_name in self.move_targets:
+                target_dir = self.move_targets[target_name]
+            else:
+                target_dir = os.path.join(os.path.dirname(paths[0]), target_name)
+                
             try:
                 os.makedirs(target_dir, exist_ok=True)
                 for p in paths:
@@ -826,6 +1251,75 @@ class MediaPlayer(QWidget):
                 self.playlist.clear()
                 self.update_playlist_ui()
                 self.media_player.stop()
+
+    def delete_duplicates(self):
+        if not self.playlist:
+            return
+
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        
+        # Group by size first to save time hashing massive files
+        size_groups = {}
+        for filepath in self.playlist:
+            if not os.path.exists(filepath):
+                continue
+            try:
+                sz = os.path.getsize(filepath)
+                if sz not in size_groups:
+                    size_groups[sz] = []
+                size_groups[sz].append(filepath)
+            except Exception:
+                pass
+                
+        # Only hash files that share an exact byte size with another file
+        potential_dupes = [paths for sz, paths in size_groups.items() if len(paths) > 1]
+        duplicates = []
+        
+        try:
+            for group in potential_dupes:
+                seen_hashes = {}
+                for filepath in group:
+                    file_hash = hashlib.md5()
+                    with open(filepath, "rb") as f:
+                        for chunk in iter(lambda: f.read(65536), b""):
+                            file_hash.update(chunk)
+                    digest = file_hash.hexdigest()
+                    
+                    if digest in seen_hashes:
+                        duplicates.append((filepath, seen_hashes[digest]))
+                    else:
+                        seen_hashes[digest] = filepath
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.critical(self, "Error", f"Error scanning for duplicates:\n{e}")
+            return
+            
+        QApplication.restoreOverrideCursor()
+        
+        if not duplicates:
+            QMessageBox.information(self, "No Duplicates", "No duplicate files found in the current folder.")
+            return
+            
+        msg = f"Found {len(duplicates)} duplicate file(s):\n\n"
+        for dup, orig in duplicates[:10]:
+            msg += f"'{os.path.basename(dup)}' matches '{os.path.basename(orig)}'\n"
+        if len(duplicates) > 10:
+            msg += f"...and {len(duplicates) - 10} more.\n"
+            
+        msg += "\nDo you want to delete the duplicates?"
+        
+        reply = QMessageBox.question(self, "Delete Duplicates", msg, 
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+                                     
+        if reply == QMessageBox.StandardButton.Yes:
+            errors = []
+            for dup, _ in duplicates:
+                try: os.remove(dup)
+                except Exception as e: errors.append(f"Failed to delete {os.path.basename(dup)}:\n{e}")
+                
+            # Pass empty items to force a reload and cleanup
+            if errors: QMessageBox.warning(self, "Deletion Errors", "\n".join(errors[:5]) + ("\n..." if len(errors) > 5 else ""))
+            self.delete_files([])
         
     def closeEvent(self, event):
         self.thumbnail_worker.running = False
