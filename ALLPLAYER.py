@@ -3,15 +3,16 @@ import os
 import shutil
 import json
 import hashlib
+import re
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
                              QPushButton, QFileDialog, QListWidget, QListWidgetItem,
                              QListView, QCheckBox, QSpinBox, QLabel, QDial,
                              QSlider, QDialog, QMenu, QInputDialog, QMessageBox,
                              QAbstractItemView, QStackedWidget, QComboBox, QLineEdit,
-                             QRubberBand)
+                             QRubberBand, QTextEdit)
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QVideoWidget
-from PyQt6.QtCore import QUrl, Qt, QThread, pyqtSignal, QSize, QSettings, QPoint, QRect
+from PyQt6.QtCore import QUrl, Qt, QThread, pyqtSignal, QSize, QSettings, QPoint, QRect, QTimer
 from PyQt6.QtGui import QImage, QPixmap, QIcon, QMovie
 
 try:
@@ -22,22 +23,58 @@ except ImportError:
     CV2_AVAILABLE = False
 
 try:
-    import pytesseract
-    from PIL import Image
+    from manga_ocr import MangaOcr
+    from PIL import Image, ImageDraw, ImageFont
     from deep_translator import GoogleTranslator
     import tempfile
     
-    # On Windows, automatically point to the default Tesseract install path if not in system PATH
-    if os.name == 'nt' and not shutil.which('tesseract'):
-        # Check common and custom installation paths
-        for path in [r'D:\Programs\Tesseract-OCR\tesseract.exe', r'C:\Program Files\Tesseract-OCR\tesseract.exe']:
-            if os.path.exists(path):
-                pytesseract.pytesseract.tesseract_cmd = path
-                break
+    # Lazy-loaded so the app doesn't freeze on initial startup/download
+    manga_ocr_model = None
             
     TRANSLATION_AVAILABLE = True
 except ImportError:
     TRANSLATION_AVAILABLE = False
+
+class CustomQuestionDialog(QDialog):
+    def __init__(self, parent, title, message):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setStyleSheet("background-color: #222; color: white;")
+        layout = QVBoxLayout(self)
+        
+        lbl = QLabel(message)
+        lbl.setWordWrap(True)
+        layout.addWidget(lbl)
+        
+        btn_layout = QHBoxLayout()
+        btn_yes = QPushButton("Yes")
+        btn_yes.setStyleSheet("background-color: #d32f2f; color: white; padding: 5px; border-radius: 3px;")
+        btn_yes.clicked.connect(self.accept)
+        
+        btn_no = QPushButton("No")
+        btn_no.setStyleSheet("background-color: #555; color: white; padding: 5px; border-radius: 3px;")
+        btn_no.clicked.connect(self.reject)
+        
+        btn_layout.addWidget(btn_yes)
+        btn_layout.addWidget(btn_no)
+        layout.addLayout(btn_layout)
+
+def natural_sort_key(s):
+    # Only sort by the filename itself to prevent numbers in parent directories from interfering
+    basename = os.path.basename(s)
+    
+    # Primary sort: ignores punctuation/spaces so 'img_1', 'img-2', 'img 3' group correctly
+    primary_parts = []
+    for text in re.split(r'(\d+)', basename):
+        if text.isdigit():
+            primary_parts.append(int(text))
+        else:
+            primary_parts.append(re.sub(r'[\W_]+', '', text).lower())
+            
+    # Secondary sort: preserves exact punctuation as a tiebreaker
+    secondary_parts = [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', basename)]
+    
+    return (primary_parts, secondary_parts)
 
 # Custom Video Widget for double-click full screen toggle
 class CustomVideoWidget(QVideoWidget):
@@ -197,31 +234,41 @@ class SelectableImageLabel(QLabel):
 class TranslationWorker(QThread):
     result_ready = pyqtSignal(str, str)
     error_occurred = pyqtSignal(str)
+    status_update = pyqtSignal(str)
 
     def __init__(self, image):
         super().__init__()
-        self.tmp_path = ""
-        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-        tmp.close()
-        image.save(tmp.name)
-        self.tmp_path = tmp.name
+        from PyQt6.QtCore import QByteArray, QBuffer, QIODevice
+        ba = QByteArray()
+        buffer = QBuffer(ba)
+        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+        image.save(buffer, "PNG")
+        self.img_bytes = ba.data()
 
     def run(self):
+        import io
+        global manga_ocr_model
         try:
-            pil_img = Image.open(self.tmp_path)
-            jp_text = pytesseract.image_to_string(pil_img, lang='jpn_vert+jpn').strip()
-            if not jp_text:
-                self.error_occurred.emit("No text recognized in this area.")
-                return
+            pil_img = Image.open(io.BytesIO(self.img_bytes))
+            
+            if manga_ocr_model is None:
+                self.status_update.emit("Initializing AI Model...\n(This will download ~400MB on first run. Please wait...)")
+                from manga_ocr import MangaOcr
+                manga_ocr_model = MangaOcr()
                 
+            self.status_update.emit("Reading text...")
+            # Using manga_ocr which is far more accurate for handwritten/stylized text
+            jp_text = manga_ocr_model(pil_img).strip()
+            
+            if not jp_text:
+                self.error_occurred.emit("No text recognized. Try selecting a tighter box around the text.")
+                return
+
+            self.status_update.emit("Translating text...")
             en_text = GoogleTranslator(source='ja', target='en').translate(jp_text)
             self.result_ready.emit(jp_text, en_text)
         except Exception as e:
             self.error_occurred.emit(str(e))
-        finally:
-            try: os.remove(self.tmp_path)
-            except: pass
-
 class FavoritesWindow(QDialog):
     def __init__(self, favorites, parent=None):
         super().__init__(parent)
@@ -310,7 +357,8 @@ class FavoritesWindow(QDialog):
                             self.parent_player.setWindowTitle(f"Playing: {os.path.basename(new_path)}")
                             
             except Exception as e:
-                QMessageBox.warning(self, "Error", f"Could not rename (it might be playing!):\n{e}")
+                if self.parent_player:
+                    self.parent_player.show_toast(f"Could not rename (it might be playing!):\n{e}")
 
     def play_sample(self):
         item = self.list_widget.currentItem()
@@ -333,6 +381,56 @@ class FavoritesWindow(QDialog):
         self.sample_player.stop()
         super().closeEvent(event)
 
+class SavedTranslationLabel(QLabel):
+    deleted = pyqtSignal(object)
+    updated = pyqtSignal(object)
+    
+    def __init__(self, data, parent=None):
+        super().__init__(parent)
+        self.trans_data = data
+        self.setText(data.get("text", ""))
+        self.setStyleSheet("background-color: rgba(0, 0, 0, 200); color: #fff200; font-weight: bold; padding: 5px; border-radius: 5px; border: 2px solid #4CAF50;")
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setWordWrap(True)
+        self.setMouseTracking(True)
+        self.resizing = False
+        self.dragging = False
+        self.drag_pos = None
+        
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.RightButton:
+            self.deleted.emit(self)
+        elif event.button() == Qt.MouseButton.LeftButton:
+            if event.pos().x() > self.width() - 15 and event.pos().y() > self.height() - 15:
+                self.resizing = True
+            else:
+                self.dragging = True
+            self.drag_pos = event.globalPosition().toPoint()
+
+    def mouseMoveEvent(self, event):
+        if event.pos().x() > self.width() - 15 and event.pos().y() > self.height() - 15:
+            self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+        else:
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            
+        if self.dragging and self.drag_pos:
+            delta = event.globalPosition().toPoint() - self.drag_pos
+            self.move(self.x() + delta.x(), self.y() + delta.y())
+            self.drag_pos = event.globalPosition().toPoint()
+        elif self.resizing and self.drag_pos:
+            delta = event.globalPosition().toPoint() - self.drag_pos
+            new_w = max(30, self.width() + delta.x())
+            new_h = max(30, self.height() + delta.y())
+            self.resize(new_w, new_h)
+            self.drag_pos = event.globalPosition().toPoint()
+            
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            if self.dragging or self.resizing:
+                self.dragging = False
+                self.resizing = False
+                self.updated.emit(self)
+
 class MangaViewerWindow(QDialog):
     def __init__(self, directory, image_paths, parent=None):
         super().__init__(parent)
@@ -341,6 +439,12 @@ class MangaViewerWindow(QDialog):
         self.current_index = 0
         self.json_path = os.path.join(self.directory, "manga_info.json")
         self.current_pixmap = None
+        
+        self.manga_translations = {}
+        self.saved_labels = []
+        self.last_selection_rect = None
+        self.last_translated_text = ""
+        self.last_orig_text = ""
         
         self.setWindowTitle("Manga Viewer")
         self.showFullScreen()
@@ -376,17 +480,59 @@ class MangaViewerWindow(QDialog):
         self.image_label.selection_cleared.connect(self.hide_translation)
         layout.addWidget(self.image_label, stretch=1)
         
-        # Translation Overlay
-        self.translation_overlay = QLabel(self)
-        self.translation_overlay.setStyleSheet("background-color: rgba(0, 0, 0, 220); color: #fff200; font-size: 22px; font-weight: bold; padding: 15px; border-radius: 8px;")
-        self.translation_overlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.translation_overlay.setWordWrap(True)
-        self.translation_overlay.setMaximumWidth(800)
-        self.translation_overlay.hide()
+        # Translation Overlay (Interactive)
+        self.translation_container = QWidget(self)
+        self.translation_container.setStyleSheet("background-color: rgba(0, 0, 0, 220); border-radius: 8px;")
+        container_layout = QVBoxLayout(self.translation_container)
+        
+        self.translation_text = QTextEdit()
+        self.translation_text.setStyleSheet("color: #fff200; font-size: 22px; font-weight: bold; background: transparent; border: none;")
+        self.translation_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.translation_text.setAcceptRichText(False)
+        self.translation_text.setMaximumWidth(800)
+        self.translation_text.setMaximumHeight(150)
+        
+        buttons_layout = QHBoxLayout()
+        self.btn_save_translation = QPushButton("Save Translation")
+        self.btn_save_translation.setStyleSheet("background-color: #4CAF50; color: white; padding: 5px; border-radius: 3px; font-size: 16px;")
+        self.btn_save_translation.clicked.connect(self.save_current_translation)
+        self.btn_save_translation.hide()
+        
+        self.btn_burn_translation = QPushButton("🔥 Burn to Image")
+        self.btn_burn_translation.setStyleSheet("background-color: #d32f2f; color: white; padding: 5px; border-radius: 3px; font-size: 16px;")
+        self.btn_burn_translation.clicked.connect(self.burn_current_translation)
+        self.btn_burn_translation.hide()
+        
+        buttons_layout.addWidget(self.btn_save_translation)
+        buttons_layout.addWidget(self.btn_burn_translation)
+        
+        container_layout.addWidget(self.translation_text)
+        container_layout.addLayout(buttons_layout)
+        self.translation_container.hide()
+        
+        # Toast Notification
+        self.toast_label = QLabel(self)
+        self.toast_label.setStyleSheet("background-color: rgba(200, 50, 50, 230); color: white; font-size: 18px; font-weight: bold; padding: 10px 20px; border-radius: 5px;")
+        self.toast_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.toast_label.hide()
+        self.toast_timer = QTimer(self)
+        self.toast_timer.timeout.connect(self.toast_label.hide)
+        self.toast_timer.setSingleShot(True)
         
         self.load_manga_info()
         self.load_current_image()
         self.setFocus()
+        
+    def show_toast(self, message, is_error=True):
+        bg_color = "rgba(200, 50, 50, 230)" if is_error else "rgba(50, 200, 50, 230)"
+        self.toast_label.setStyleSheet(f"background-color: {bg_color}; color: white; font-size: 18px; font-weight: bold; padding: 10px 20px; border-radius: 5px;")
+        self.toast_label.setText(message)
+        self.toast_label.adjustSize()
+        ox = (self.width() - self.toast_label.width()) // 2
+        self.toast_label.move(ox, 20) # Top of the screen
+        self.toast_label.show()
+        self.toast_label.raise_()
+        self.toast_timer.start(3000)
         
     def load_manga_info(self):
         if os.path.exists(self.json_path):
@@ -395,6 +541,8 @@ class MangaViewerWindow(QDialog):
                     data = json.load(f)
                     if 'name' in data:
                         self.name_edit.setText(data['name'])
+                    if 'translations' in data:
+                        self.manga_translations = data['translations']
                     if 'order' in data:
                         saved_order = data['order']
                         valid_saved = [os.path.join(self.directory, p) for p in saved_order if os.path.exists(os.path.join(self.directory, p))]
@@ -408,16 +556,17 @@ class MangaViewerWindow(QDialog):
     def save_manga_info(self):
         data = {
             "name": self.name_edit.text(),
-            "order": [os.path.basename(p) for p in self.image_paths]
+            "order": [os.path.basename(p) for p in self.image_paths],
+            "translations": self.manga_translations
         }
         try:
             with open(self.json_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=4)
-            QMessageBox.information(self, "Saved", "Manga info saved successfully!")
+            self.show_toast("Manga info saved successfully!", is_error=False)
             self.name_edit.clearFocus()
             self.setFocus()
         except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to save: {e}")
+            self.show_toast(f"Failed to save: {e}")
             
     def load_current_image(self):
         if 0 <= self.current_index < len(self.image_paths):
@@ -425,38 +574,173 @@ class MangaViewerWindow(QDialog):
             path = self.image_paths[self.current_index]
             self.current_pixmap = QPixmap(path)
             self.update_image_view()
+            self.render_saved_translations()
             
     def hide_translation(self):
-        if hasattr(self, 'translation_overlay'):
-            self.translation_overlay.hide()
+        if hasattr(self, 'translation_container'):
+            self.translation_container.hide()
 
     def process_translation(self, rect):
         if not self.current_pixmap: return
         if not TRANSLATION_AVAILABLE:
-            QMessageBox.warning(self, "Dependencies Missing", "Please run: pip install pytesseract Pillow deep-translator\n\nNote: Tesseract-OCR must also be installed on your OS with Japanese language support.")
+            self.show_toast("Dependencies Missing: run 'pip install manga-ocr Pillow deep-translator'")
             return
             
+        self.last_selection_rect = rect
         cropped = self.image_label.grab(rect).toImage()
         self.translation_worker = TranslationWorker(cropped)
         self.translation_worker.result_ready.connect(self.show_translation)
         self.translation_worker.error_occurred.connect(self.show_translation_error)
+        self.translation_worker.status_update.connect(self.show_translation_status)
         self.translation_worker.start()
         self.setWindowTitle(f"Manga Viewer - TRANSLATING...")
         self.hide_translation()
+        
+    def show_translation_status(self, status_text):
+        self.translation_text.setText(status_text)
+        self.btn_save_translation.hide()
+        self.btn_burn_translation.hide()
+        self.translation_container.adjustSize()
+        
+        ox = (self.width() - self.translation_container.width()) // 2
+        oy = self.height() - self.translation_container.height() - 50
+        self.translation_container.move(ox, oy)
+        self.translation_container.show()
+        self.translation_container.raise_()
 
     def show_translation(self, orig, translated):
         self.update_image_view() # Restore title
-        self.translation_overlay.setText(f"{orig}\n\n{translated}")
-        self.translation_overlay.adjustSize()
+        self.last_orig_text = orig
+        self.last_translated_text = translated
         
-        ox = (self.width() - self.translation_overlay.width()) // 2
-        oy = self.height() - self.translation_overlay.height() - 50
-        self.translation_overlay.move(ox, oy)
-        self.translation_overlay.show()
+        self.translation_text.setText(translated)
+        if self.last_selection_rect:
+            self.btn_save_translation.show()
+            self.btn_burn_translation.show()
+        else:
+            self.btn_save_translation.hide()
+            self.btn_burn_translation.hide()
+            
+        self.translation_container.adjustSize()
+        
+        ox = (self.width() - self.translation_container.width()) // 2
+        oy = self.height() - self.translation_container.height() - 50
+        self.translation_container.move(ox, oy)
+        self.translation_container.show()
+        self.translation_container.raise_()
+        
+    def save_current_translation(self):
+        if not self.current_pixmap or not self.last_selection_rect: return
+        
+        filename = os.path.basename(self.image_paths[self.current_index])
+        
+        # Map widget rect to original image rect
+        lbl_size = self.image_label.size()
+        pix_size = self.current_pixmap.size()
+        scaled_size = pix_size.scaled(lbl_size, Qt.AspectRatioMode.KeepAspectRatio)
+        
+        offset_x = (lbl_size.width() - scaled_size.width()) / 2
+        offset_y = (lbl_size.height() - scaled_size.height()) / 2
+        
+        sx = self.last_selection_rect.x() - offset_x
+        sy = self.last_selection_rect.y() - offset_y
+        sw = self.last_selection_rect.width()
+        sh = self.last_selection_rect.height()
+        
+        ratio_w = pix_size.width() / scaled_size.width()
+        ratio_h = pix_size.height() / scaled_size.height()
+        
+        orig_x = int(sx * ratio_w)
+        orig_y = int(sy * ratio_h)
+        orig_w = int(sw * ratio_w)
+        orig_h = int(sh * ratio_h)
+        
+        current_text = self.translation_text.toPlainText()
+        
+        trans_data = {
+            "rect": [orig_x, orig_y, orig_w, orig_h],
+            "text": current_text,
+            "orig": self.last_orig_text
+        }
+        
+        if filename not in self.manga_translations:
+            self.manga_translations[filename] = []
+        self.manga_translations[filename].append(trans_data)
+        
+        self.save_manga_info()
+        self.hide_translation()
+        self.render_saved_translations()
+        
+    def burn_current_translation(self):
+        if not self.current_pixmap or not self.last_selection_rect: return
+        
+        filepath = self.image_paths[self.current_index]
+        
+        # Map widget rect to original image rect
+        lbl_size = self.image_label.size()
+        pix_size = self.current_pixmap.size()
+        scaled_size = pix_size.scaled(lbl_size, Qt.AspectRatioMode.KeepAspectRatio)
+        
+        offset_x = (lbl_size.width() - scaled_size.width()) / 2
+        offset_y = (lbl_size.height() - scaled_size.height()) / 2
+        
+        sx = self.last_selection_rect.x() - offset_x
+        sy = self.last_selection_rect.y() - offset_y
+        sw = self.last_selection_rect.width()
+        sh = self.last_selection_rect.height()
+        
+        ratio_w = pix_size.width() / scaled_size.width()
+        ratio_h = pix_size.height() / scaled_size.height()
+        
+        orig_x = int(sx * ratio_w)
+        orig_y = int(sy * ratio_h)
+        orig_w = int(sw * ratio_w)
+        orig_h = int(sh * ratio_h)
+        
+        current_text = self.translation_text.toPlainText()
+        
+        import subprocess
+        magick_path = r"D:\Programs\ImageMagick-7.1.2-Q16-HDRI\magick.exe"
+        
+        try:
+            # Build the ImageMagick command using 'caption:' for auto-wrapping and auto-sizing
+            cmd = [
+                magick_path,
+                filepath,
+                "-size", f"{orig_w}x{orig_h}",
+                "-background", "white",
+                "-fill", "black",
+                "-gravity", "center",
+                f"caption:{current_text}",
+                "-geometry", f"+{orig_x}+{orig_y}",
+                "-composite",
+                filepath
+            ]
+            
+            # Hide the command prompt window on Windows
+            creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+            
+            subprocess.run(cmd, check=True, creationflags=creationflags)
+            
+            self.show_toast("Text burned flawlessly via ImageMagick!", is_error=False)
+            
+            self.hide_translation()
+            # Reload the newly modified image
+            self.current_pixmap = QPixmap(filepath)
+            self.update_image_view()
+            self.render_saved_translations()
+            
+        except FileNotFoundError:
+            self.show_toast("ImageMagick not found at the specified path.")
+        except subprocess.CalledProcessError as e:
+            self.show_toast(f"ImageMagick failed with error code: {e.returncode}")
+        except Exception as e:
+            self.show_toast(f"Failed to burn text: {e}")
         
     def show_translation_error(self, err):
         self.update_image_view()
-        QMessageBox.warning(self, "Translation Error", f"Could not translate:\n{err}")
+        self.hide_translation()
+        self.show_toast(f"Could not translate: {err}")
             
     def update_image_view(self):
         if self.current_pixmap and not self.current_pixmap.isNull():
@@ -464,9 +748,77 @@ class MangaViewerWindow(QDialog):
             self.image_label.setPixmap(scaled_pixmap)
             self.setWindowTitle(f"Manga Viewer - {self.name_edit.text() or 'Unknown'} - ({self.current_index + 1}/{len(self.image_paths)})")
             
+    def render_saved_translations(self):
+        for lbl in self.saved_labels:
+            lbl.deleteLater()
+        self.saved_labels.clear()
+        
+        if not self.current_pixmap: return
+        filename = os.path.basename(self.image_paths[self.current_index])
+        if filename not in self.manga_translations: return
+        
+        lbl_size = self.image_label.size()
+        pix_size = self.current_pixmap.size()
+        scaled_size = pix_size.scaled(lbl_size, Qt.AspectRatioMode.KeepAspectRatio)
+        
+        offset_x = (lbl_size.width() - scaled_size.width()) / 2
+        offset_y = (lbl_size.height() - scaled_size.height()) / 2
+        ratio_w = scaled_size.width() / pix_size.width()
+        ratio_h = scaled_size.height() / pix_size.height()
+        
+        for t_data in self.manga_translations[filename]:
+            rect = t_data.get("rect", [0, 0, 0, 0])
+            x = int(rect[0] * ratio_w + offset_x)
+            y = int(rect[1] * ratio_h + offset_y)
+            w = int(rect[2] * ratio_w)
+            h = int(rect[3] * ratio_h)
+            
+            lbl = SavedTranslationLabel(t_data, self.image_label)
+            lbl.setGeometry(x, y, w, h)
+            lbl.deleted.connect(self.delete_saved_translation)
+            lbl.updated.connect(self.update_saved_translation)
+            lbl.show()
+            self.saved_labels.append(lbl)
+            
+    def update_saved_translation(self, lbl):
+        filename = os.path.basename(self.image_paths[self.current_index])
+        if filename not in self.manga_translations: return
+        
+        lbl_size = self.image_label.size()
+        pix_size = self.current_pixmap.size()
+        scaled_size = pix_size.scaled(lbl_size, Qt.AspectRatioMode.KeepAspectRatio)
+        
+        offset_x = (lbl_size.width() - scaled_size.width()) / 2
+        offset_y = (lbl_size.height() - scaled_size.height()) / 2
+        
+        ratio_w = pix_size.width() / scaled_size.width()
+        ratio_h = pix_size.height() / scaled_size.height()
+        
+        rect = lbl.geometry()
+        sx = rect.x() - offset_x
+        sy = rect.y() - offset_y
+        
+        orig_x = int(sx * ratio_w)
+        orig_y = int(sy * ratio_h)
+        orig_w = int(rect.width() * ratio_w)
+        orig_h = int(rect.height() * ratio_h)
+        
+        # update trans_data inplace
+        lbl.trans_data["rect"] = [orig_x, orig_y, orig_w, orig_h]
+        self.save_manga_info()
+            
+    def delete_saved_translation(self, lbl):
+        filename = os.path.basename(self.image_paths[self.current_index])
+        if filename in self.manga_translations:
+            if lbl.trans_data in self.manga_translations[filename]:
+                self.manga_translations[filename].remove(lbl.trans_data)
+                self.save_manga_info()
+        self.render_saved_translations()
+            
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.update_image_view()
+        self.render_saved_translations()
         
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Right:
@@ -483,16 +835,8 @@ class MangaViewerWindow(QDialog):
             super().keyPressEvent(event)
             
     def wheelEvent(self, event):
-        if event.angleDelta().y() > 0:
-            if self.current_index > 0:
-                self.current_index -= 1
-                self.load_current_image()
-        elif event.angleDelta().y() < 0:
-            if self.current_index < len(self.image_paths) - 1:
-                self.current_index += 1
-                self.load_current_image()
-        else:
-            super().wheelEvent(event)
+        # Disabled mouse wheel page changing per user request
+        super().wheelEvent(event)
 
 class MoveTargetsDialog(QDialog):
     def __init__(self, targets, parent=None):
@@ -607,6 +951,15 @@ class MediaPlayer(QWidget):
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(0, 0, 0, 0)
         self.setLayout(main_layout)
+        
+        # Toast Notification
+        self.toast_label = QLabel(self)
+        self.toast_label.setStyleSheet("background-color: rgba(200, 50, 50, 230); color: white; font-size: 18px; font-weight: bold; padding: 10px 20px; border-radius: 5px;")
+        self.toast_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.toast_label.hide()
+        self.toast_timer = QTimer(self)
+        self.toast_timer.timeout.connect(self.toast_label.hide)
+        self.toast_timer.setSingleShot(True)
         
         # Stacked Widget for Video vs Image
         self.stacked_widget = QStackedWidget()
@@ -819,7 +1172,7 @@ class MediaPlayer(QWidget):
                 
         sort_text = self.combo_sort.currentText()
         if "Name" in sort_text:
-            self.playlist.sort()
+            self.playlist.sort(key=natural_sort_key)
         elif "Date" in sort_text:
             self.playlist.sort(key=lambda x: os.path.getmtime(x) if os.path.exists(x) else 0)
         elif "Size" in sort_text:
@@ -840,7 +1193,7 @@ class MediaPlayer(QWidget):
         
         sort_text = self.combo_sort.currentText()
         if "Name" in sort_text:
-            self.playlist.sort()
+            self.playlist.sort(key=natural_sort_key)
         elif "Date" in sort_text:
             self.playlist.sort(key=lambda x: os.path.getmtime(x) if os.path.exists(x) else 0)
         elif "Size" in sort_text:
@@ -1000,10 +1353,10 @@ class MediaPlayer(QWidget):
                 if full_path not in self.favorites:
                     unfav_playlist.append(full_path)
                     
-        unfav_playlist.sort()
+        unfav_playlist.sort(key=natural_sort_key)
         
         if not unfav_playlist:
-            QMessageBox.information(self, "No Unfavorites", "All videos in this folder are already favorited!")
+            self.show_toast("All videos in this folder are already favorited!", is_error=False)
             return
             
         self.playlist = unfav_playlist
@@ -1020,10 +1373,10 @@ class MediaPlayer(QWidget):
         images = [p for p in self.playlist if os.path.splitext(p)[1].lower() in image_exts]
         
         if not images:
-            QMessageBox.information(self, "No Images", "No images found in this folder for Manga Viewer.")
+            self.show_toast("No images found in this folder for Manga Viewer.", is_error=False)
             return
             
-        images.sort()
+        images.sort(key=natural_sort_key)
         
         if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.media_player.pause()
@@ -1174,7 +1527,7 @@ class MediaPlayer(QWidget):
                     os.rename(old_path, new_path)
                     if old_path == current_playing: new_current = new_path
                 except Exception as e:
-                    QMessageBox.warning(self, "Error", f"Could not rename:\n{e}")
+                    self.show_toast(f"Could not rename: {e}")
         else:
             base_name, ok = QInputDialog.getText(self, "Mass Rename", "Enter base name (will append _001, _002, etc.):")
             if ok and base_name:
@@ -1213,7 +1566,7 @@ class MediaPlayer(QWidget):
                 for p in paths:
                     shutil.move(p, target_dir)
             except Exception as e:
-                QMessageBox.warning(self, "Error", f"Could not move files:\n{e}")
+                self.show_toast(f"Could not move files: {e}")
                 
             # If we moved the currently playing file, reload the folder it was moved out of so we can keep playing
             remaining = [p for p in self.playlist if p not in paths]
@@ -1230,9 +1583,8 @@ class MediaPlayer(QWidget):
         paths = self.get_selected_filepaths(items)
         if not paths: return
         
-        reply = QMessageBox.question(self, "Confirm Delete", f"Are you sure you want to permanently delete {len(paths)} file(s)?", 
-                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        if reply == QMessageBox.StandardButton.Yes:
+        dialog = CustomQuestionDialog(self, "Confirm Delete", f"Are you sure you want to permanently delete {len(paths)} file(s)?")
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             current_playing = self.playlist[self.current_index]
             for p in paths:
                 try: os.remove(p)
@@ -1287,13 +1639,13 @@ class MediaPlayer(QWidget):
                         seen_hashes[digest] = filepath
         except Exception as e:
             QApplication.restoreOverrideCursor()
-            QMessageBox.critical(self, "Error", f"Error scanning for duplicates:\n{e}")
+            self.show_toast(f"Error scanning for duplicates: {e}")
             return
             
         QApplication.restoreOverrideCursor()
         
         if not duplicates:
-            QMessageBox.information(self, "No Duplicates", "No duplicate files found in the current folder.")
+            self.show_toast("No duplicate files found in the current folder.", is_error=False)
             return
             
         msg = f"Found {len(duplicates)} duplicate file(s):\n\n"
@@ -1304,17 +1656,15 @@ class MediaPlayer(QWidget):
             
         msg += "\nDo you want to delete the duplicates?"
         
-        reply = QMessageBox.question(self, "Delete Duplicates", msg, 
-                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-                                     
-        if reply == QMessageBox.StandardButton.Yes:
+        dialog = CustomQuestionDialog(self, "Delete Duplicates", msg)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             errors = []
             for dup, _ in duplicates:
                 try: os.remove(dup)
                 except Exception as e: errors.append(f"Failed to delete {os.path.basename(dup)}:\n{e}")
                 
             # Pass empty items to force a reload and cleanup
-            if errors: QMessageBox.warning(self, "Deletion Errors", "\n".join(errors[:5]) + ("\n..." if len(errors) > 5 else ""))
+            if errors: self.show_toast("\n".join(errors[:5]) + ("\n..." if len(errors) > 5 else ""))
             self.delete_files([])
         
     def closeEvent(self, event):
