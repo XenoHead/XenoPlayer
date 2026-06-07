@@ -64,14 +64,27 @@ class Api:
     def open_dialog(self):
         from PyQt6.QtWidgets import QApplication, QFileDialog
         app = QApplication.instance() or QApplication([])
-        filepath, _ = QFileDialog.getOpenFileName(None, "Select Media File", "", "Media Files (*.mp4 *.webm *.ogg *.jpg *.png *.gif *.webp);;All files (*.*)", options=QFileDialog.Option.DontUseNativeDialog)
+        last_dir = self.settings.get("last_opened_dir", "")
+        if last_dir and not os.path.exists(last_dir):
+            last_dir = ""
+            
+        filepath, _ = QFileDialog.getOpenFileName(None, "Select Media File", last_dir, "Media Files (*.mp4 *.webm *.ogg *.jpg *.png *.gif *.webp);;All files (*.*)", options=QFileDialog.Option.DontUseNativeDialog)
         if filepath:
+            self.settings["last_opened_dir"] = os.path.dirname(filepath)
+            save_settings(self.settings)
             self.load_directory(filepath)
 
     def browse_folder(self):
         from PyQt6.QtWidgets import QApplication, QFileDialog
         app = QApplication.instance() or QApplication([])
-        folderpath = QFileDialog.getExistingDirectory(None, "Select Folder", "", options=QFileDialog.Option.DontUseNativeDialog)
+        last_dir = self.settings.get("last_opened_dir", "")
+        if last_dir and not os.path.exists(last_dir):
+            last_dir = ""
+            
+        folderpath = QFileDialog.getExistingDirectory(None, "Select Folder", last_dir, options=QFileDialog.Option.DontUseNativeDialog)
+        if folderpath:
+            self.settings["last_opened_dir"] = folderpath
+            save_settings(self.settings)
         return folderpath if folderpath else None
 
     def load_directory(self, filepath):
