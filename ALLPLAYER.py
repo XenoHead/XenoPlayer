@@ -7,7 +7,7 @@ import re
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
                              QPushButton, QFileDialog, QListWidget, QListWidgetItem,
                              QListView, QCheckBox, QSpinBox, QLabel, QDial,
-                             QSlider, QDialog, QMenu, QInputDialog, QMessageBox,
+                             QSlider, QDialog, QMenu, QMenuBar, QInputDialog, QMessageBox,
                              QAbstractItemView, QStackedWidget, QComboBox, QLineEdit,
                              QRubberBand, QTextEdit)
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
@@ -927,7 +927,7 @@ class MoveTargetsDialog(QDialog):
 class MediaPlayer(QWidget):
     def __init__(self, filepath=None):
         super().__init__()
-        self.settings = QSettings("SimpleMediaPlayer", "LastSession")
+        self.settings = QSettings("XenoPlayer", "LastSession")
         
         favs = self.settings.value("favorites")
         if favs is None:
@@ -943,7 +943,13 @@ class MediaPlayer(QWidget):
         except Exception:
             self.move_targets = {}
             
-        self.setWindowTitle("Simple Media Player")
+        try:
+            self.max_volume = int(self.settings.value("max_volume", defaultValue=100))
+        except Exception:
+            self.max_volume = 100
+            
+        self.setWindowTitle("XenoPlayer")
+        self.setWindowIcon(QIcon(os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.png")))
         self.setGeometry(100, 100, 1280, 720)
         self.setStyleSheet("background-color: black; color: white;")
         
@@ -951,6 +957,31 @@ class MediaPlayer(QWidget):
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(0, 0, 0, 0)
         self.setLayout(main_layout)
+        
+        # Menu Bar
+        self.menu_bar = QMenuBar(self)
+        self.menu_bar.setStyleSheet("background-color: #222; color: white; padding: 5px;")
+        
+        # File Menu
+        file_menu = self.menu_bar.addMenu("File")
+        action_open = file_menu.addAction("Load Folder/File")
+        action_open.triggered.connect(self.open_file)
+        action_exit = file_menu.addAction("Exit")
+        action_exit.triggered.connect(self.close)
+        
+        # Edit Menu
+        edit_menu = self.menu_bar.addMenu("Edit")
+        action_move_targets = edit_menu.addAction("Move Targets")
+        action_move_targets.triggered.connect(self.open_move_targets_dialog)
+        action_delete_dupes = edit_menu.addAction("Delete Dupes")
+        action_delete_dupes.triggered.connect(self.delete_duplicates)
+        
+        # Help Menu
+        help_menu = self.menu_bar.addMenu("Help")
+        action_about = help_menu.addAction("About")
+        action_about.triggered.connect(self.show_about_dialog)
+        
+        main_layout.addWidget(self.menu_bar)
         
         # Toast Notification
         self.toast_label = QLabel(self)
@@ -1041,6 +1072,14 @@ class MediaPlayer(QWidget):
         self.chk_show_all.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.chk_show_all.stateChanged.connect(lambda: self.update_playlist_ui())
         
+        self.lbl_max_vol = QLabel("Max Vol:")
+        self.dial_max_vol = QDial()
+        self.dial_max_vol.setRange(0, 100)
+        self.dial_max_vol.setValue(self.max_volume)
+        self.dial_max_vol.setFixedSize(40, 40)
+        self.dial_max_vol.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.dial_max_vol.valueChanged.connect(self.change_max_volume)
+        
         self.lbl_vol = QLabel("Vol:")
         self.dial_vol = QDial()
         self.dial_vol.setRange(0, 100)
@@ -1056,6 +1095,8 @@ class MediaPlayer(QWidget):
         controls_layout.addSpacing(20)
         controls_layout.addWidget(self.chk_show_all)
         controls_layout.addStretch()
+        controls_layout.addWidget(self.lbl_max_vol)
+        controls_layout.addWidget(self.dial_max_vol)
         controls_layout.addWidget(self.lbl_vol)
         controls_layout.addWidget(self.dial_vol)
         main_layout.addLayout(controls_layout)
@@ -1218,6 +1259,10 @@ class MediaPlayer(QWidget):
             else:
                 self.stacked_widget.setCurrentWidget(self.video_widget)
                 self.media_player.setSource(QUrl.fromLocalFile(filepath))
+                
+                effective_vol = min(self.dial_vol.value(), self.max_volume)
+                self.audio_output.setVolume(effective_vol / 100.0)
+                
                 self.media_player.play()
                 
             self.update_playlist_ui()
@@ -1390,8 +1435,47 @@ class MediaPlayer(QWidget):
             self.move_targets = dialog.targets
             self.settings.setValue("move_targets", json.dumps(self.move_targets))
 
+    def change_max_volume(self, value):
+        self.max_volume = value
+        self.settings.setValue("max_volume", value)
+        self.change_volume(self.dial_vol.value())
+
     def change_volume(self, value):
-        self.audio_output.setVolume(value / 100.0)
+        effective_vol = min(value, self.max_volume)
+        self.audio_output.setVolume(effective_vol / 100.0)
+
+    def show_about_dialog(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("About")
+        dialog.setFixedSize(400, 300)
+        dialog.setStyleSheet("background-color: #222; color: white;")
+        layout = QVBoxLayout(dialog)
+        
+        lbl_logo = QLabel()
+        logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.png")
+        if not os.path.exists(logo_path):
+            logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.png")
+            
+        pixmap = QPixmap(logo_path).scaled(150, 150, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        lbl_logo.setPixmap(pixmap)
+        lbl_logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(lbl_logo)
+        
+        lbl_title = QLabel("<h2>XenoPlayer</h2>")
+        lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(lbl_title)
+        
+        lbl_web = QLabel("<a href='http://www.xenohead.com' style='color: #4da6ff; font-size: 16px;'>www.xenohead.com</a>")
+        lbl_web.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_web.setOpenExternalLinks(True)
+        layout.addWidget(lbl_web)
+        
+        btn_close = QPushButton("Close")
+        btn_close.setStyleSheet("background-color: #333; padding: 5px; border-radius: 3px;")
+        btn_close.clicked.connect(dialog.accept)
+        layout.addWidget(btn_close)
+        
+        dialog.exec()
 
     def toggle_fullscreen(self):
         if self.isFullScreen():

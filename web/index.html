@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XenoPlayer</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Font Awesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Sidebar -->
+        <div id="sidebar">
+            <div id="sidebar-header">
+                <img src="../icon.png" alt="Logo" class="logo" onerror="this.onerror=null; this.src='data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';">
+                <h2>XenoPlayer</h2>
+            </div>
+            
+            <div id="sidebar-controls">
+                <button onclick="pywebview.api.open_dialog()"><i class="fa-solid fa-folder-open"></i> Load</button>
+                <button onclick="pywebview.api.play_favorites()"><i class="fa-solid fa-star"></i> Play Favorites</button>
+                <button onclick="pywebview.api.play_unfavorites()"><i class="fa-regular fa-star"></i> Play Unfavs</button>
+            </div>
+            
+            <div id="playlist">
+                <!-- Playlist items populated by JS -->
+            </div>
+        </div>
+        
+        <!-- Main Content Area -->
+        <div id="main-content">
+            <nav id="menu-bar">
+                <div class="dropdown">
+                    <button class="dropbtn">File</button>
+                    <div class="dropdown-content">
+                        <a href="#" onclick="pywebview.api.open_dialog()">Load Folder/File</a>
+                        <a href="#" onclick="pywebview.api.exit_app()">Exit</a>
+                    </div>
+                </div>
+                <div class="dropdown">
+                    <button class="dropbtn">Edit</button>
+                    <div class="dropdown-content">
+                        <a href="#" onclick="openMoveTargetsModal()">Move Targets</a>
+                        <a href="#" onclick="deleteDupes()">Delete Dupes</a>
+                        <a href="#" onclick="openOptionsModal()">Options</a>
+                    </div>
+                </div>
+                <div class="dropdown">
+                    <button class="dropbtn">Help</button>
+                    <div class="dropdown-content">
+                        <a href="#" onclick="openAboutModal()">About</a>
+                    </div>
+                </div>
+            </nav>
+
+            <div id="top-bar">
+                <span id="current-file-name">No file loaded</span>
+            
+            <button onclick="pywebview.api.open_manga_viewer(appState.current_path)" style="background:none; border:none; color:var(--text-primary); cursor:pointer; font-weight:bold; margin-right: 15px;"><i class="fa-solid fa-book-open"></i> READ MANGA</button>
+            <button id="favorite-btn" onclick="toggleFavorite()"><i class="fa-regular fa-star"></i></button>
+        </div>
+
+            <div id="media-container">
+            <video id="video-player" style="display:none;" autoplay></video>
+            <img id="image-viewer" src="" style="display:none;" alt="Viewer">
+            <div id="translations-container" style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none;"></div>
+            <div id="selection-box" style="position:absolute; border:2px dashed #4da6ff; background:rgba(77, 166, 255, 0.2); display:none; pointer-events:none;"></div>
+            <div id="manga-loading" style="display:none; position:absolute; background:rgba(0,0,0,0.8); color:white; padding:15px; border-radius:5px; z-index:50;">Translating...</div>
+        </div>
+            
+            <div id="bottom-controls">
+                <button onclick="pywebview.api.prev_media()"><i class="fa-solid fa-backward-step"></i></button>
+                <button onclick="togglePlay()" id="play-btn"><i class="fa-solid fa-pause"></i></button>
+                <button onclick="pywebview.api.next_media()"><i class="fa-solid fa-forward-step"></i></button>
+                
+                <input type="range" id="volume-slider" min="0" max="100" value="100" oninput="changeVolume(this.value)">
+                
+                <div id="loop-controls" style="display:flex; align-items:center; gap:5px; margin-left: 20px;">
+                    <input type="checkbox" id="loop-checkbox" onchange="resetLoopCount()">
+                    <label for="loop-checkbox">Loop</label>
+                    <input type="number" id="loop-count" min="1" max="99" value="3" style="width: 45px; background: #222; color: white; border: 1px solid #444; border-radius: 4px; padding: 2px 5px;" onchange="resetLoopCount()">
+                    <label for="loop-count">x</label>
+                </div>
+                
+                <select id="ocr-mode" style="margin-left: 20px; background: #222; color: white; border: 1px solid #444; border-radius: 4px; padding: 4px;">
+                    <option value="Japanese (Manga OCR)">Japanese (Manga OCR)</option>
+                    <option value="Japanese (Tesseract)">Japanese (Tesseract)</option>
+                    <option value="English">English</option>
+                    <option value="Chinese (Simplified)">Chinese (Simplified)</option>
+                    <option value="Chinese (Traditional)">Chinese (Traditional)</option>
+                    <option value="Russian">Russian</option>
+                </select>
+            </div>
+            
+            <div id="move-targets-container">
+                <!-- Dynamic move target buttons injected here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Modals -->
+    <div id="about-modal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModals()">&times;</span>
+            <img src="../logo.png" alt="XenoHead Logo" style="max-width: 200px;" onerror="this.onerror=null; this.src='../icon.png';">
+            <h2>About XenoPlayer</h2>
+            <p>Created by XenoHead</p>
+            <a href="http://www.xenohead.com" target="_blank">www.xenohead.com</a>
+        </div>
+    </div>
+
+    <div id="targets-modal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModals()">&times;</span>
+            <h2>Configure Move Targets</h2>
+            <div id="targets-list"></div>
+            <div style="margin-top: 15px; display: flex; gap: 5px;">
+                <input type="text" id="new-target-name" placeholder="Target Name" style="flex:1;">
+                <input type="text" id="new-target-path" placeholder="Folder Path" style="flex:2;">
+                <button onclick="browseTargetFolder()"><i class="fa-solid fa-folder-open"></i></button>
+                <button onclick="addTarget()">Add</button>
+            </div>
+            <button onclick="saveTargets()" style="margin-top: 15px; width: 100%;">Save Targets</button>
+        </div>
+        <!-- Options Modal -->
+        <div id="options-modal" class="modal" style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:#333; padding:20px; z-index:1000; width:500px; border-radius: 8px;">
+            <h2 style="margin-top:0;">Options (Saved Folders)</h2>
+            <div id="options-list">
+                <!-- Javascript will render 5 inputs here -->
+            </div>
+            <button onclick="saveOptionsModal()" style="margin-top: 15px; width: 100%;">Save Options</button>
+            <button onclick="closeModals()" style="margin-top: 5px; width: 100%; background: #444;">Cancel</button>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

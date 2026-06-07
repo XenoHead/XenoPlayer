@@ -1,4 +1,4 @@
-# Simple Media Player
+# XenoPlayer
 
 A lightweight, folder-based media player built with Python and PyQt6. It seamlessly handles both video files and images (including animated GIFs), automatically loading all supported media within the same directory as the opened file.
 

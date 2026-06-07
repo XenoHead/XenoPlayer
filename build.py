@@ -20,7 +20,7 @@ def build():
         target_script,
         '--onefile',
         '--windowed',
-        '--name=SimpleMediaPlayer',
+        '--name=XenoPlayer',
         '--noconfirm'
     ])
     print("\nBuild complete! You can find your standalone executable in the 'dist' folder.")
