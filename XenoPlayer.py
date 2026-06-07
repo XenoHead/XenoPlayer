@@ -282,6 +282,76 @@ class Api:
         subprocess.Popen([sys.executable, script, directory])
         return {"status": "success"}
 
+    def get_nhentai_tags(self):
+        try:
+            import cloudscraper
+            from bs4 import BeautifulSoup
+            scraper = cloudscraper.create_scraper()
+            html = scraper.get('https://nhentai.net/tags?sort=popular').text
+            soup = BeautifulSoup(html, 'html.parser')
+            # Extract tags
+            tags = [a.text.strip().split('(')[0].strip() for a in soup.select('a') if '/tag/' in a.get('href', '') and a.text.strip()]
+            seen = set()
+            clean_tags = []
+            for t in tags:
+                if t and t not in seen:
+                    seen.add(t)
+                    clean_tags.append(t)
+            return {"status": "success", "tags": clean_tags[:50]}
+        except Exception as e:
+            return {"status": "error", "msg": str(e)}
+
+    def search_nhentai(self, query):
+        try:
+            import cloudscraper
+            from bs4 import BeautifulSoup
+            import urllib.parse
+            scraper = cloudscraper.create_scraper()
+            url = f"https://nhentai.net/search/?q={urllib.parse.quote(query)}"
+            html = scraper.get(url).text
+            soup = BeautifulSoup(html, 'html.parser')
+            results = []
+            for g in soup.select('.gallery'):
+                title_el = g.select_one('.caption')
+                img_el = g.select_one('img')
+                link_el = g.select_one('a')
+                if title_el and img_el and link_el:
+                    title = title_el.text.strip()
+                    thumb = img_el.get('data-src') or img_el.get('src')
+                    if thumb and thumb.startswith('//'):
+                        thumb = 'https:' + thumb
+                    gallery_url = "https://nhentai.net" + link_el.get('href', '')
+                    results.append({"title": title, "thumb": thumb, "url": gallery_url})
+            return {"status": "success", "results": results[:20]} # Limit to 20 results for now
+        except Exception as e:
+            return {"status": "error", "msg": str(e)}
+
+    def download_nhentai(self, url, title):
+        import subprocess
+        import string
+        import threading
+        import json
+        import sys
+        import os
+        
+        valid_chars = "-_.() %s%s" % (string.ascii_letters, string.digits)
+        folder_name = ''.join(c for c in title if c in valid_chars)[:50].strip()
+        download_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Downloads", "nhentai", folder_name)
+        
+        def run_download():
+            try:
+                os.makedirs(download_dir, exist_ok=True)
+                subprocess.run([sys.executable, "-m", "gallery_dl", "-d", download_dir, url], check=True, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+                # Escape for JS evaluation
+                safe_dir = download_dir.replace('\\', '\\\\')
+                self._window.evaluate_js(f'downloadComplete("{safe_dir}")')
+            except Exception as e:
+                safe_err = str(e).replace('"', '\\"').replace('\\', '\\\\')
+                self._window.evaluate_js(f'downloadFailed("{safe_err}")')
+                
+        threading.Thread(target=run_download, daemon=True).start()
+        return {"status": "started"}
+
     def move_file_to(self, target_name):
         if not (0 <= self.current_index < len(self.playlist)): return {"status": "error", "msg": "No file selected"}
         path = self.playlist[self.current_index]

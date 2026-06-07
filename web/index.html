@@ -21,6 +21,7 @@
                 <button onclick="pywebview.api.open_dialog()"><i class="fa-solid fa-folder-open"></i> Load</button>
                 <button onclick="pywebview.api.play_favorites()"><i class="fa-solid fa-star"></i> Play Favorites</button>
                 <button onclick="pywebview.api.play_unfavorites()"><i class="fa-regular fa-star"></i> Play Unfavs</button>
+                <button onclick="openOnlineManga()" style="background-color: #ff477e; color: white; margin-top: 20px;"><i class="fa-solid fa-globe"></i> Online Manga</button>
             </div>
             
             <div id="playlist">
@@ -156,6 +157,40 @@
             <button onclick="saveHotkeysModal()" style="margin-top: 15px; width: 100%;">Save Hotkeys</button>
             <button onclick="closeModals()" style="margin-top: 5px; width: 100%; background: #444;">Cancel</button>
         </div>
+
+    <!-- Online Manga Modal -->
+    <div id="online-manga-modal" class="modal">
+        <div class="modal-content" style="max-width: 800px; max-height: 80vh; display: flex; flex-direction: column;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h3 style="margin: 0; color: #ff477e;"><i class="fa-solid fa-globe"></i> Online Manga Browser</h3>
+                <span class="close-btn" onclick="closeOnlineManga()">&times;</span>
+            </div>
+            
+            <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                <input type="text" id="nhentai-search-input" placeholder="Search tags, titles, etc..." style="flex-grow: 1; padding: 10px; border-radius: 4px; border: 1px solid #444; background: #222; color: white; font-size: 16px;" onkeydown="if(event.key === 'Enter') searchOnlineManga()">
+                <button onclick="searchOnlineManga()" style="background-color: #ff477e; color: white; padding: 10px 20px; font-size: 16px;"><i class="fa-solid fa-magnifying-glass"></i> Search</button>
+            </div>
+            
+            <div id="online-manga-status" style="margin-bottom: 10px; color: #aaa;"></div>
+            
+            <div style="display: flex; gap: 20px; flex-grow: 1; overflow: hidden;">
+                <!-- Tags sidebar -->
+                <div style="width: 200px; background: #222; border-radius: 4px; padding: 10px; overflow-y: auto;">
+                    <h4 style="margin-top: 0; margin-bottom: 10px; color: #fff; border-bottom: 1px solid #444; padding-bottom: 5px;">Popular Tags</h4>
+                    <div id="nhentai-tags-list" style="display: flex; flex-direction: column; gap: 5px;">
+                        <span style="color: #666;">Loading tags...</span>
+                    </div>
+                </div>
+                
+                <!-- Results area -->
+                <div id="nhentai-results-area" style="flex-grow: 1; background: #222; border-radius: 4px; padding: 10px; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 15px; align-content: start;">
+                    <div style="grid-column: 1 / -1; text-align: center; color: #666; margin-top: 20px;">
+                        Enter a search term or click a popular tag to begin.
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <script src="app.js"></script>
 </body>
