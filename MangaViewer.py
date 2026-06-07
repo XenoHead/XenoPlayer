@@ -23,7 +23,6 @@ except ImportError:
     CV2_AVAILABLE = False
 
 try:
-    from manga_ocr import MangaOcr
     from PIL import Image, ImageDraw, ImageFont
     from deep_translator import GoogleTranslator
     import pytesseract
@@ -46,6 +45,8 @@ except ImportError:
 class SelectableImageLabel(QLabel):
     selection_made = pyqtSignal(QRect)
     selection_cleared = pyqtSignal()
+    next_page_requested = pyqtSignal()
+    prev_page_requested = pyqtSignal()
     
     def __init__(self):
         super().__init__()
@@ -60,6 +61,11 @@ class SelectableImageLabel(QLabel):
         elif event.button() == Qt.MouseButton.RightButton:
             self.rubber_band.hide()
             self.selection_cleared.emit()
+            self.next_page_requested.emit()
+        elif event.button() == Qt.MouseButton.ForwardButton:
+            self.next_page_requested.emit()
+        elif event.button() == Qt.MouseButton.BackButton:
+            self.prev_page_requested.emit()
 
     def mouseMoveEvent(self, event):
         if not self.origin.isNull():
@@ -71,6 +77,8 @@ class SelectableImageLabel(QLabel):
             rect = self.rubber_band.geometry()
             if rect.width() > 10 and rect.height() > 10:
                 self.selection_made.emit(rect)
+            else:
+                self.prev_page_requested.emit()
             self.origin = QPoint()
 
 class TranslationWorker(QThread):
@@ -78,9 +86,10 @@ class TranslationWorker(QThread):
     error_occurred = pyqtSignal(str)
     status_update = pyqtSignal(str)
 
-    def __init__(self, image, ocr_mode):
+    def __init__(self, image, ocr_mode, target_lang):
         super().__init__()
         self.ocr_mode = ocr_mode
+        self.target_lang = target_lang
         from PyQt6.QtCore import QByteArray, QBuffer, QIODevice
         ba = QByteArray()
         buffer = QBuffer(ba)
@@ -121,8 +130,8 @@ class TranslationWorker(QThread):
                 return
 
             self.status_update.emit("Translating text...")
-            # Target 'en' for English. Change this to 'es', 'fr', etc. if you want another output language!
-            translated_text = GoogleTranslator(source=source_lang, target='en').translate(extracted_text)
+            lang_code = self.target_lang.split("(")[-1].replace(")", "").strip()
+            translated_text = GoogleTranslator(source=source_lang, target=lang_code).translate(extracted_text)
             self.result_ready.emit(extracted_text, translated_text)
         except Exception as e:
             self.error_occurred.emit(str(e))
@@ -176,6 +185,43 @@ class SavedTranslationLabel(QLabel):
                 self.resizing = False
                 self.updated.emit(self)
 
+class VoiceListenerThread(QThread):
+    next_page = pyqtSignal()
+    prev_page = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.running = True
+
+    def run(self):
+        try:
+            import speech_recognition as sr
+            recognizer = sr.Recognizer()
+            with sr.Microphone() as source:
+                recognizer.adjust_for_ambient_noise(source, duration=1)
+                while self.running:
+                    try:
+                        audio = recognizer.listen(source, timeout=1, phrase_time_limit=3)
+                        text = recognizer.recognize_google(audio).lower()
+                        if "next" in text or "forward" in text or "next page" in text:
+                            self.next_page.emit()
+                        elif "back" in text or "previous" in text or "prev page" in text:
+                            self.prev_page.emit()
+                    except sr.WaitTimeoutError:
+                        continue
+                    except sr.UnknownValueError:
+                        continue
+                    except sr.RequestError:
+                        continue
+                    except Exception:
+                        continue
+        except Exception:
+            return
+
+    def stop(self):
+        self.running = False
+        self.wait()
+
 class MangaViewerWindow(QDialog):
     def __init__(self, directory, image_paths, parent=None):
         super().__init__(parent)
@@ -217,6 +263,12 @@ class MangaViewerWindow(QDialog):
         top_layout.addWidget(QLabel("OCR:"))
         top_layout.addWidget(self.combo_ocr_lang)
         
+        self.combo_target_lang = QComboBox()
+        self.combo_target_lang.addItems(["English (en)", "Spanish (es)", "French (fr)", "German (de)", "Italian (it)", "Portuguese (pt)", "Russian (ru)", "Chinese Simplified (zh-CN)", "Chinese Traditional (zh-TW)", "Japanese (ja)"])
+        self.combo_target_lang.setStyleSheet("background-color: #333; color: white; padding: 5px; border-radius: 3px;")
+        top_layout.addWidget(QLabel("To:"))
+        top_layout.addWidget(self.combo_target_lang)
+        
         self.btn_close = QPushButton("Close Viewer")
         self.btn_close.setStyleSheet("background-color: #333; color: white; padding: 5px; border-radius: 3px;")
         self.btn_close.clicked.connect(self.close)
@@ -229,6 +281,8 @@ class MangaViewerWindow(QDialog):
         self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image_label.selection_made.connect(self.process_translation)
         self.image_label.selection_cleared.connect(self.hide_translation)
+        self.image_label.next_page_requested.connect(self.go_next_page)
+        self.image_label.prev_page_requested.connect(self.go_prev_page)
         layout.addWidget(self.image_label, stretch=1)
         
         # Translation Overlay (Interactive)
@@ -261,6 +315,31 @@ class MangaViewerWindow(QDialog):
         container_layout.addLayout(buttons_layout)
         self.translation_container.hide()
         
+        # Bottom Bar
+        bottom_layout = QHBoxLayout()
+        
+        self.btn_voice = QPushButton("🎤 Voice: ON")
+        self.btn_voice.setCheckable(True)
+        self.btn_voice.setChecked(True)
+        self.btn_voice.setStyleSheet("background-color: #4CAF50; color: white; padding: 5px; border-radius: 3px;")
+        self.btn_voice.clicked.connect(self.toggle_voice)
+        bottom_layout.addWidget(self.btn_voice)
+        
+        bottom_layout.addStretch()
+        
+        bottom_layout.addWidget(QLabel("⏱️ Auto-Advance:"))
+        self.timer_spinbox = QSpinBox()
+        self.timer_spinbox.setRange(0, 10)
+        self.timer_spinbox.setSuffix("s")
+        self.timer_spinbox.setStyleSheet("background-color: #333; color: white; padding: 5px; border-radius: 3px;")
+        self.timer_spinbox.valueChanged.connect(self.update_auto_timer)
+        bottom_layout.addWidget(self.timer_spinbox)
+        
+        layout.addLayout(bottom_layout)
+        
+        self.auto_timer = QTimer(self)
+        self.auto_timer.timeout.connect(self.go_next_page)
+        
         # Toast Notification
         self.toast_label = QLabel(self)
         self.toast_label.setStyleSheet("background-color: rgba(200, 50, 50, 230); color: white; font-size: 18px; font-weight: bold; padding: 10px 20px; border-radius: 5px;")
@@ -272,7 +351,31 @@ class MangaViewerWindow(QDialog):
         
         self.load_manga_info()
         self.load_current_image()
+        
+        self.voice_thread = VoiceListenerThread(self)
+        self.voice_thread.next_page.connect(self.go_next_page)
+        self.voice_thread.prev_page.connect(self.go_prev_page)
+        self.voice_thread.start()
+        
         self.setFocus()
+
+    def toggle_voice(self, checked):
+        if checked:
+            self.btn_voice.setText("🎤 Voice: ON")
+            self.btn_voice.setStyleSheet("background-color: #4CAF50; color: white; padding: 5px; border-radius: 3px;")
+            self.voice_thread.running = True
+            if not self.voice_thread.isRunning():
+                self.voice_thread.start()
+        else:
+            self.btn_voice.setText("🎤 Voice: OFF")
+            self.btn_voice.setStyleSheet("background-color: #d32f2f; color: white; padding: 5px; border-radius: 3px;")
+            self.voice_thread.stop()
+            
+    def update_auto_timer(self, val):
+        if val > 0:
+            self.auto_timer.start(val * 1000)
+        else:
+            self.auto_timer.stop()
         
     def show_toast(self, message, is_error=True):
         bg_color = "rgba(200, 50, 50, 230)" if is_error else "rgba(50, 200, 50, 230)"
@@ -326,6 +429,8 @@ class MangaViewerWindow(QDialog):
             self.current_pixmap = QPixmap(path)
             self.update_image_view()
             self.render_saved_translations()
+            if self.timer_spinbox.value() > 0:
+                self.auto_timer.start(self.timer_spinbox.value() * 1000)
             
     def hide_translation(self):
         if hasattr(self, 'translation_container'):
@@ -339,7 +444,7 @@ class MangaViewerWindow(QDialog):
             
         self.last_selection_rect = rect
         cropped = self.image_label.grab(rect).toImage()
-        self.translation_worker = TranslationWorker(cropped, self.combo_ocr_lang.currentText())
+        self.translation_worker = TranslationWorker(cropped, self.combo_ocr_lang.currentText(), self.combo_target_lang.currentText())
         self.translation_worker.result_ready.connect(self.show_translation)
         self.translation_worker.error_occurred.connect(self.show_translation_error)
         self.translation_worker.status_update.connect(self.show_translation_status)
@@ -571,19 +676,30 @@ class MangaViewerWindow(QDialog):
         self.update_image_view()
         self.render_saved_translations()
         
+    def go_next_page(self):
+        if self.current_index < len(self.image_paths) - 1:
+            self.current_index += 1
+            self.load_current_image()
+
+    def go_prev_page(self):
+        if self.current_index > 0:
+            self.current_index -= 1
+            self.load_current_image()
+
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Right:
-            if self.current_index < len(self.image_paths) - 1:
-                self.current_index += 1
-                self.load_current_image()
+            self.go_next_page()
         elif event.key() == Qt.Key.Key_Left:
-            if self.current_index > 0:
-                self.current_index -= 1
-                self.load_current_image()
+            self.go_prev_page()
         elif event.key() == Qt.Key.Key_Escape:
             self.close()
         else:
             super().keyPressEvent(event)
+            
+    def closeEvent(self, event):
+        if hasattr(self, 'voice_thread') and self.voice_thread.isRunning():
+            self.voice_thread.stop()
+        super().closeEvent(event)
             
     def wheelEvent(self, event):
         # Disabled mouse wheel page changing per user request
@@ -591,19 +707,25 @@ class MangaViewerWindow(QDialog):
 
 
 if __name__ == "__main__":
-    import sys
-    app = QApplication.instance() or QApplication(sys.argv)
-    folder = sys.argv[1] if len(sys.argv) > 1 else ""
-    if not folder or not os.path.isdir(folder):
-        print("Please provide a valid directory.")
-        sys.exit(1)
-    image_paths = []
-    for f in os.listdir(folder):
-        if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
-            image_paths.append(os.path.join(folder, f))
-    import re
-    def natural_sort_key(s):
-        return [int(text) if text.isdigit() else text.lower() for text in re.split(r"(\d+)", os.path.basename(s))]
-    image_paths.sort(key=natural_sort_key)
-    window = MangaViewerWindow(folder, image_paths)
-    window.exec()
+    import traceback
+    try:
+        import sys
+        app = QApplication.instance() or QApplication(sys.argv)
+        folder = sys.argv[1] if len(sys.argv) > 1 else ""
+        if not folder or not os.path.isdir(folder):
+            print("Please provide a valid directory.")
+            sys.exit(1)
+        image_paths = []
+        for f in os.listdir(folder):
+            if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
+                image_paths.append(os.path.join(folder, f))
+        import re
+        def natural_sort_key(s):
+            return [int(text) if text.isdigit() else text.lower() for text in re.split(r"(\d+)", os.path.basename(s))]
+        image_paths.sort(key=natural_sort_key)
+        window = MangaViewerWindow(folder, image_paths)
+        window.exec()
+    except Exception as e:
+        with open("crash_log.txt", "w") as f:
+            f.write(traceback.format_exc())
+        print(f"Crashed! Log written to crash_log.txt: {e}")

@@ -1,2 +1,2 @@
 @echo off
-python "%~dp0ALLPLAYER.py" %1
+python "%~dp0XenoPlay.py" %1

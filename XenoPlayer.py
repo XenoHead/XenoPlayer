@@ -20,7 +20,7 @@ def load_settings():
             with open(SETTINGS_FILE, "r") as f:
                 return json.load(f)
         except: pass
-    return {"favorites": [], "last_video": None, "max_volume": 100, "move_targets": {}, "saved_folders": ["", "", "", "", ""], "default_folder": -1}
+    return {"favorites": [], "last_video": None, "max_volume": 100, "move_targets": {}, "saved_folders": ["", "", "", "", ""], "default_folder": -1, "hotkeys": {"next": ["ArrowRight", "Space", "", "", ""], "prev": ["ArrowLeft", "", "", "", ""]}}
 
 def save_settings(s):
     with open(SETTINGS_FILE, "w") as f:
@@ -62,24 +62,16 @@ class Api:
         return {"status": "ready"}
 
     def open_dialog(self):
-        import tkinter as tk
-        from tkinter import filedialog
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes('-topmost', True)
-        filepath = filedialog.askopenfilename(filetypes=[("Media Files", "*.mp4 *.webm *.ogg *.jpg *.png *.gif *.webp"), ("All files", "*.*")])
-        root.destroy()
+        from PyQt6.QtWidgets import QApplication, QFileDialog
+        app = QApplication.instance() or QApplication([])
+        filepath, _ = QFileDialog.getOpenFileName(None, "Select Media File", "", "Media Files (*.mp4 *.webm *.ogg *.jpg *.png *.gif *.webp);;All files (*.*)", options=QFileDialog.Option.DontUseNativeDialog)
         if filepath:
             self.load_directory(filepath)
 
     def browse_folder(self):
-        import tkinter as tk
-        from tkinter import filedialog
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes('-topmost', True)
-        folderpath = filedialog.askdirectory()
-        root.destroy()
+        from PyQt6.QtWidgets import QApplication, QFileDialog
+        app = QApplication.instance() or QApplication([])
+        folderpath = QFileDialog.getExistingDirectory(None, "Select Folder", "", options=QFileDialog.Option.DontUseNativeDialog)
         return folderpath if folderpath else None
 
     def load_directory(self, filepath):
@@ -151,6 +143,7 @@ class Api:
             "move_targets": self.settings.get("move_targets", {}),
             "saved_folders": self.settings.get("saved_folders", ["", "", "", "", ""]),
             "default_folder": self.settings.get("default_folder", -1),
+            "hotkeys": self.settings.get("hotkeys", {"next": ["ArrowRight", "Space", "", "", ""], "prev": ["ArrowLeft", "", "", "", ""]}),
             "current_path": current_path,
             "is_favorite": current_path in self.settings.get("favorites", []) if current_path else False
         }
@@ -200,6 +193,11 @@ class Api:
 
     def save_move_targets(self, targets):
         self.settings["move_targets"] = targets
+        save_settings(self.settings)
+        return self.get_state()
+
+    def save_hotkeys(self, hotkeys):
+        self.settings["hotkeys"] = hotkeys
         save_settings(self.settings)
         return self.get_state()
 

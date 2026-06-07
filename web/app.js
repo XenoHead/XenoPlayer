@@ -83,6 +83,11 @@ function openOptionsModal() {
     renderOptionsList();
 }
 
+function openHotkeysModal() {
+    document.getElementById('hotkeys-modal').style.display = 'block';
+    renderHotkeysList();
+}
+
 function closeModals() {
     document.querySelectorAll('.modal').forEach(m => m.style.display = 'none');
 }
@@ -192,6 +197,65 @@ function saveOptionsModal() {
     });
 }
 
+function renderHotkeysList() {
+    const prevList = document.getElementById('hotkeys-prev-list');
+    const nextList = document.getElementById('hotkeys-next-list');
+    prevList.innerHTML = '';
+    nextList.innerHTML = '';
+    
+    const hotkeys = appState.hotkeys || {next: ["ArrowRight", "Space", "", "", ""], prev: ["ArrowLeft", "", "", "", ""]};
+    const prevKeys = hotkeys.prev || ["ArrowLeft", "", "", "", ""];
+    const nextKeys = hotkeys.next || ["ArrowRight", "Space", "", "", ""];
+    
+    for(let i = 0; i < 5; i++) {
+        // Prev
+        const pInput = document.createElement('input');
+        pInput.type = 'text';
+        pInput.id = `hk-prev-${i}`;
+        pInput.value = prevKeys[i] || '';
+        pInput.readOnly = true;
+        pInput.placeholder = 'Click and press key';
+        pInput.style.width = '100%';
+        pInput.style.marginBottom = '5px';
+        pInput.onkeydown = (e) => {
+            e.preventDefault();
+            if(e.code === 'Backspace') pInput.value = '';
+            else pInput.value = e.code;
+        };
+        prevList.appendChild(pInput);
+        
+        // Next
+        const nInput = document.createElement('input');
+        nInput.type = 'text';
+        nInput.id = `hk-next-${i}`;
+        nInput.value = nextKeys[i] || '';
+        nInput.readOnly = true;
+        nInput.placeholder = 'Click and press key';
+        nInput.style.width = '100%';
+        nInput.style.marginBottom = '5px';
+        nInput.onkeydown = (e) => {
+            e.preventDefault();
+            if(e.code === 'Backspace') nInput.value = '';
+            else nInput.value = e.code;
+        };
+        nextList.appendChild(nInput);
+    }
+}
+
+function saveHotkeysModal() {
+    const nextKeys = [];
+    const prevKeys = [];
+    for(let i=0; i<5; i++) {
+        nextKeys.push(document.getElementById(`hk-next-${i}`).value);
+        prevKeys.push(document.getElementById(`hk-prev-${i}`).value);
+    }
+    pywebview.api.save_hotkeys({next: nextKeys, prev: prevKeys}).then(state => {
+        appState = state;
+        closeModals();
+    });
+}
+
+
 function updatePlaylist() {
     pywebview.api.get_playlist().then(items => {
         playlist = items;
@@ -267,6 +331,7 @@ function loadMedia(path, index) {
             mangaTranslations = info || {};
             renderTranslations(path);
         });
+        updateImageTimer();
     } else {
         imageViewer.style.display = 'none';
         videoPlayer.style.display = 'block';
@@ -274,6 +339,10 @@ function loadMedia(path, index) {
         videoPlayer.play();
         playBtn.innerHTML = '<i class="fa-solid fa-pause"></i>';
         document.getElementById('translations-container').innerHTML = '';
+        if (imageTimerInterval) {
+            clearInterval(imageTimerInterval);
+            imageTimerInterval = null;
+        }
     }
     updateState();
 }
@@ -319,18 +388,34 @@ videoPlayer.addEventListener('ended', () => {
     pywebview.api.next_media();
 });
 
+let imageTimerInterval = null;
+
+function updateImageTimer() {
+    if (imageTimerInterval) {
+        clearInterval(imageTimerInterval);
+        imageTimerInterval = null;
+    }
+    const val = parseInt(document.getElementById('image-timer').value, 10) || 0;
+    if (val > 0 && imageViewer.style.display !== 'none') {
+        imageTimerInterval = setInterval(() => {
+            pywebview.api.next_media();
+        }, val * 1000);
+    }
+}
+
 // --- Keyboard Shortcuts ---
 window.addEventListener('keydown', e => {
     // Prevent triggering if typing in an input or textarea
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
     
-    if (e.code === 'ArrowLeft') {
+    const hotkeys = appState.hotkeys || {next: ["ArrowRight", "Space"], prev: ["ArrowLeft"]};
+    const nextKeys = hotkeys.next || ["ArrowRight", "Space"];
+    const prevKeys = hotkeys.prev || ["ArrowLeft"];
+    
+    if (prevKeys.includes(e.code)) {
         pywebview.api.prev_media();
         e.preventDefault();
-    } else if (e.code === 'ArrowRight') {
-        pywebview.api.next_media();
-        e.preventDefault();
-    } else if (e.code === 'Space') {
+    } else if (nextKeys.includes(e.code)) {
         pywebview.api.next_media();
         e.preventDefault();
     }

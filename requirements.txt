@@ -7,3 +7,6 @@ Pillow
 deep-translator
 pywebview
 flask
+manga-ocr
+SpeechRecognition
+PyAudio

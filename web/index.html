@@ -44,6 +44,7 @@
                         <a href="#" onclick="openMoveTargetsModal()">Move Targets</a>
                         <a href="#" onclick="deleteDupes()">Delete Dupes</a>
                         <a href="#" onclick="openOptionsModal()">Options</a>
+                        <a href="#" onclick="openHotkeysModal()">Hotkeys</a>
                     </div>
                 </div>
                 <div class="dropdown">
@@ -91,6 +92,11 @@
                     <option value="Chinese (Traditional)">Chinese (Traditional)</option>
                     <option value="Russian">Russian</option>
                 </select>
+                
+                <div style="display:flex; align-items:center; gap:5px; margin-left: 20px;">
+                    <label for="image-timer">Timer (s):</label>
+                    <input type="number" id="image-timer" min="0" max="60" value="0" style="width: 45px; background: #222; color: white; border: 1px solid #444; border-radius: 4px; padding: 2px 5px;" onchange="updateImageTimer()">
+                </div>
             </div>
             
             <div id="move-targets-container">
@@ -123,6 +129,7 @@
             </div>
             <button onclick="saveTargets()" style="margin-top: 15px; width: 100%;">Save Targets</button>
         </div>
+    </div>
         <!-- Options Modal -->
         <div id="options-modal" class="modal" style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:#333; padding:20px; z-index:1000; width:500px; border-radius: 8px;">
             <h2 style="margin-top:0;">Options (Saved Folders)</h2>
@@ -132,7 +139,23 @@
             <button onclick="saveOptionsModal()" style="margin-top: 15px; width: 100%;">Save Options</button>
             <button onclick="closeModals()" style="margin-top: 5px; width: 100%; background: #444;">Cancel</button>
         </div>
-    </div>
+        <!-- Hotkeys Modal -->
+        <div id="hotkeys-modal" class="modal" style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:#333; padding:20px; z-index:1000; width:500px; border-radius: 8px;">
+            <h2 style="margin-top:0;">Edit Hotkeys</h2>
+            <p style="font-size: 12px; color: #ccc;">Click on an input and press a key to assign it. Press Backspace to clear.</p>
+            <div style="display:flex; gap: 20px;">
+                <div style="flex: 1;">
+                    <h3>Previous Media</h3>
+                    <div id="hotkeys-prev-list"></div>
+                </div>
+                <div style="flex: 1;">
+                    <h3>Next Media</h3>
+                    <div id="hotkeys-next-list"></div>
+                </div>
+            </div>
+            <button onclick="saveHotkeysModal()" style="margin-top: 15px; width: 100%;">Save Hotkeys</button>
+            <button onclick="closeModals()" style="margin-top: 5px; width: 100%; background: #444;">Cancel</button>
+        </div>
 
     <script src="app.js"></script>
 </body>

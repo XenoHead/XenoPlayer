@@ -1,21 +1,32 @@
 {
     "favorites": [
-        "D:\\Downloads\\sex\\Best\\Real\\video\\33.webm",
-        "D:\\Downloads\\sex\\Best\\Real\\video\\2637c96953d2e816c83c8a9dded4b8b4.webm",
-        "D:\\Downloads\\sex\\Best\\Real\\video\\1773273907866.mp4",
-        "D:\\Downloads\\sex\\Best\\Real\\video\\(4).mp4"
+        "D:\\Downloads\\sex\\Best\\Manga\\nhentai-571205 - [Ookami Uo] Kaeri no Kai - End-of-day Meeting (Tsuiseki! Oya mo Shiranai Shoujo-tachi no Houkago Osh\\1.webp"
     ],
-    "last_video": "D:\\Downloads\\sex\\Best\\Manga\\Kyoukara settomo\\5.webp",
+    "last_video": "D:\\Downloads\\sex\\Best\\Manga\\655011\\1.webp",
     "max_volume": 100,
-    "move_targets": {
-        "Not porn": "D:/Downloads/sex/Best/Real/non porn"
-    },
+    "move_targets": {},
     "saved_folders": [
-        "D:/Downloads/sex/Best",
-        "D:/Downloads/sex/Best/Manga",
+        "",
+        "",
         "",
         "",
         ""
     ],
-    "default_folder": -1
+    "default_folder": -1,
+    "hotkeys": {
+        "next": [
+            "ArrowRight",
+            "Space",
+            "ControlRight",
+            "",
+            ""
+        ],
+        "prev": [
+            "ArrowLeft",
+            "",
+            "ControlLeft",
+            "",
+            ""
+        ]
+    }
 }
