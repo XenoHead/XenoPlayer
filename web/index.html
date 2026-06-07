@@ -171,6 +171,11 @@
                 <button onclick="searchOnlineManga()" style="background-color: #ff477e; color: white; padding: 10px 20px; font-size: 16px;"><i class="fa-solid fa-magnifying-glass"></i> Search</button>
             </div>
             
+            <div style="margin-bottom: 15px; font-size: 13px; color: #bbb; display: flex; align-items: center; gap: 10px;">
+                <span>Download Location: <span id="manga-dl-dir-display" style="color: #fff; font-family: monospace;">Loading...</span></span>
+                <button onclick="changeMangaDownloadDir()" style="padding: 2px 8px; font-size: 12px; background: #444; color: white; border: none; border-radius: 3px; cursor: pointer;">Change</button>
+            </div>
+            
             <div id="online-manga-status" style="margin-bottom: 10px; color: #aaa;"></div>
             
             <div style="display: flex; gap: 20px; flex-grow: 1; overflow: hidden;">

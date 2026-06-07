@@ -326,6 +326,22 @@ class Api:
         except Exception as e:
             return {"status": "error", "msg": str(e)}
 
+    def choose_manga_download_dir(self):
+        from PyQt6.QtWidgets import QApplication, QFileDialog
+        app = QApplication.instance() or QApplication([])
+        folderpath = QFileDialog.getExistingDirectory(None, "Select Download Folder", "", options=QFileDialog.Option.DontUseNativeDialog)
+        if folderpath:
+            self.settings["manga_download_dir"] = folderpath
+            save_settings(self.settings)
+            return {"status": "success", "dir": folderpath}
+        return {"status": "canceled"}
+
+    def get_manga_download_dir(self):
+        d = self.settings.get("manga_download_dir", "")
+        if not d:
+            d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Downloads", "nhentai")
+        return {"dir": d}
+
     def download_nhentai(self, url, title):
         import subprocess
         import string
@@ -336,7 +352,8 @@ class Api:
         
         valid_chars = "-_.() %s%s" % (string.ascii_letters, string.digits)
         folder_name = ''.join(c for c in title if c in valid_chars)[:50].strip()
-        download_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Downloads", "nhentai", folder_name)
+        base_dir = self.get_manga_download_dir()["dir"]
+        download_dir = os.path.join(base_dir, folder_name)
         
         def run_download():
             try:

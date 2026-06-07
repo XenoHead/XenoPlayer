@@ -604,3 +604,129 @@ window.addEventListener('resize', () => {
         renderTranslations(playlist[currentIndex].path);
     }
 });
+
+// --- Online Manga Logic ---
+const onlineMangaModal = document.getElementById('online-manga-modal');
+const nhentaiTagsList = document.getElementById('nhentai-tags-list');
+const nhentaiResultsArea = document.getElementById('nhentai-results-area');
+const nhentaiSearchInput = document.getElementById('nhentai-search-input');
+const onlineMangaStatus = document.getElementById('online-manga-status');
+
+function openOnlineManga() {
+    onlineMangaModal.style.display = 'flex';
+    loadNhentaiTags();
+    pywebview.api.get_manga_download_dir().then(res => {
+        document.getElementById('manga-dl-dir-display').innerText = res.dir;
+    });
+}
+
+function closeOnlineManga() {
+    onlineMangaModal.style.display = 'none';
+}
+
+function changeMangaDownloadDir() {
+    pywebview.api.choose_manga_download_dir().then(res => {
+        if (res.status === 'success') {
+            document.getElementById('manga-dl-dir-display').innerText = res.dir;
+        }
+    });
+}
+
+function loadNhentaiTags() {
+    if (nhentaiTagsList.children.length > 1) return; // Already loaded
+    pywebview.api.get_nhentai_tags().then(res => {
+        if (res.status === 'success') {
+            nhentaiTagsList.innerHTML = '';
+            res.tags.forEach(tag => {
+                const btn = document.createElement('button');
+                btn.className = 'tag-btn';
+                btn.style.textAlign = 'left';
+                btn.style.padding = '5px';
+                btn.style.background = 'transparent';
+                btn.style.color = '#ff477e';
+                btn.style.border = 'none';
+                btn.style.cursor = 'pointer';
+                btn.innerText = tag;
+                btn.onclick = () => {
+                    nhentaiSearchInput.value = tag;
+                    searchOnlineManga();
+                };
+                nhentaiTagsList.appendChild(btn);
+            });
+        } else {
+            nhentaiTagsList.innerHTML = `<span style="color:red">Failed to load: ${res.msg}</span>`;
+        }
+    });
+}
+
+function searchOnlineManga() {
+    const query = nhentaiSearchInput.value.trim();
+    if (!query) return;
+    
+    onlineMangaStatus.innerText = `Searching for "${query}"...`;
+    nhentaiResultsArea.innerHTML = '';
+    
+    pywebview.api.search_nhentai(query).then(res => {
+        if (res.status === 'success') {
+            onlineMangaStatus.innerText = `Found ${res.results.length} results for "${query}"`;
+            res.results.forEach(item => {
+                const card = document.createElement('div');
+                card.style.background = '#333';
+                card.style.borderRadius = '5px';
+                card.style.padding = '10px';
+                card.style.display = 'flex';
+                card.style.flexDirection = 'column';
+                card.style.gap = '10px';
+                
+                const img = document.createElement('img');
+                img.src = item.thumb;
+                img.style.width = '100%';
+                img.style.height = '200px';
+                img.style.objectFit = 'cover';
+                img.style.borderRadius = '3px';
+                
+                const title = document.createElement('div');
+                title.innerText = item.title;
+                title.style.fontSize = '12px';
+                title.style.color = 'white';
+                title.style.textAlign = 'center';
+                title.style.flexGrow = '1';
+                
+                const dlBtn = document.createElement('button');
+                dlBtn.innerText = 'Download';
+                dlBtn.style.background = '#4CAF50';
+                dlBtn.style.color = 'white';
+                dlBtn.style.border = 'none';
+                dlBtn.style.padding = '5px';
+                dlBtn.style.borderRadius = '3px';
+                dlBtn.style.cursor = 'pointer';
+                dlBtn.onclick = () => {
+                    dlBtn.innerText = 'Downloading...';
+                    dlBtn.disabled = true;
+                    dlBtn.style.background = '#888';
+                    pywebview.api.download_nhentai(item.url, item.title);
+                };
+                
+                card.appendChild(img);
+                card.appendChild(title);
+                card.appendChild(dlBtn);
+                nhentaiResultsArea.appendChild(card);
+            });
+        } else {
+            onlineMangaStatus.innerText = `Search failed: ${res.msg}`;
+        }
+    });
+}
+
+function downloadComplete(dir_path) {
+    onlineMangaStatus.innerText = `Download complete! Loaded into playlist.`;
+    onlineMangaStatus.style.color = '#4CAF50';
+    setTimeout(() => { onlineMangaStatus.style.color = '#aaa'; }, 3000);
+    // Tell pywebview to load this directory
+    pywebview.api.open_manga_viewer(dir_path);
+}
+
+function downloadFailed(err) {
+    onlineMangaStatus.innerText = `Download failed: ${err}`;
+    onlineMangaStatus.style.color = 'red';
+}
