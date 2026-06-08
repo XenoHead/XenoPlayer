@@ -401,15 +401,23 @@ class SavedTranslationLabel(QLabel):
         if event.button() == Qt.MouseButton.RightButton:
             self.deleted.emit(self)
         elif event.button() == Qt.MouseButton.LeftButton:
-            if event.pos().x() > self.width() - 15 and event.pos().y() > self.height() - 15:
-                self.resizing = True
+            if QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier:
+                if event.pos().x() > self.width() - 15 and event.pos().y() > self.height() - 15:
+                    self.resizing = True
+                else:
+                    self.dragging = True
+                self.drag_pos = event.globalPosition().toPoint()
             else:
-                self.dragging = True
-            self.drag_pos = event.globalPosition().toPoint()
+                super().mousePressEvent(event)
+        else:
+            super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        if event.pos().x() > self.width() - 15 and event.pos().y() > self.height() - 15:
-            self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+        if QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier:
+            if event.pos().x() > self.width() - 15 and event.pos().y() > self.height() - 15:
+                self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+            else:
+                self.setCursor(Qt.CursorShape.SizeAllCursor)
         else:
             self.setCursor(Qt.CursorShape.ArrowCursor)
             
@@ -430,6 +438,10 @@ class SavedTranslationLabel(QLabel):
                 self.dragging = False
                 self.resizing = False
                 self.updated.emit(self)
+            else:
+                super().mouseReleaseEvent(event)
+        else:
+            super().mouseReleaseEvent(event)
 
 class MangaViewerWindow(QDialog):
     def __init__(self, directory, image_paths, parent=None):
@@ -978,6 +990,8 @@ class MediaPlayer(QWidget):
         
         # Help Menu
         help_menu = self.menu_bar.addMenu("Help")
+        action_instructions = help_menu.addAction("Instructions")
+        action_instructions.triggered.connect(self.show_instructions_dialog)
         action_about = help_menu.addAction("About")
         action_about.triggered.connect(self.show_about_dialog)
         
@@ -1452,7 +1466,6 @@ class MediaPlayer(QWidget):
         layout = QVBoxLayout(dialog)
         
         lbl_logo = QLabel()
-        logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.png")
         if not os.path.exists(logo_path):
             logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.png")
             
@@ -1469,6 +1482,52 @@ class MediaPlayer(QWidget):
         lbl_web.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl_web.setOpenExternalLinks(True)
         layout.addWidget(lbl_web)
+        
+        btn_close = QPushButton("Close")
+        btn_close.setStyleSheet("background-color: #333; padding: 5px; border-radius: 3px;")
+        btn_close.clicked.connect(dialog.accept)
+        layout.addWidget(btn_close)
+        
+        dialog.exec()
+
+    def show_instructions_dialog(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Instructions & Shortcuts")
+        dialog.setFixedSize(500, 450)
+        dialog.setStyleSheet("background-color: #222; color: white;")
+        layout = QVBoxLayout(dialog)
+        
+        lbl_title = QLabel("<h2>Keyboard & Mouse Shortcuts</h2>")
+        lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(lbl_title)
+        
+        instructions_text = """
+        <b>Main Player:</b>
+        <ul>
+            <li><b>Space:</b> Play / Pause</li>
+            <li><b>Left / Right Arrow:</b> Previous / Next media</li>
+            <li><b>Mouse Wheel:</b> Previous / Next media</li>
+            <li><b>+ / -:</b> Increase / Decrease video playback speed</li>
+            <li><b>Home / End:</b> Jump to the start / end of the playlist</li>
+            <li><b>F2:</b> Rename current or selected file(s)</li>
+            <li><b>F3:</b> Move current or selected file(s) to a folder</li>
+            <li><b>Delete:</b> Delete current or selected file(s)</li>
+            <li><b>Escape:</b> Close application</li>
+            <li><b>Double-Click Video/Image:</b> Toggle fullscreen</li>
+        </ul>
+        <b>Manga Viewer:</b>
+        <ul>
+            <li><b>Left / Right Arrow:</b> Previous / Next page</li>
+            <li><b>Right-Click:</b> Navigate pages or clear selection boxes</li>
+            <li><b>Left-Click & Drag:</b> Draw translation box</li>
+            <li><b>Shift + Left-Click & Drag:</b> Move or resize existing translation boxes</li>
+        </ul>
+        """
+        
+        lbl_instructions = QLabel(instructions_text)
+        lbl_instructions.setWordWrap(True)
+        lbl_instructions.setStyleSheet("font-size: 14px;")
+        layout.addWidget(lbl_instructions)
         
         btn_close = QPushButton("Close")
         btn_close.setStyleSheet("background-color: #333; padding: 5px; border-radius: 3px;")

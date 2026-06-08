@@ -424,15 +424,23 @@ class SavedTranslationLabel(QLabel):
         if event.button() == Qt.MouseButton.RightButton:
             self.deleted.emit(self)
         elif event.button() == Qt.MouseButton.LeftButton:
-            if event.pos().x() > self.width() - 15 and event.pos().y() > self.height() - 15:
-                self.resizing = True
+            if QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier:
+                if event.pos().x() > self.width() - 15 and event.pos().y() > self.height() - 15:
+                    self.resizing = True
+                else:
+                    self.dragging = True
+                self.drag_pos = event.globalPosition().toPoint()
             else:
-                self.dragging = True
-            self.drag_pos = event.globalPosition().toPoint()
+                super().mousePressEvent(event)
+        else:
+            super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        if event.pos().x() > self.width() - 15 and event.pos().y() > self.height() - 15:
-            self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+        if QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier:
+            if event.pos().x() > self.width() - 15 and event.pos().y() > self.height() - 15:
+                self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+            else:
+                self.setCursor(Qt.CursorShape.SizeAllCursor)
         else:
             self.setCursor(Qt.CursorShape.ArrowCursor)
             
@@ -453,6 +461,10 @@ class SavedTranslationLabel(QLabel):
                 self.dragging = False
                 self.resizing = False
                 self.updated.emit(self)
+            else:
+                super().mouseReleaseEvent(event)
+        else:
+            super().mouseReleaseEvent(event)
 
 class MangaViewerWindow(QDialog):
     def __init__(self, directory, image_paths, parent=None):
@@ -1500,7 +1512,7 @@ class MediaPlayer(QWidget):
         layout = QVBoxLayout(dialog)
         
         lbl_logo = QLabel()
-        logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.png")
+        logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "XenoHead_logo.png")
         if not os.path.exists(logo_path):
             logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.png")
             

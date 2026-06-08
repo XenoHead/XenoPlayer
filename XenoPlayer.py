@@ -62,30 +62,29 @@ class Api:
         return {"status": "ready"}
 
     def open_dialog(self):
-        from PyQt6.QtWidgets import QApplication, QFileDialog
-        app = QApplication.instance() or QApplication([])
         last_dir = self.settings.get("last_opened_dir", "")
         if last_dir and not os.path.exists(last_dir):
             last_dir = ""
             
-        filepath, _ = QFileDialog.getOpenFileName(None, "Select Media File", last_dir, "Media Files (*.mp4 *.webm *.ogg *.jpg *.png *.gif *.webp);;All files (*.*)", options=QFileDialog.Option.DontUseNativeDialog)
-        if filepath:
+        result = self._window.create_file_dialog(webview.OPEN_DIALOG, directory=last_dir, allow_multiple=False, file_types=('Media Files (*.mp4;*.webm;*.ogg;*.jpg;*.png;*.gif;*.webp)', 'All files (*.*)'))
+        if result and len(result) > 0:
+            filepath = result[0]
             self.settings["last_opened_dir"] = os.path.dirname(filepath)
             save_settings(self.settings)
             self.load_directory(filepath)
 
     def browse_folder(self):
-        from PyQt6.QtWidgets import QApplication, QFileDialog
-        app = QApplication.instance() or QApplication([])
         last_dir = self.settings.get("last_opened_dir", "")
         if last_dir and not os.path.exists(last_dir):
             last_dir = ""
             
-        folderpath = QFileDialog.getExistingDirectory(None, "Select Folder", last_dir, options=QFileDialog.Option.DontUseNativeDialog)
-        if folderpath:
+        result = self._window.create_file_dialog(webview.FOLDER_DIALOG, directory=last_dir)
+        if result and len(result) > 0:
+            folderpath = result[0]
             self.settings["last_opened_dir"] = folderpath
             save_settings(self.settings)
-        return folderpath if folderpath else None
+            return folderpath
+        return None
 
     def load_directory(self, filepath):
         filepath = os.path.abspath(filepath)
@@ -340,10 +339,9 @@ class Api:
             return {"status": "error", "msg": str(e)}
 
     def choose_manga_download_dir(self):
-        from PyQt6.QtWidgets import QApplication, QFileDialog
-        app = QApplication.instance() or QApplication([])
-        folderpath = QFileDialog.getExistingDirectory(None, "Select Download Folder", "", options=QFileDialog.Option.DontUseNativeDialog)
-        if folderpath:
+        result = self._window.create_file_dialog(webview.FOLDER_DIALOG)
+        if result and len(result) > 0:
+            folderpath = result[0]
             self.settings["manga_download_dir"] = folderpath
             save_settings(self.settings)
             return {"status": "success", "dir": folderpath}

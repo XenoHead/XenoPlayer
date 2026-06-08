@@ -155,15 +155,23 @@ class SavedTranslationLabel(QLabel):
         if event.button() == Qt.MouseButton.RightButton:
             self.deleted.emit(self)
         elif event.button() == Qt.MouseButton.LeftButton:
-            if event.pos().x() > self.width() - 15 and event.pos().y() > self.height() - 15:
-                self.resizing = True
+            if QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier:
+                if event.pos().x() > self.width() - 15 and event.pos().y() > self.height() - 15:
+                    self.resizing = True
+                else:
+                    self.dragging = True
+                self.drag_pos = event.globalPosition().toPoint()
             else:
-                self.dragging = True
-            self.drag_pos = event.globalPosition().toPoint()
+                super().mousePressEvent(event)
+        else:
+            super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        if event.pos().x() > self.width() - 15 and event.pos().y() > self.height() - 15:
-            self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+        if QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier:
+            if event.pos().x() > self.width() - 15 and event.pos().y() > self.height() - 15:
+                self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+            else:
+                self.setCursor(Qt.CursorShape.SizeAllCursor)
         else:
             self.setCursor(Qt.CursorShape.ArrowCursor)
             
@@ -184,6 +192,10 @@ class SavedTranslationLabel(QLabel):
                 self.dragging = False
                 self.resizing = False
                 self.updated.emit(self)
+            else:
+                super().mouseReleaseEvent(event)
+        else:
+            super().mouseReleaseEvent(event)
 
 class VoiceListenerThread(QThread):
     next_page = pyqtSignal()
@@ -238,7 +250,7 @@ class MangaViewerWindow(QDialog):
         self.last_orig_text = ""
         
         self.setWindowTitle("Manga Viewer")
-        self.showFullScreen()
+        self.showMaximized()
         self.setStyleSheet("background-color: black; color: white;")
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         
@@ -246,6 +258,11 @@ class MangaViewerWindow(QDialog):
         
         # Top Bar
         top_layout = QHBoxLayout()
+        
+        self.page_count_label = QLabel("1/1")
+        self.page_count_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #4da6ff; margin-right: 15px;")
+        top_layout.addWidget(self.page_count_label)
+        
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("Enter Manga Name...")
         self.name_edit.setStyleSheet("background-color: #333; color: white; padding: 5px; border-radius: 3px;")
@@ -358,6 +375,9 @@ class MangaViewerWindow(QDialog):
         self.voice_thread.start()
         
         self.setFocus()
+        
+        # Ensure the first image sizes correctly after layout
+        QTimer.singleShot(100, self.update_image_view)
 
     def toggle_voice(self, checked):
         if checked:
@@ -603,6 +623,8 @@ class MangaViewerWindow(QDialog):
             scaled_pixmap = self.current_pixmap.scaled(self.image_label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             self.image_label.setPixmap(scaled_pixmap)
             self.setWindowTitle(f"Manga Viewer - {self.name_edit.text() or 'Unknown'} - ({self.current_index + 1}/{len(self.image_paths)})")
+            if hasattr(self, 'page_count_label'):
+                self.page_count_label.setText(f"Page: {self.current_index + 1} / {len(self.image_paths)}")
             
     def render_saved_translations(self):
         for lbl in self.saved_labels:
@@ -706,7 +728,7 @@ class MangaViewerWindow(QDialog):
         super().wheelEvent(event)
 
 
-if __name__ == "__main__":
+def main():
     import traceback
     try:
         import sys
@@ -729,3 +751,6 @@ if __name__ == "__main__":
         with open("crash_log.txt", "w") as f:
             f.write(traceback.format_exc())
         print(f"Crashed! Log written to crash_log.txt: {e}")
+
+if __name__ == "__main__":
+    main()
