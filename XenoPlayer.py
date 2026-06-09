@@ -257,7 +257,12 @@ class Api:
             if ocr_mode == "Japanese (Manga OCR)":
                 if manga_ocr_model is None:
                     from manga_ocr import MangaOcr
-                    manga_ocr_model = MangaOcr()
+                    import os
+                    model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'manga_ocr_model')
+                    if os.path.exists(model_path):
+                        manga_ocr_model = MangaOcr(pretrained_model_name_or_path=model_path)
+                    else:
+                        manga_ocr_model = MangaOcr()
                 extracted_text = manga_ocr_model(cropped).strip()
             else:
                 import pytesseract
@@ -302,7 +307,14 @@ class Api:
             html = scraper.get('https://nhentai.net/tags?sort=popular').text
             soup = BeautifulSoup(html, 'html.parser')
             # Extract tags
-            tags = [a.text.strip().split('(')[0].strip() for a in soup.select('a') if '/tag/' in a.get('href', '') and a.text.strip()]
+            tags = []
+            for a in soup.select('a'):
+                if '/tag/' in a.get('href', ''):
+                    name_el = a.select_one('.name')
+                    if name_el:
+                        tags.append(name_el.text.strip())
+                    elif a.text.strip():
+                        tags.append(a.text.strip().split('(')[0].strip())
             seen = set()
             clean_tags = []
             for t in tags:

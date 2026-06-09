@@ -1,6 +1,6 @@
 {
     "favorites": [],
-    "last_video": "D:\\Downloads\\sex\\Best\\Manga\\Hiza Band\\5.webp",
+    "last_video": "D:\\Git\\Echoes\\images\\banner.png",
     "max_volume": 100,
     "move_targets": {},
     "saved_folders": [
@@ -27,5 +27,6 @@
             ""
         ]
     },
-    "last_opened_dir": "D:\\Downloads\\sex\\Best\\Manga\\Hiza Band"
+    "last_opened_dir": "D:\\Git\\Echoes\\images",
+    "manga_download_dir": "D:\\Downloads\\sex\\Best\\Manga"
 }

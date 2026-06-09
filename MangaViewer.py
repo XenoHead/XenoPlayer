@@ -107,7 +107,11 @@ class TranslationWorker(QThread):
                 if manga_ocr_model is None:
                     self.status_update.emit("Initializing AI Model...\n(This will download ~400MB on first run. Please wait...)")
                     from manga_ocr import MangaOcr
-                    manga_ocr_model = MangaOcr()
+                    model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'manga_ocr_model')
+                    if os.path.exists(model_path):
+                        manga_ocr_model = MangaOcr(pretrained_model_name_or_path=model_path)
+                    else:
+                        manga_ocr_model = MangaOcr()
                     
                 self.status_update.emit("Reading text with Manga OCR...")
                 extracted_text = manga_ocr_model(pil_img).strip()
@@ -250,6 +254,7 @@ class MangaViewerWindow(QDialog):
         self.last_orig_text = ""
         
         self.setWindowTitle("Manga Viewer")
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint | Qt.WindowType.WindowMinimizeButtonHint | Qt.WindowType.WindowCloseButtonHint)
         self.showMaximized()
         self.setStyleSheet("background-color: black; color: white;")
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
