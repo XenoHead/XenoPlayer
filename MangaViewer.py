@@ -1,5 +1,13 @@
 import sys
 import os
+
+class DummyWriter:
+    def write(self, *args, **kwargs): pass
+    def flush(self, *args, **kwargs): pass
+    def isatty(self): return False
+if sys.stdout is None: sys.stdout = DummyWriter()
+if sys.stderr is None: sys.stderr = DummyWriter()
+
 import shutil
 import json
 import hashlib
@@ -51,7 +59,7 @@ except ImportError:
 
 class SelectableImageLabel(QLabel):
     selection_made = pyqtSignal(QRect)
-    selection_cleared = pyqtSignal()
+    selection_cleared = pyqtSignal()    
     next_page_requested = pyqtSignal()
     prev_page_requested = pyqtSignal()
     
@@ -221,66 +229,6 @@ class SavedTranslationLabel(QLabel):
         else:
             super().mouseReleaseEvent(event)
 
-class VoiceListenerThread(QThread):
-    next_page = pyqtSignal()
-    prev_page = pyqtSignal()
-    status_update = pyqtSignal(str)
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.running = True
-
-    def run(self):
-        try:
-            import speech_recognition as sr
-            recognizer = sr.Recognizer()
-            with sr.Microphone() as source:
-                self.status_update.emit("calibrating")
-                print("Voice control activated. Calibrating to ambient noise...")
-                recognizer.adjust_for_ambient_noise(source, duration=1)
-                print("Listening for voice commands ('next', 'back')...")
-                self.status_update.emit("listening")
-                while self.running:
-                    try:
-                        audio = recognizer.listen(source, timeout=1, phrase_time_limit=3)
-                        self.status_update.emit("processing")
-                        text = recognizer.recognize_google(audio).lower()
-                        print(f"Voice recognized: {text}")
-                        self.status_update.emit("recognized")
-                        if "next" in text or "forward" in text or "next page" in text:
-                            self.next_page.emit()
-                        elif "back" in text or "previous" in text or "prev page" in text:
-                            self.prev_page.emit()
-                        import time
-                        time.sleep(0.5)
-                        self.status_update.emit("listening")
-                    except sr.WaitTimeoutError:
-                        self.status_update.emit("listening")
-                        continue
-                    except sr.UnknownValueError:
-                        self.status_update.emit("listening")
-                        continue
-                    except sr.RequestError as e:
-                        print(f"Voice Request Error: {e}")
-                        self.status_update.emit("error")
-                        import time; time.sleep(1)
-                        self.status_update.emit("listening")
-                        continue
-                    except Exception as e:
-                        print(f"Voice loop error: {e}")
-                        self.status_update.emit("error")
-                        import time; time.sleep(1)
-                        self.status_update.emit("listening")
-                        continue
-        except Exception as e:
-            print(f"Fatal Voice Error (e.g. missing dependencies/microphone): {e}")
-            self.status_update.emit("fatal")
-            return
-
-    def stop(self):
-        self.running = False
-        self.wait()
-
 class MangaViewerWindow(QDialog):
     def __init__(self, directory, image_paths, parent=None):
         super().__init__(parent)
@@ -298,13 +246,13 @@ class MangaViewerWindow(QDialog):
         
         self.setWindowTitle("Manga Viewer")
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.WindowMaximizeButtonHint | Qt.WindowType.WindowMinimizeButtonHint | Qt.WindowType.WindowCloseButtonHint)
-        self.showMaximized()
+        self.showFullScreen()
         self.setStyleSheet("background-color: black; color: white;")
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         
     def showEvent(self, event):
         super().showEvent(event)
-        self.showMaximized()
+        self.showFullScreen()
         
         layout = QVBoxLayout(self)
         
@@ -349,7 +297,7 @@ class MangaViewerWindow(QDialog):
         self.image_label = SelectableImageLabel()
         self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image_label.selection_made.connect(self.process_translation)
-        self.image_label.selection_cleared.connect(self.hide_translation)
+        self.image_label.selection_cleared.connect(self.hide_translation)        
         self.image_label.next_page_requested.connect(self.go_next_page)
         self.image_label.prev_page_requested.connect(self.go_prev_page)
         layout.addWidget(self.image_label, stretch=1)
@@ -387,17 +335,6 @@ class MangaViewerWindow(QDialog):
         # Bottom Bar
         bottom_layout = QHBoxLayout()
         
-        self.btn_voice = QPushButton("🎤 Voice: ON")
-        self.btn_voice.setCheckable(True)
-        self.btn_voice.setChecked(True)
-        self.btn_voice.setStyleSheet("background-color: #4CAF50; color: white; padding: 5px; border-radius: 3px;")
-        self.btn_voice.clicked.connect(self.toggle_voice)
-        bottom_layout.addWidget(self.btn_voice)
-        
-        self.voice_indicator = QLabel("🟡 Calibrating...")
-        self.voice_indicator.setStyleSheet("color: yellow; font-weight: bold; margin-left: 10px;")
-        bottom_layout.addWidget(self.voice_indicator)
-        
         bottom_layout.addStretch()
         
         bottom_layout.addWidget(QLabel("⏱️ Auto-Advance:"))
@@ -425,58 +362,11 @@ class MangaViewerWindow(QDialog):
         self.load_manga_info()
         self.load_current_image()
         
-        self.voice_thread = VoiceListenerThread(self)
-        self.voice_thread.next_page.connect(self.go_next_page)
-        self.voice_thread.prev_page.connect(self.go_prev_page)
-        self.voice_thread.status_update.connect(self.handle_voice_status)
-        self.voice_thread.start()
-        
         self.setFocus()
         
         # Ensure the first image sizes correctly after layout
         QTimer.singleShot(100, self.update_image_view)
 
-    def handle_voice_status(self, status):
-        if status == "calibrating":
-            self.voice_indicator.setText("🟡 Calibrating...")
-            self.voice_indicator.setStyleSheet("color: yellow; font-weight: bold; margin-left: 10px;")
-        elif status == "listening":
-            self.voice_indicator.setText("🟢 Listening...")
-            self.voice_indicator.setStyleSheet("color: #4CAF50; font-weight: bold; margin-left: 10px;")
-        elif status == "processing":
-            self.voice_indicator.setText("🔵 Processing...")
-            self.voice_indicator.setStyleSheet("color: #2196F3; font-weight: bold; margin-left: 10px;")
-        elif status == "recognized":
-            self.voice_indicator.setText("✨ Heard!")
-            self.voice_indicator.setStyleSheet("color: #E040FB; font-weight: bold; margin-left: 10px;")
-        elif status == "error":
-            self.voice_indicator.setText("🔴 Error")
-            self.voice_indicator.setStyleSheet("color: #F44336; font-weight: bold; margin-left: 10px;")
-        elif status == "fatal":
-            self.voice_indicator.setText("❌ Offline (Mic/Libs Error)")
-            self.voice_indicator.setStyleSheet("color: #9E9E9E; font-weight: bold; margin-left: 10px;")
-            self.btn_voice.setChecked(False)
-            self.btn_voice.setText("🎤 Voice: OFF")
-            self.btn_voice.setStyleSheet("background-color: #555; color: white; padding: 5px; border-radius: 3px;")
-
-    def toggle_voice(self, checked):
-        if checked:
-            self.btn_voice.setText("🎤 Voice: ON")
-            self.btn_voice.setStyleSheet("background-color: #4CAF50; color: white; padding: 5px; border-radius: 3px;")
-            self.voice_thread = VoiceListenerThread(self)
-            self.voice_thread.next_page.connect(self.go_next_page)
-            self.voice_thread.prev_page.connect(self.go_prev_page)
-            self.voice_thread.status_update.connect(self.handle_voice_status)
-            self.voice_thread.start()
-        else:
-            self.btn_voice.setText("🎤 Voice: OFF")
-            self.btn_voice.setStyleSheet("background-color: #555; color: white; padding: 5px; border-radius: 3px;")
-            if self.voice_thread:
-                self.voice_thread.stop()
-                self.voice_thread = None
-            self.voice_indicator.setText("⚪ Disabled")
-            self.voice_indicator.setStyleSheet("color: #9E9E9E; font-weight: bold; margin-left: 10px;")
-            
     def update_auto_timer(self, val):
         if val > 0:
             self.auto_timer.start(val * 1000)
@@ -817,8 +707,6 @@ class MangaViewerWindow(QDialog):
             super().keyPressEvent(event)
             
     def closeEvent(self, event):
-        if hasattr(self, 'voice_thread') and self.voice_thread is not None and self.voice_thread.isRunning():
-            self.voice_thread.stop()
         super().closeEvent(event)
             
     def wheelEvent(self, event):

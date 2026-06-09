@@ -10,12 +10,13 @@ Beyond standard playback, XenoPlayer is packed with advanced features including 
 * **Manga Reading & Live Translation:**
   * Draw a box over foreign text in the Manga Viewer to automatically recognize and translate it to English (or other languages) using built-in AI.
   * **Burn Translations:** Optionally burn translated text directly into the image file using ImageMagick.
-  * **Voice Navigation:** Control page-turning using voice commands ("next", "back", "previous") via speech recognition.
+  * **Interactive Translations:** Move, resize, edit, or delete saved translations directly on the page.
 * **Online Manga Integration:** Browse popular tags, search, and download galleries directly from your favorite online sources using the built-in downloader.
 * **Advanced File Management:**
   * Instantly move files to pre-configured "Move Target" folders.
   * Smart duplicate deletion—automatically finds and removes identical files to save space.
   * Mass rename files or rename them individually.
+* **Audio Normalization:** Built-in dynamic range compression to automatically boost quiet dialogue and lower loud sounds in videos.
 * **Favorites System:** Keep track of your favorite files. Play exclusively your favorites or filter them out to watch only unfavorited content.
 * **Live Thumbnails:** The playlist dynamically generates previews for your videos and images on the fly.
 
@@ -34,19 +35,19 @@ Beyond standard playback, XenoPlayer is packed with advanced features including 
 ## Keyboard & Mouse Shortcuts
 
 ### Main Player
-* **Space:** Play / Pause
-* **Left / Right Arrow:** Previous / Next media
-* **Mouse Wheel Up / Down:** Previous / Next media
-* **+ / -:** Increase / Decrease video playback speed
-* **Home / End:** Jump to the start / end of the playlist
-* **F2:** Rename current or selected file(s)
-* **F3:** Move current or selected file(s) to a folder
-* **Delete:** Delete current or selected file(s)
-* **Escape:** Close application
-* **Double-Click Video/Image:** Toggle fullscreen
+
+* **Space / ArrowRight:** Next media (Customizable in Options)
+* **ArrowLeft:** Previous media (Customizable in Options)
+* **Ctrl + Left-Click (Playlist):** Select multiple files
+* **Shift + Left-Click (Playlist):** Select a range of files
+* **Right-Click (Playlist):** Open context menu (Rename, Delete, Move, Open With...)
 
 ### Manga Viewer
+
 * **Left / Right Arrow:** Previous / Next page
 * **Right-Click / Forward/Back Mouse Buttons:** Navigate pages or clear selection boxes
 * **Left-Click & Drag:** Draw translation box
-* **Voice Commands:** Say "next", "forward", "back", or "previous" to turn pages (if Voice is enabled).
+* **Right-Click (on translation box):** Delete saved translation
+* **Shift + Right-Click (on translation box):** Edit saved translation text
+* **Shift + Left-Click & Drag (on translation box):** Move or resize saved translation
+* **Escape:** Close Manga Viewer

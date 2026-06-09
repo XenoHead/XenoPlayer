@@ -7,6 +7,25 @@ fileNameDisplay.style.fontWeight = 'bold';
 fileNameDisplay.style.color = 'lightblue';
 const playBtn = document.getElementById('play-btn');
 
+// Dynamically create Previous and Next buttons for the media controls
+const prevBtn = document.createElement('button');
+prevBtn.className = playBtn.className;
+prevBtn.innerHTML = '<i class="fa-solid fa-backward-step"></i>';
+prevBtn.style.marginRight = '10px';
+prevBtn.style.cursor = 'pointer';
+prevBtn.title = "Previous Media";
+prevBtn.onclick = () => pywebview.api.prev_media();
+playBtn.parentNode.insertBefore(prevBtn, playBtn);
+
+const nextBtn = document.createElement('button');
+nextBtn.className = playBtn.className;
+nextBtn.innerHTML = '<i class="fa-solid fa-forward-step"></i>';
+nextBtn.style.marginLeft = '10px';
+nextBtn.style.cursor = 'pointer';
+nextBtn.title = "Next Media";
+nextBtn.onclick = () => pywebview.api.next_media();
+playBtn.parentNode.insertBefore(nextBtn, playBtn.nextSibling);
+
 let playlist = [];
 let currentIndex = -1;
 let selectedIndices = new Set();
@@ -67,11 +86,12 @@ function renderState() {
         }
     }
 
-    // Toggle Read Manga button visibility based on folder type
+    // Toggle Read Manga button visibility based on folder type and active media
+    const isVideo = videoPlayer.style.display === 'block';
     const buttons = document.querySelectorAll('button');
     buttons.forEach(b => {
         if (b.innerText.includes('Read Manga')) {
-            b.style.display = appState.is_manga_folder ? 'inline-block' : 'none';
+            b.style.display = (appState.is_manga_folder && !isVideo) ? 'inline-block' : 'none';
         }
     });
 }
@@ -124,7 +144,7 @@ function renderFavsList() {
         div.style.borderRadius = '3px';
 
         const pathSpan = document.createElement('span');
-        pathSpan.textContent = fav;
+        pathSpan.textContent = fav.split('\\').pop().split('/').pop();
         pathSpan.style.wordBreak = 'break-all';
         pathSpan.style.marginRight = '10px';
         pathSpan.style.fontSize = '12px';
@@ -608,6 +628,19 @@ function cmOpenFolder() {
     if (lastSelectedIndex !== -1 && playlist[lastSelectedIndex]) {
         pywebview.api.open_folder_location(playlist[lastSelectedIndex].path);
     }
+}
+
+function cmOpenXenoPix() {
+    cm.style.display = 'none';
+    let targetPath = null;
+    if (lastSelectedIndex !== -1 && playlist[lastSelectedIndex]) {
+        targetPath = playlist[lastSelectedIndex].path;
+    }
+    pywebview.api.open_xenopix(targetPath).then(res => {
+        if (res.status === 'error') {
+            alert(res.msg);
+        }
+    });
 }
 
 function cmDelete() {
@@ -1178,7 +1211,7 @@ normContainer.appendChild(thresholdSlider);
 normContainer.appendChild(gainLabel);
 normContainer.appendChild(gainSlider);
 
-playBtn.parentNode.insertBefore(normContainer, playBtn.nextSibling);
+playBtn.parentNode.insertBefore(normContainer, nextBtn.nextSibling);
 
 normBtn.addEventListener('click', () => {
     isNormalized = !isNormalized;

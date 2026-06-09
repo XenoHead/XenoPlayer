@@ -1,5 +1,13 @@
 import os
 import sys
+
+class DummyWriter:
+    def write(self, *args, **kwargs): pass
+    def flush(self, *args, **kwargs): pass
+    def isatty(self): return False
+if sys.stdout is None: sys.stdout = DummyWriter()
+if sys.stderr is None: sys.stderr = DummyWriter()
+
 import threading
 import json
 import re
@@ -188,12 +196,17 @@ class Api:
     def get_state(self):
         current_path = self.playlist[self.current_index] if (0 <= self.current_index < len(self.playlist)) else None
         is_manga = False
+        dir_path = ""
         if current_path:
             dir_path = os.path.dirname(current_path)
             if os.path.exists(os.path.join(dir_path, '.manga')) or os.path.exists(os.path.join(dir_path, 'manga_info.json')):
                 is_manga = True
+                
+        all_favs = self.settings.get("favorites", [])
+        folder_favs = [f for f in all_favs if os.path.dirname(f) == dir_path] if dir_path else []
+        
         return {
-            "favorites": self.settings.get("favorites", []),
+            "favorites": folder_favs,
             "move_targets": self.settings.get("move_targets", {}),
             "saved_volumes": self.settings.get("saved_volumes", {}),
             "saved_folders": self.settings.get("saved_folders", ["", "", "", "", ""]),
@@ -201,7 +214,7 @@ class Api:
             "default_folder": self.settings.get("default_folder", -1),
             "hotkeys": self.settings.get("hotkeys", {"next": ["ArrowRight", "Space", "", "", ""], "prev": ["ArrowLeft", "", "", "", ""]}),
             "current_path": current_path,
-            "is_favorite": current_path in self.settings.get("favorites", []) if current_path else False,
+            "is_favorite": current_path in all_favs if current_path else False,
             "is_manga_folder": is_manga
         }
 
@@ -225,14 +238,35 @@ class Api:
         return {"status": "ok"}
 
     def save_favorites(self, favs):
-        self.settings["favorites"] = favs
+        if not self.playlist: return self.get_state()
+        dir_path = os.path.dirname(self.playlist[0])
+        
+        all_favs = self.settings.get("favorites", [])
+        # Keep favorites that belong to other folders intact
+        new_all_favs = [f for f in all_favs if os.path.dirname(f) != dir_path]
+        new_all_favs.extend(favs)
+        
+        self.settings["favorites"] = new_all_favs
         save_settings(self.settings)
         return self.get_state()
 
     def play_favorites(self):
-        favs = [f for f in self.settings.get("favorites", []) if os.path.exists(f)]
-        if not favs: return
-        self.playlist = favs
+        if not self.playlist: return
+        dir_path = os.path.dirname(self.playlist[0])
+        all_favs = set(self.settings.get("favorites", []))
+        supported = {'.mp4', '.webm', '.ogg', '.jpg', '.jpeg', '.png', '.webp', '.gif'}
+        
+        new_playlist = []
+        for f in os.listdir(dir_path):
+            fp = os.path.join(dir_path, f)
+            if os.path.isfile(fp) and os.path.splitext(f)[1].lower() in supported:
+                if fp in all_favs:
+                    new_playlist.append(fp)
+                    
+        if not new_playlist: return
+        
+        new_playlist.sort(key=natural_sort_key)
+        self.playlist = new_playlist
         self.current_index = 0
         self._window.evaluate_js('updatePlaylist()')
         self.play_current()
@@ -242,17 +276,20 @@ class Api:
         dir_path = os.path.dirname(self.playlist[0])
         favs = set(self.settings.get("favorites", []))
         supported = {'.mp4', '.webm', '.ogg', '.jpg', '.jpeg', '.png', '.webp', '.gif'}
-        self.playlist = []
+        new_playlist = []
         for f in os.listdir(dir_path):
             fp = os.path.join(dir_path, f)
             if os.path.isfile(fp) and os.path.splitext(f)[1].lower() in supported:
                 if fp not in favs:
-                    self.playlist.append(fp)
-        self.playlist.sort(key=natural_sort_key)
-        if self.playlist:
-            self.current_index = 0
-            self._window.evaluate_js('updatePlaylist()')
-            self.play_current()
+                    new_playlist.append(fp)
+                    
+        if not new_playlist: return
+        
+        new_playlist.sort(key=natural_sort_key)
+        self.playlist = new_playlist
+        self.current_index = 0
+        self._window.evaluate_js('updatePlaylist()')
+        self.play_current()
 
     def save_options(self, folders, default_index, external_apps=None):
         self.settings["saved_folders"] = folders
@@ -399,6 +436,33 @@ class Api:
             return {"status": "ok"}
         except Exception as e:
             return {"status": "error", "msg": str(e)}
+
+    def open_xenopix(self, target_path=None):
+        import subprocess
+        args = []
+        if target_path and os.path.exists(target_path):
+            args.extend(['--gui-source', target_path])
+            
+        if getattr(sys, 'frozen', False):
+            base_dir = os.path.dirname(sys.executable)
+            candidates = [
+                (os.path.join(base_dir, 'XenoPix.exe'), True),
+                (os.path.join(base_dir, '..', 'XenoPix', 'dist', 'XenoPix.exe'), True)
+            ]
+        else:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            candidates = [
+                (os.path.join(base_dir, '..', 'XenoPix', 'dist', 'XenoPix.exe'), True),
+                (os.path.join(base_dir, '..', 'XenoPix', 'xenopix.pyw'), False)
+            ]
+            
+        for cand_path, is_exe in candidates:
+            if os.path.exists(cand_path):
+                cmd = [cand_path] + args if is_exe else [sys.executable, cand_path] + args
+                subprocess.Popen(cmd)
+                return {"status": "success"}
+                
+        return {"status": "error", "msg": "Could not find XenoPix. Please build it first."}
 
     def translate_rect(self, path, x, y, w, h, ocr_mode, disp_w, disp_h):
         if not path or not os.path.isfile(path): return {"status": "error"}

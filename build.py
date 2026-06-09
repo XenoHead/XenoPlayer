@@ -43,6 +43,8 @@ def build():
         '--hidden-import=fugashi',
         '--hidden-import=unidic_lite',
         '--hidden-import=huggingface_hub',
+        '--collect-all=unidic_lite',
+        '--collect-all=fugashi',
         '--collect-all=manga_ocr',
         '--collect-all=transformers',
         '--copy-metadata=transformers',
