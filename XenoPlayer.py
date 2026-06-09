@@ -12,8 +12,20 @@ from flask import Flask, request, send_file, Response
 
 app = Flask(__name__)
 
-# Settings
-SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web_settings.json")
+def resource_path(relative_path):
+    import sys
+    import os
+    if getattr(sys, 'frozen', False):
+        base_path = sys._MEIPASS
+    else:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_path, relative_path)
+
+if getattr(sys, 'frozen', False):
+    app_dir = os.path.dirname(sys.executable)
+else:
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+SETTINGS_FILE = os.path.join(app_dir, "web_settings.json")
 def load_settings():
     if os.path.exists(SETTINGS_FILE):
         try:
@@ -335,8 +347,11 @@ class Api:
         if not path: return
         directory = os.path.dirname(path) if os.path.isfile(path) else path
         import subprocess
-        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "MangaViewer.py")
-        subprocess.Popen([sys.executable, script, directory])
+        if getattr(sys, 'frozen', False):
+            subprocess.Popen([sys.executable, "MangaViewer", directory])
+        else:
+            script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "MangaViewer.py")
+            subprocess.Popen([sys.executable, script, directory])
         return {"status": "success"}
 
     def get_nhentai_tags(self):
@@ -623,11 +638,18 @@ def run_server():
     app.run(port=5050, debug=False, use_reloader=False)
 
 if __name__ == '__main__':
+    import sys
+    if len(sys.argv) >= 3 and sys.argv[1] == "MangaViewer":
+        import MangaViewer
+        sys.argv = [sys.argv[0], sys.argv[2]]
+        MangaViewer.main()
+        sys.exit(0)
+
     # Start the backend media server
     threading.Thread(target=run_server, daemon=True).start()
     
     # Start the Webview
-    html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web', 'index.html')
+    html_path = resource_path(os.path.join('web', 'index.html'))
     window = webview.create_window('XenoPlayer', html_path, js_api=api, width=1000, height=700)
     api._window = window
     webview.start(debug=False)

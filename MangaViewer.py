@@ -15,6 +15,13 @@ from PyQt6.QtMultimediaWidgets import QVideoWidget
 from PyQt6.QtCore import QUrl, Qt, QThread, pyqtSignal, QSize, QSettings, QPoint, QRect, QTimer
 from PyQt6.QtGui import QImage, QPixmap, QIcon, QMovie
 
+def resource_path(relative_path):
+    if getattr(sys, 'frozen', False):
+        base_path = sys._MEIPASS
+    else:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_path, relative_path)
+
 try:
     import cv2
     import numpy as np
@@ -99,6 +106,8 @@ class TranslationWorker(QThread):
 
     def run(self):
         import io
+        from PIL import Image
+        from deep_translator import GoogleTranslator
         global manga_ocr_model
         try:
             pil_img = Image.open(io.BytesIO(self.img_bytes))
@@ -107,7 +116,7 @@ class TranslationWorker(QThread):
                 if manga_ocr_model is None:
                     self.status_update.emit("Initializing AI Model...")
                     from manga_ocr import MangaOcr
-                    model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'manga_ocr_model')
+                    model_path = resource_path('manga_ocr_model')
                     if os.path.exists(model_path):
                         manga_ocr_model = MangaOcr(pretrained_model_name_or_path=model_path)
                     else:
@@ -281,7 +290,7 @@ class MangaViewerWindow(QDialog):
         self.last_orig_text = ""
         
         self.setWindowTitle("Manga Viewer")
-        self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint | Qt.WindowType.WindowMinimizeButtonHint | Qt.WindowType.WindowCloseButtonHint)
+        self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.WindowMaximizeButtonHint | Qt.WindowType.WindowMinimizeButtonHint | Qt.WindowType.WindowCloseButtonHint)
         self.showMaximized()
         self.setStyleSheet("background-color: black; color: white;")
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
