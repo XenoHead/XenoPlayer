@@ -6,6 +6,12 @@ const playBtn = document.getElementById('play-btn');
 
 let playlist = [];
 let currentIndex = -1;
+let selectedIndices = new Set();
+let lastSelectedIndex = -1;
+
+const cm = document.getElementById('context-menu');
+window.addEventListener('click', () => { if(cm) cm.style.display = 'none'; });
+window.addEventListener('contextmenu', e => e.preventDefault());
 
 let appState = {};
 
@@ -71,6 +77,78 @@ function deleteDupes() {
 // Modals
 function openAboutModal() {
     document.getElementById('about-modal').style.display = 'block';
+}
+
+let tempFavs = [];
+
+function openFavsModal() {
+    document.getElementById('favs-modal').style.display = 'block';
+    tempFavs = [...(appState.favorites || [])];
+    renderFavsList();
+}
+
+function renderFavsList() {
+    const list = document.getElementById('favs-list');
+    list.innerHTML = '';
+    
+    if (tempFavs.length === 0) {
+        list.innerHTML = '<div style="color:#aaa;">No favorites saved.</div>';
+        return;
+    }
+    
+    tempFavs.forEach((fav, index) => {
+        const div = document.createElement('div');
+        div.style.display = 'flex';
+        div.style.justifyContent = 'space-between';
+        div.style.marginBottom = '5px';
+        div.style.alignItems = 'center';
+        div.style.background = '#222';
+        div.style.padding = '5px';
+        div.style.borderRadius = '3px';
+        
+        const pathSpan = document.createElement('span');
+        pathSpan.textContent = fav;
+        pathSpan.style.wordBreak = 'break-all';
+        pathSpan.style.marginRight = '10px';
+        pathSpan.style.fontSize = '12px';
+        
+        const remBtn = document.createElement('button');
+        remBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
+        remBtn.style.background = '#d32f2f';
+        remBtn.style.color = 'white';
+        remBtn.style.border = 'none';
+        remBtn.style.padding = '5px 10px';
+        remBtn.style.cursor = 'pointer';
+        remBtn.style.borderRadius = '3px';
+        remBtn.onclick = () => {
+            tempFavs.splice(index, 1);
+            renderFavsList();
+        };
+        
+        div.appendChild(pathSpan);
+        div.appendChild(remBtn);
+        list.appendChild(div);
+    });
+}
+
+function saveFavsModal() {
+    pywebview.api.save_favorites(tempFavs).then(state => {
+        appState = state;
+        renderState();
+        closeModals();
+    });
+}
+
+function openInstructionsModal() {
+    document.getElementById('instructions-modal').style.display = 'block';
+    switchTab('tab-main');
+}
+
+function switchTab(tabId) {
+    document.querySelectorAll('.tab-content').forEach(t => t.style.display = 'none');
+    document.querySelectorAll('.tab-btn').forEach(b => b.style.background = '#444');
+    document.getElementById(tabId).style.display = 'block';
+    event.currentTarget.style.background = '#ff477e';
 }
 
 function openMoveTargetsModal() {
@@ -178,21 +256,58 @@ function renderOptionsList() {
         div.appendChild(browseBtn);
         list.appendChild(div);
     }
+    
+    const appsList = document.getElementById('external-apps-list');
+    appsList.innerHTML = '';
+    const apps = appState.external_apps || ["", "", "", "", ""];
+    
+    for (let i = 0; i < 5; i++) {
+        const div = document.createElement('div');
+        div.style.display = 'flex';
+        div.style.gap = '5px';
+        div.style.marginBottom = '5px';
+        div.style.alignItems = 'center';
+        
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.id = `opt-app-${i}`;
+        input.value = apps[i] || "";
+        input.style.flex = '1';
+        input.placeholder = "e.g. C:\\Path\\To\\Photoshop.exe";
+        
+        const browseBtn = document.createElement('button');
+        browseBtn.innerHTML = '<i class="fa-solid fa-file"></i>';
+        browseBtn.onclick = () => {
+            pywebview.api.browse_exe_dialog().then(path => {
+                if (path && path.length > 0) input.value = path;
+            });
+        };
+        
+        div.appendChild(input);
+        div.appendChild(browseBtn);
+        appsList.appendChild(div);
+    }
 }
 
 function saveOptionsModal() {
     const folders = [];
+    for (let i = 0; i < 5; i++) folders.push(document.getElementById(`opt-folder-${i}`).value);
+    
+    const apps = [];
+    for (let i = 0; i < 5; i++) apps.push(document.getElementById(`opt-app-${i}`).value);
+    
     let defIndex = -1;
-    for (let i = 0; i < 5; i++) {
-        folders.push(document.getElementById(`opt-folder-${i}`).value);
-    }
-    const selectedRadio = document.querySelector('input[name="default-folder"]:checked');
-    if (selectedRadio) {
-        defIndex = parseInt(selectedRadio.value);
+    const radios = document.getElementsByName('default-folder');
+    for (const r of radios) {
+        if (r.checked) defIndex = parseInt(r.value);
     }
     
-    pywebview.api.save_options(folders, defIndex).then(state => {
+    appState.saved_folders = folders;
+    appState.default_folder = defIndex;
+    appState.external_apps = apps;
+    pywebview.api.save_options(folders, defIndex, apps).then(state => {
         appState = state;
+        renderState();
         closeModals();
     });
 }
@@ -280,8 +395,48 @@ function renderPlaylist() {
     playlistContainer.innerHTML = '';
     playlist.forEach((item, index) => {
         const div = document.createElement('div');
-        div.className = 'playlist-item' + (index === currentIndex ? ' active' : '');
-        div.onclick = () => pywebview.api.play_index(index);
+        const isSelected = selectedIndices.has(index);
+        div.className = 'playlist-item' + (index === currentIndex ? ' active' : '') + (isSelected ? ' selected' : '');
+        
+        div.onclick = (e) => {
+            if (e.ctrlKey || e.metaKey) {
+                if (selectedIndices.has(index)) selectedIndices.delete(index);
+                else selectedIndices.add(index);
+                lastSelectedIndex = index;
+            } else if (e.shiftKey && lastSelectedIndex !== -1) {
+                selectedIndices.clear();
+                const start = Math.min(lastSelectedIndex, index);
+                const end = Math.max(lastSelectedIndex, index);
+                for (let i = start; i <= end; i++) selectedIndices.add(i);
+            } else {
+                selectedIndices.clear();
+                selectedIndices.add(index);
+                lastSelectedIndex = index;
+                pywebview.api.play_index(index);
+            }
+            renderPlaylist();
+        };
+
+        div.onmousedown = (e) => {
+            if (e.button === 2) {
+                e.preventDefault();
+                try {
+                    if (!selectedIndices.has(index)) {
+                        selectedIndices.clear();
+                        selectedIndices.add(index);
+                        lastSelectedIndex = index;
+                        document.querySelectorAll('.playlist-item').forEach(el => el.classList.remove('selected'));
+                        div.classList.add('selected');
+                    }
+                    showContextMenu(e.clientX, e.clientY);
+                } catch (err) {
+                    alert("Error on right click: " + err);
+                }
+            }
+        };
+        
+        // Also suppress contextmenu just in case it leaks through
+        div.oncontextmenu = (e) => e.preventDefault();
         
         const img = document.createElement('img');
         img.className = 'playlist-thumbnail';
@@ -303,6 +458,135 @@ function renderPlaylist() {
     if (activeItem) {
         activeItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
+}
+
+function showContextMenu(x, y) {
+    try {
+        const cmLocal = document.getElementById('context-menu');
+        if(!cmLocal) {
+            alert("Context menu element not found in DOM!");
+            return;
+        }
+        cmLocal.style.display = 'block';
+        
+        if (x + cmLocal.offsetWidth > window.innerWidth) x = window.innerWidth - cmLocal.offsetWidth;
+        if (y + cmLocal.offsetHeight > window.innerHeight) y = window.innerHeight - cmLocal.offsetHeight;
+        cmLocal.style.left = x + 'px';
+        cmLocal.style.top = y + 'px';
+        
+        const renameBtn = document.getElementById('cm-rename-btn');
+        if (renameBtn) renameBtn.style.display = (selectedIndices.size === 1) ? 'block' : 'none';
+        
+        // Populate Open With
+        const apps = appState.external_apps || [];
+        const validApps = apps.filter(a => a.trim() !== "");
+        const openWithContainer = document.getElementById('cm-open-with-container');
+        const openWithList = document.getElementById('cm-open-with-list');
+        
+        if (validApps.length > 0 && openWithContainer && openWithList) {
+            openWithContainer.style.display = 'block';
+            openWithList.innerHTML = '';
+            for (const appPath of validApps) {
+                const btn = document.createElement('button');
+                btn.className = 'cm-btn';
+                const appName = appPath.split('\\').pop().split('/').pop();
+                btn.innerHTML = `<i class="fa-solid fa-rocket"></i> ${appName}`;
+                btn.onclick = () => {
+                    cmLocal.style.display = 'none';
+                    if (lastSelectedIndex !== -1 && playlist[lastSelectedIndex]) {
+                        pywebview.api.open_with(playlist[lastSelectedIndex].path, appPath).then(res => {
+                            if (res.status === 'error') alert("Failed to open: " + res.msg);
+                        });
+                    }
+                };
+                openWithList.appendChild(btn);
+            }
+        } else if (openWithContainer) {
+            openWithContainer.style.display = 'none';
+        }
+        
+        const tContainer = document.getElementById('cm-move-targets');
+        if (tContainer) {
+            tContainer.innerHTML = '';
+            for (const [name, path] of Object.entries(appState.move_targets || {})) {
+                const btn = document.createElement('button');
+                btn.className = 'cm-btn';
+                btn.innerHTML = `<i class="fa-solid fa-arrow-right-to-bracket"></i> ${name}`;
+                btn.onclick = () => cmMoveTo(name);
+                tContainer.appendChild(btn);
+            }
+            const browseBtn = document.createElement('button');
+            browseBtn.className = 'cm-btn';
+            browseBtn.innerHTML = `<i class="fa-solid fa-folder-open"></i> Browse...`;
+            browseBtn.onclick = () => {
+                pywebview.api.browse_folder().then(path => {
+                    if (path) cmMoveTo(path);
+                });
+            };
+            tContainer.appendChild(browseBtn);
+        }
+    } catch (err) {
+        alert("Error in showContextMenu: " + err.message);
+    }
+}
+
+function getSelectedPaths() {
+    return Array.from(selectedIndices).map(idx => playlist[idx].path);
+}
+
+function cmPlay() {
+    if(selectedIndices.size > 0) {
+        pywebview.api.play_index(Array.from(selectedIndices)[0]);
+    }
+}
+
+function cmRename() {
+    cm.style.display = 'none';
+    if (selectedIndices.size === 1) {
+        const idx = selectedIndices.values().next().value;
+        const oldPath = playlist[idx].path;
+        const oldName = playlist[idx].name;
+        const newName = prompt("Rename file to:", oldName);
+        if (newName && newName !== oldName) {
+            pywebview.api.rename_file(oldPath, newName).then(res => {
+                if(res.status === 'ok') updateState();
+                else alert(res.message);
+            });
+        }
+    }
+}
+
+function cmOpenFolder() {
+    cm.style.display = 'none';
+    if (lastSelectedIndex !== -1 && playlist[lastSelectedIndex]) {
+        pywebview.api.open_folder_location(playlist[lastSelectedIndex].path);
+    }
+}
+
+function cmDelete() {
+    if(selectedIndices.size === 0) return;
+    if(confirm(`Are you sure you want to delete ${selectedIndices.size} file(s)?`)) {
+        pywebview.api.delete_files(getSelectedPaths()).then(res => {
+            if(res.status === 'success') {
+                selectedIndices.clear();
+                updatePlaylist();
+            } else {
+                alert(res.msg);
+            }
+        });
+    }
+}
+
+function cmMoveTo(target) {
+    if(selectedIndices.size === 0) return;
+    pywebview.api.move_files(getSelectedPaths(), target).then(res => {
+        if(res.status === 'success') {
+            selectedIndices.clear();
+            updatePlaylist();
+        } else {
+            alert(res.msg);
+        }
+    });
 }
 
 function loadMedia(path, index) {
@@ -366,10 +650,47 @@ function changeVolume(val) {
 let currentPlayCount = 0;
 
 function resetLoopCount() {
-    currentPlayCount = 0;
+    currentLoopCount = 0;
 }
 
-// Auto play next video when ended
+function formatTime(seconds) {
+    if (isNaN(seconds) || !isFinite(seconds)) return "0:00";
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return m + ":" + (s < 10 ? "0" : "") + s;
+}
+
+videoPlayer.addEventListener('timeupdate', () => {
+    const progressSlider = document.getElementById('progress-slider');
+    const currentTimeDisplay = document.getElementById('current-time');
+    
+    if (videoPlayer.duration) {
+        progressSlider.value = (videoPlayer.currentTime / videoPlayer.duration) * 100;
+        currentTimeDisplay.textContent = formatTime(videoPlayer.currentTime);
+    }
+});
+
+videoPlayer.addEventListener('loadedmetadata', () => {
+    const progressSlider = document.getElementById('progress-slider');
+    const totalTimeDisplay = document.getElementById('total-time');
+    const currentTimeDisplay = document.getElementById('current-time');
+    
+    totalTimeDisplay.textContent = formatTime(videoPlayer.duration);
+    progressSlider.value = 0;
+    currentTimeDisplay.textContent = "0:00";
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+    const progressSlider = document.getElementById('progress-slider');
+    if (progressSlider) {
+        progressSlider.addEventListener('input', () => {
+            if (videoPlayer.duration) {
+                videoPlayer.currentTime = (progressSlider.value / 100) * videoPlayer.duration;
+            }
+        });
+    }
+});
+
 videoPlayer.addEventListener('ended', () => {
     const loopEnabled = document.getElementById('loop-checkbox').checked;
     const maxLoops = parseInt(document.getElementById('loop-count').value, 10) || 1;

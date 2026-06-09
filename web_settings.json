@@ -1,13 +1,24 @@
 {
-    "favorites": [],
-    "last_video": "D:\\Downloads\\sex\\Best\\Manga\\ROMOMATA Karada ga Binkan Sugiru Watashi wa Itoko\\nhentai\\655421 [ROMOMATA] Karada ga Binkan Sugiru Watashi wa Itoko ni Itazura sarete mo Teikoudekinai!\\nhentai_655421_001.webp",
+    "favorites": [
+        "D:\\Downloads\\sex\\Best\\Real\\images\\6.jpg",
+        "D:\\Downloads\\sex\\Best\\Real\\images\\4.jpg",
+        "D:\\Downloads\\sex\\Best\\Real\\images\\8.jpg",
+        "D:\\Downloads\\sex\\Best\\Real\\images\\0185ef1e121aa306.webp",
+        "D:\\Downloads\\sex\\Best\\Real\\images\\15863536d47aef56a29bcaecbfaf3dfb.webp",
+        "D:\\Downloads\\sex\\Best\\Real\\video\\mom and tiny son.mp4"
+    ],
+    "last_video": "D:\\Downloads\\sex\\Best\\Real\\video\\krQciFu1hIwLHj6DLwBH_04_a2adc8059a5a05f7c4cba937e2439d1e_video_shorts_360p_converted.mp4",
     "max_volume": 100,
-    "move_targets": {},
+    "move_targets": {
+        "RealPics": "D:\\Downloads\\sex\\Best\\Real\\images",
+        "RealVids": "D:\\Downloads\\sex\\Best\\Real\\video",
+        "RealNP": "D:\\Downloads\\sex\\Best\\Real\\non porn"
+    },
     "saved_folders": [
         "D:\\Downloads\\sex\\Best",
         "D:\\Downloads\\sex\\Best\\Manga",
-        "",
-        "",
+        "D:\\Downloads\\sex\\Best\\Real",
+        "D:\\Downloads\\sex\\Best\\Animation",
         ""
     ],
     "default_folder": -1,
@@ -15,7 +26,7 @@
         "next": [
             "ArrowRight",
             "Space",
-            "",
+            "ControlLeft",
             "",
             ""
         ],
@@ -27,6 +38,13 @@
             ""
         ]
     },
-    "last_opened_dir": "D:\\Downloads\\sex\\Best\\Manga\\ROMOMATA Karada ga Binkan Sugiru Watashi wa Itoko\\nhentai\\655421 [ROMOMATA] Karada ga Binkan Sugiru Watashi wa Itoko ni Itazura sarete mo Teikoudekinai!",
-    "manga_download_dir": "D:\\Downloads\\sex\\Best\\Manga"
+    "last_opened_dir": "D:\\Downloads\\sex\\Best\\Real\\video",
+    "manga_download_dir": "D:\\Downloads\\sex\\Best\\Manga",
+    "external_apps": [
+        "F:\\XenoTools\\XenoCut\\XenoCut.exe",
+        "",
+        "",
+        "",
+        ""
+    ]
 }

@@ -20,7 +20,7 @@ def load_settings():
             with open(SETTINGS_FILE, "r") as f:
                 return json.load(f)
         except: pass
-    return {"favorites": [], "last_video": None, "max_volume": 100, "move_targets": {}, "saved_folders": ["", "", "", "", ""], "default_folder": -1, "hotkeys": {"next": ["ArrowRight", "Space", "", "", ""], "prev": ["ArrowLeft", "", "", "", ""]}}
+    return {"favorites": [], "last_video": None, "max_volume": 100, "move_targets": {}, "saved_folders": ["", "", "", "", ""], "external_apps": ["", "", "", "", ""], "default_folder": -1, "hotkeys": {"next": ["ArrowRight", "Space", "", "", ""], "prev": ["ArrowLeft", "", "", "", ""]}}
 
 def save_settings(s):
     with open(SETTINGS_FILE, "w") as f:
@@ -40,6 +40,11 @@ class Api:
         self._window = None
 
     def init(self):
+        import sys
+        if len(sys.argv) > 1 and os.path.exists(sys.argv[1]):
+            self.load_directory(sys.argv[1])
+            return {"status": "ready"}
+            
         default_index = self.settings.get("default_folder", -1)
         folders = self.settings.get("saved_folders", ["", "", "", "", ""])
         
@@ -66,7 +71,7 @@ class Api:
         if last_dir and not os.path.exists(last_dir):
             last_dir = ""
             
-        result = self._window.create_file_dialog(webview.OPEN_DIALOG, directory=last_dir, allow_multiple=False, file_types=('Media Files (*.mp4;*.webm;*.ogg;*.jpg;*.png;*.gif;*.webp)', 'All files (*.*)'))
+        result = self._window.create_file_dialog(webview.FileDialog.OPEN, directory=last_dir, allow_multiple=False, file_types=('Media Files (*.mp4;*.webm;*.ogg;*.jpg;*.png;*.gif;*.webp)', 'All files (*.*)'))
         if result and len(result) > 0:
             filepath = result[0]
             self.settings["last_opened_dir"] = os.path.dirname(filepath)
@@ -78,12 +83,22 @@ class Api:
         if last_dir and not os.path.exists(last_dir):
             last_dir = ""
             
-        result = self._window.create_file_dialog(webview.FOLDER_DIALOG, directory=last_dir)
+        result = self._window.create_file_dialog(webview.FileDialog.FOLDER, directory=last_dir)
         if result and len(result) > 0:
             folderpath = result[0]
             self.settings["last_opened_dir"] = folderpath
             save_settings(self.settings)
             return folderpath
+        return None
+
+    def browse_exe_dialog(self):
+        last_dir = self.settings.get("last_opened_dir", "")
+        if last_dir and not os.path.exists(last_dir):
+            last_dir = ""
+            
+        result = self._window.create_file_dialog(webview.FileDialog.OPEN, directory=last_dir, allow_multiple=False, file_types=('Executables (*.exe)', 'All files (*.*)'))
+        if result and len(result) > 0:
+            return result[0]
         return None
 
     def load_directory(self, filepath):
@@ -154,6 +169,7 @@ class Api:
             "favorites": self.settings.get("favorites", []),
             "move_targets": self.settings.get("move_targets", {}),
             "saved_folders": self.settings.get("saved_folders", ["", "", "", "", ""]),
+            "external_apps": self.settings.get("external_apps", ["", "", "", "", ""]),
             "default_folder": self.settings.get("default_folder", -1),
             "hotkeys": self.settings.get("hotkeys", {"next": ["ArrowRight", "Space", "", "", ""], "prev": ["ArrowLeft", "", "", "", ""]}),
             "current_path": current_path,
@@ -168,6 +184,11 @@ class Api:
             favs.remove(path)
         else:
             favs.append(path)
+        self.settings["favorites"] = favs
+        save_settings(self.settings)
+        return self.get_state()
+
+    def save_favorites(self, favs):
         self.settings["favorites"] = favs
         save_settings(self.settings)
         return self.get_state()
@@ -197,9 +218,11 @@ class Api:
             self._window.evaluate_js('updatePlaylist()')
             self.play_current()
 
-    def save_options(self, folders, default_index):
+    def save_options(self, folders, default_index, external_apps=None):
         self.settings["saved_folders"] = folders
         self.settings["default_folder"] = default_index
+        if external_apps is not None:
+            self.settings["external_apps"] = external_apps
         save_settings(self.settings)
         return self.get_state()
 
@@ -235,6 +258,24 @@ class Api:
         except Exception as e:
             return {"status": "error", "msg": str(e)}
 
+    def open_folder_location(self, path):
+        import subprocess
+        try:
+            path = os.path.normpath(path)
+            subprocess.Popen(f'explorer /select,"{path}"')
+            return {"status": "ok"}
+        except Exception as e:
+            return {"status": "error", "msg": str(e)}
+
+    def open_with(self, filepath, app_path):
+        import subprocess
+        try:
+            filepath = os.path.normpath(filepath)
+            subprocess.Popen([app_path, filepath])
+            return {"status": "ok"}
+        except Exception as e:
+            return {"status": "error", "msg": str(e)}
+
     def translate_rect(self, path, x, y, w, h, ocr_mode, disp_w, disp_h):
         if not path or not os.path.isfile(path): return {"status": "error"}
         from PIL import Image
@@ -257,7 +298,6 @@ class Api:
             if ocr_mode == "Japanese (Manga OCR)":
                 if manga_ocr_model is None:
                     from manga_ocr import MangaOcr
-                    import os
                     model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'manga_ocr_model')
                     if os.path.exists(model_path):
                         manga_ocr_model = MangaOcr(pretrained_model_name_or_path=model_path)
@@ -351,7 +391,7 @@ class Api:
             return {"status": "error", "msg": str(e)}
 
     def choose_manga_download_dir(self):
-        result = self._window.create_file_dialog(webview.FOLDER_DIALOG)
+        result = self._window.create_file_dialog(webview.FileDialog.FOLDER)
         if result and len(result) > 0:
             folderpath = result[0]
             self.settings["manga_download_dir"] = folderpath
@@ -412,6 +452,54 @@ class Api:
             self._window.evaluate_js('updatePlaylist()')
             if self.current_index >= 0:
                 self.play_current()
+            return {"status": "success"}
+        except Exception as e:
+            return {"status": "error", "msg": str(e)}
+
+    def delete_files(self, paths):
+        for p in paths:
+            try:
+                try:
+                    import send2trash
+                    send2trash.send2trash(p)
+                except ImportError:
+                    os.remove(p)
+            except Exception as e:
+                return {"status": "error", "msg": f"Failed to delete {os.path.basename(p)}: {e}"}
+                
+        self.playlist = [p for p in self.playlist if p not in paths]
+        if self.current_index >= len(self.playlist):
+            self.current_index = max(-1, len(self.playlist) - 1)
+        return {"status": "success"}
+
+    def rename_file(self, old_path, new_name):
+        ext = os.path.splitext(old_path)[1]
+        new_path = os.path.join(os.path.dirname(old_path), new_name + ext)
+        try:
+            os.rename(old_path, new_path)
+            for i in range(len(self.playlist)):
+                if self.playlist[i] == old_path:
+                    self.playlist[i] = new_path
+            return {"status": "success"}
+        except Exception as e:
+            return {"status": "error", "msg": str(e)}
+
+    def move_files(self, paths, target_name):
+        if not paths: return {"status": "error", "msg": "No files to move"}
+        targets = self.settings.get("move_targets", {})
+        if target_name in targets:
+            target_dir = targets[target_name]
+        else:
+            target_dir = os.path.join(os.path.dirname(paths[0]), target_name)
+            
+        try:
+            os.makedirs(target_dir, exist_ok=True)
+            for p in paths:
+                shutil.move(p, target_dir)
+                
+            self.playlist = [p for p in self.playlist if p not in paths]
+            if self.current_index >= len(self.playlist):
+                self.current_index = max(-1, len(self.playlist) - 1)
             return {"status": "success"}
         except Exception as e:
             return {"status": "error", "msg": str(e)}
