@@ -1,21 +1,30 @@
 const videoPlayer = document.getElementById('video-player');
+videoPlayer.crossOrigin = "anonymous";
 const imageViewer = document.getElementById('image-viewer');
 const playlistContainer = document.getElementById('playlist');
 const fileNameDisplay = document.getElementById('current-file-name');
+fileNameDisplay.style.fontWeight = 'bold';
+fileNameDisplay.style.color = 'lightblue';
 const playBtn = document.getElementById('play-btn');
 
 let playlist = [];
 let currentIndex = -1;
 let selectedIndices = new Set();
 let lastSelectedIndex = -1;
+let mangaTranslations = {};
 
 const cm = document.getElementById('context-menu');
-window.addEventListener('click', () => { if(cm) cm.style.display = 'none'; });
+const mlCm = document.getElementById('manga-library-context-menu');
+
+window.addEventListener('click', () => {
+    if (cm) cm.style.display = 'none';
+    if (mlCm) mlCm.style.display = 'none';
+});
 window.addEventListener('contextmenu', e => e.preventDefault());
 
 let appState = {};
 
-window.addEventListener('pywebviewready', function() {
+window.addEventListener('pywebviewready', function () {
     pywebview.api.init().then(response => {
         console.log("Backend ready", response);
         updateState();
@@ -37,17 +46,17 @@ function renderState() {
     } else {
         favBtn.innerHTML = '<i class="fa-regular fa-star"></i>';
     }
-    
+
     // Render Move Targets
     const targetsContainer = document.getElementById('move-targets-container');
-    if(targetsContainer) {
+    if (targetsContainer) {
         targetsContainer.innerHTML = '';
         for (const [name, path] of Object.entries(appState.move_targets || {})) {
             const btn = document.createElement('button');
             btn.innerHTML = `<i class="fa-solid fa-arrow-right-to-bracket"></i> ${name}`;
             btn.onclick = () => {
                 pywebview.api.move_file_to(name).then(res => {
-                    if(res.status === 'success') {
+                    if (res.status === 'success') {
                         updateState();
                     } else {
                         alert(res.msg);
@@ -57,6 +66,14 @@ function renderState() {
             targetsContainer.appendChild(btn);
         }
     }
+
+    // Toggle Read Manga button visibility based on folder type
+    const buttons = document.querySelectorAll('button');
+    buttons.forEach(b => {
+        if (b.innerText.includes('Read Manga')) {
+            b.style.display = appState.is_manga_folder ? 'inline-block' : 'none';
+        }
+    });
 }
 
 function toggleFavorite() {
@@ -67,7 +84,7 @@ function toggleFavorite() {
 }
 
 function deleteDupes() {
-    if(confirm("Are you sure you want to delete duplicates in this folder?")) {
+    if (confirm("Are you sure you want to delete duplicates in this folder?")) {
         pywebview.api.delete_dupes().then(res => {
             alert(res.msg);
         });
@@ -90,12 +107,12 @@ function openFavsModal() {
 function renderFavsList() {
     const list = document.getElementById('favs-list');
     list.innerHTML = '';
-    
+
     if (tempFavs.length === 0) {
         list.innerHTML = '<div style="color:#aaa;">No favorites saved.</div>';
         return;
     }
-    
+
     tempFavs.forEach((fav, index) => {
         const div = document.createElement('div');
         div.style.display = 'flex';
@@ -105,13 +122,13 @@ function renderFavsList() {
         div.style.background = '#222';
         div.style.padding = '5px';
         div.style.borderRadius = '3px';
-        
+
         const pathSpan = document.createElement('span');
         pathSpan.textContent = fav;
         pathSpan.style.wordBreak = 'break-all';
         pathSpan.style.marginRight = '10px';
         pathSpan.style.fontSize = '12px';
-        
+
         const remBtn = document.createElement('button');
         remBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
         remBtn.style.background = '#d32f2f';
@@ -124,7 +141,7 @@ function renderFavsList() {
             tempFavs.splice(index, 1);
             renderFavsList();
         };
-        
+
         div.appendChild(pathSpan);
         div.appendChild(remBtn);
         list.appendChild(div);
@@ -193,8 +210,8 @@ function renderTargetsList() {
 function addTarget() {
     const name = document.getElementById('new-target-name').value;
     const path = document.getElementById('new-target-path').value;
-    if(name && path) {
-        if(!appState.move_targets) appState.move_targets = {};
+    if (name && path) {
+        if (!appState.move_targets) appState.move_targets = {};
         appState.move_targets[name] = path;
         document.getElementById('new-target-name').value = '';
         document.getElementById('new-target-path').value = '';
@@ -223,26 +240,26 @@ function renderOptionsList() {
     list.innerHTML = '';
     const folders = appState.saved_folders || ["", "", "", "", ""];
     const defIndex = appState.default_folder !== undefined ? appState.default_folder : -1;
-    
+
     for (let i = 0; i < 5; i++) {
         const div = document.createElement('div');
         div.style.display = 'flex';
         div.style.gap = '5px';
         div.style.marginBottom = '5px';
         div.style.alignItems = 'center';
-        
+
         const radio = document.createElement('input');
         radio.type = 'radio';
         radio.name = 'default-folder';
         radio.value = i;
         if (i === defIndex) radio.checked = true;
-        
+
         const input = document.createElement('input');
         input.type = 'text';
         input.id = `opt-folder-${i}`;
         input.value = folders[i] || "";
         input.style.flex = '1';
-        
+
         const browseBtn = document.createElement('button');
         browseBtn.innerHTML = '<i class="fa-solid fa-folder-open"></i>';
         browseBtn.onclick = () => {
@@ -250,31 +267,31 @@ function renderOptionsList() {
                 if (path) input.value = path;
             });
         };
-        
+
         div.appendChild(radio);
         div.appendChild(input);
         div.appendChild(browseBtn);
         list.appendChild(div);
     }
-    
+
     const appsList = document.getElementById('external-apps-list');
     appsList.innerHTML = '';
     const apps = appState.external_apps || ["", "", "", "", ""];
-    
+
     for (let i = 0; i < 5; i++) {
         const div = document.createElement('div');
         div.style.display = 'flex';
         div.style.gap = '5px';
         div.style.marginBottom = '5px';
         div.style.alignItems = 'center';
-        
+
         const input = document.createElement('input');
         input.type = 'text';
         input.id = `opt-app-${i}`;
         input.value = apps[i] || "";
         input.style.flex = '1';
         input.placeholder = "e.g. C:\\Path\\To\\Photoshop.exe";
-        
+
         const browseBtn = document.createElement('button');
         browseBtn.innerHTML = '<i class="fa-solid fa-file"></i>';
         browseBtn.onclick = () => {
@@ -282,7 +299,7 @@ function renderOptionsList() {
                 if (path && path.length > 0) input.value = path;
             });
         };
-        
+
         div.appendChild(input);
         div.appendChild(browseBtn);
         appsList.appendChild(div);
@@ -292,16 +309,16 @@ function renderOptionsList() {
 function saveOptionsModal() {
     const folders = [];
     for (let i = 0; i < 5; i++) folders.push(document.getElementById(`opt-folder-${i}`).value);
-    
+
     const apps = [];
     for (let i = 0; i < 5; i++) apps.push(document.getElementById(`opt-app-${i}`).value);
-    
+
     let defIndex = -1;
     const radios = document.getElementsByName('default-folder');
     for (const r of radios) {
         if (r.checked) defIndex = parseInt(r.value);
     }
-    
+
     appState.saved_folders = folders;
     appState.default_folder = defIndex;
     appState.external_apps = apps;
@@ -317,12 +334,12 @@ function renderHotkeysList() {
     const nextList = document.getElementById('hotkeys-next-list');
     prevList.innerHTML = '';
     nextList.innerHTML = '';
-    
-    const hotkeys = appState.hotkeys || {next: ["ArrowRight", "Space", "", "", ""], prev: ["ArrowLeft", "", "", "", ""]};
+
+    const hotkeys = appState.hotkeys || { next: ["ArrowRight", "Space", "", "", ""], prev: ["ArrowLeft", "", "", "", ""] };
     const prevKeys = hotkeys.prev || ["ArrowLeft", "", "", "", ""];
     const nextKeys = hotkeys.next || ["ArrowRight", "Space", "", "", ""];
-    
-    for(let i = 0; i < 5; i++) {
+
+    for (let i = 0; i < 5; i++) {
         // Prev
         const pInput = document.createElement('input');
         pInput.type = 'text';
@@ -334,11 +351,11 @@ function renderHotkeysList() {
         pInput.style.marginBottom = '5px';
         pInput.onkeydown = (e) => {
             e.preventDefault();
-            if(e.code === 'Backspace') pInput.value = '';
+            if (e.code === 'Backspace') pInput.value = '';
             else pInput.value = e.code;
         };
         prevList.appendChild(pInput);
-        
+
         // Next
         const nInput = document.createElement('input');
         nInput.type = 'text';
@@ -350,7 +367,7 @@ function renderHotkeysList() {
         nInput.style.marginBottom = '5px';
         nInput.onkeydown = (e) => {
             e.preventDefault();
-            if(e.code === 'Backspace') nInput.value = '';
+            if (e.code === 'Backspace') nInput.value = '';
             else nInput.value = e.code;
         };
         nextList.appendChild(nInput);
@@ -360,11 +377,11 @@ function renderHotkeysList() {
 function saveHotkeysModal() {
     const nextKeys = [];
     const prevKeys = [];
-    for(let i=0; i<5; i++) {
+    for (let i = 0; i < 5; i++) {
         nextKeys.push(document.getElementById(`hk-next-${i}`).value);
         prevKeys.push(document.getElementById(`hk-prev-${i}`).value);
     }
-    pywebview.api.save_hotkeys({next: nextKeys, prev: prevKeys}).then(state => {
+    pywebview.api.save_hotkeys({ next: nextKeys, prev: prevKeys }).then(state => {
         appState = state;
         closeModals();
     });
@@ -397,7 +414,7 @@ function renderPlaylist() {
         const div = document.createElement('div');
         const isSelected = selectedIndices.has(index);
         div.className = 'playlist-item' + (index === currentIndex ? ' active' : '') + (isSelected ? ' selected' : '');
-        
+
         div.onclick = (e) => {
             if (e.ctrlKey || e.metaKey) {
                 if (selectedIndices.has(index)) selectedIndices.delete(index);
@@ -434,25 +451,25 @@ function renderPlaylist() {
                 }
             }
         };
-        
+
         // Also suppress contextmenu just in case it leaks through
         div.oncontextmenu = (e) => e.preventDefault();
-        
+
         const img = document.createElement('img');
         img.className = 'playlist-thumbnail';
         img.dataset.src = `http://localhost:5050/thumbnail?path=${encodeURIComponent(item.path)}`;
-        img.onerror = function() { this.onerror = null; this.src = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='; };
+        img.onerror = function () { this.onerror = null; this.src = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='; };
         observer.observe(img);
-        
+
         const nameSpan = document.createElement('span');
         nameSpan.className = 'playlist-name';
         nameSpan.textContent = item.name;
-        
+
         div.appendChild(img);
         div.appendChild(nameSpan);
         playlistContainer.appendChild(div);
     });
-    
+
     // Scroll active item into view
     const activeItem = document.querySelector('.playlist-item.active');
     if (activeItem) {
@@ -463,26 +480,26 @@ function renderPlaylist() {
 function showContextMenu(x, y) {
     try {
         const cmLocal = document.getElementById('context-menu');
-        if(!cmLocal) {
+        if (!cmLocal) {
             alert("Context menu element not found in DOM!");
             return;
         }
         cmLocal.style.display = 'block';
-        
+
         if (x + cmLocal.offsetWidth > window.innerWidth) x = window.innerWidth - cmLocal.offsetWidth;
         if (y + cmLocal.offsetHeight > window.innerHeight) y = window.innerHeight - cmLocal.offsetHeight;
         cmLocal.style.left = x + 'px';
         cmLocal.style.top = y + 'px';
-        
+
         const renameBtn = document.getElementById('cm-rename-btn');
         if (renameBtn) renameBtn.style.display = (selectedIndices.size === 1) ? 'block' : 'none';
-        
+
         // Populate Open With
         const apps = appState.external_apps || [];
         const validApps = apps.filter(a => a.trim() !== "");
         const openWithContainer = document.getElementById('cm-open-with-container');
         const openWithList = document.getElementById('cm-open-with-list');
-        
+
         if (validApps.length > 0 && openWithContainer && openWithList) {
             openWithContainer.style.display = 'block';
             openWithList.innerHTML = '';
@@ -504,7 +521,7 @@ function showContextMenu(x, y) {
         } else if (openWithContainer) {
             openWithContainer.style.display = 'none';
         }
-        
+
         const tContainer = document.getElementById('cm-move-targets');
         if (tContainer) {
             tContainer.innerHTML = '';
@@ -525,6 +542,36 @@ function showContextMenu(x, y) {
             };
             tContainer.appendChild(browseBtn);
         }
+
+        // Add a "Mark as Manga" / "Unmark as Manga" button to the context menu
+        let markMangaBtn = document.getElementById('cm-mark-manga');
+        if (!markMangaBtn) {
+            markMangaBtn = document.createElement('button');
+            markMangaBtn.id = 'cm-mark-manga';
+            markMangaBtn.className = 'cm-btn';
+            cmLocal.appendChild(markMangaBtn);
+        }
+
+        if (appState.is_manga_folder) {
+            markMangaBtn.innerHTML = '<i class="fa-solid fa-book-open-reader"></i> Unmark as Manga';
+            markMangaBtn.onclick = () => {
+                cmLocal.style.display = 'none';
+                pywebview.api.unmark_as_manga().then(state => {
+                    appState = state;
+                    renderState();
+                });
+            };
+        } else {
+            markMangaBtn.innerHTML = '<i class="fa-solid fa-book"></i> Mark as Manga Folder';
+            markMangaBtn.onclick = () => {
+                cmLocal.style.display = 'none';
+                pywebview.api.mark_as_manga().then(state => {
+                    appState = state;
+                    renderState();
+                });
+            };
+        }
+        markMangaBtn.style.display = 'block';
     } catch (err) {
         alert("Error in showContextMenu: " + err.message);
     }
@@ -535,7 +582,7 @@ function getSelectedPaths() {
 }
 
 function cmPlay() {
-    if(selectedIndices.size > 0) {
+    if (selectedIndices.size > 0) {
         pywebview.api.play_index(Array.from(selectedIndices)[0]);
     }
 }
@@ -549,7 +596,7 @@ function cmRename() {
         const newName = prompt("Rename file to:", oldName);
         if (newName && newName !== oldName) {
             pywebview.api.rename_file(oldPath, newName).then(res => {
-                if(res.status === 'ok') updateState();
+                if (res.status === 'ok') updateState();
                 else alert(res.message);
             });
         }
@@ -564,10 +611,10 @@ function cmOpenFolder() {
 }
 
 function cmDelete() {
-    if(selectedIndices.size === 0) return;
-    if(confirm(`Are you sure you want to delete ${selectedIndices.size} file(s)?`)) {
+    if (selectedIndices.size === 0) return;
+    if (confirm(`Are you sure you want to delete ${selectedIndices.size} file(s)?`)) {
         pywebview.api.delete_files(getSelectedPaths()).then(res => {
-            if(res.status === 'success') {
+            if (res.status === 'success') {
                 selectedIndices.clear();
                 updatePlaylist();
             } else {
@@ -578,9 +625,9 @@ function cmDelete() {
 }
 
 function cmMoveTo(target) {
-    if(selectedIndices.size === 0) return;
+    if (selectedIndices.size === 0) return;
     pywebview.api.move_files(getSelectedPaths(), target).then(res => {
-        if(res.status === 'success') {
+        if (res.status === 'success') {
             selectedIndices.clear();
             updatePlaylist();
         } else {
@@ -594,22 +641,22 @@ function loadMedia(path, index) {
         resetLoopCount();
     }
     currentIndex = index;
-    fileNameDisplay.textContent = path.split('\\').pop().split('/').pop();
-    
+    fileNameDisplay.textContent = path.split('\\').pop().split('/').pop() + '  -  ';
+
     // Update active class
     renderPlaylist();
-    
+
     const ext = path.split('.').pop().toLowerCase();
     const mediaUrl = `http://localhost:5050/media?path=${encodeURIComponent(path)}`;
-    
+
     if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) {
         videoPlayer.style.display = 'none';
         videoPlayer.pause();
         imageViewer.style.display = 'block';
         imageViewer.src = mediaUrl;
-        
+
         playBtn.innerHTML = '<i class="fa-solid fa-play"></i>'; // Images don't play
-        
+
         // Load manga info
         pywebview.api.get_manga_info(path).then(info => {
             mangaTranslations = info || {};
@@ -626,6 +673,13 @@ function loadMedia(path, index) {
         if (imageTimerInterval) {
             clearInterval(imageTimerInterval);
             imageTimerInterval = null;
+        }
+        if (appState.saved_volumes && appState.saved_volumes[path] !== undefined) {
+            const savedVol = appState.saved_volumes[path];
+            videoPlayer.volume = savedVol / 100.0;
+            // Auto-update volume slider visually if it exists
+            const volSlider = document.querySelector('input[type="range"][onchange*="changeVolume"]') || document.querySelector('input[oninput*="changeVolume"]');
+            if (volSlider) volSlider.value = savedVol;
         }
     }
     updateState();
@@ -645,6 +699,12 @@ function togglePlay() {
 
 function changeVolume(val) {
     videoPlayer.volume = val / 100.0;
+    if (currentIndex >= 0 && playlist[currentIndex]) {
+        pywebview.api.save_volume(playlist[currentIndex].path, val).then(() => {
+            if (!appState.saved_volumes) appState.saved_volumes = {};
+            appState.saved_volumes[playlist[currentIndex].path] = val;
+        });
+    }
 }
 
 let currentPlayCount = 0;
@@ -663,7 +723,7 @@ function formatTime(seconds) {
 videoPlayer.addEventListener('timeupdate', () => {
     const progressSlider = document.getElementById('progress-slider');
     const currentTimeDisplay = document.getElementById('current-time');
-    
+
     if (videoPlayer.duration) {
         progressSlider.value = (videoPlayer.currentTime / videoPlayer.duration) * 100;
         currentTimeDisplay.textContent = formatTime(videoPlayer.currentTime);
@@ -674,7 +734,7 @@ videoPlayer.addEventListener('loadedmetadata', () => {
     const progressSlider = document.getElementById('progress-slider');
     const totalTimeDisplay = document.getElementById('total-time');
     const currentTimeDisplay = document.getElementById('current-time');
-    
+
     totalTimeDisplay.textContent = formatTime(videoPlayer.duration);
     progressSlider.value = 0;
     currentTimeDisplay.textContent = "0:00";
@@ -694,7 +754,7 @@ document.addEventListener('DOMContentLoaded', () => {
 videoPlayer.addEventListener('ended', () => {
     const loopEnabled = document.getElementById('loop-checkbox').checked;
     const maxLoops = parseInt(document.getElementById('loop-count').value, 10) || 1;
-    
+
     if (loopEnabled) {
         currentPlayCount++;
         if (currentPlayCount < maxLoops) {
@@ -704,7 +764,7 @@ videoPlayer.addEventListener('ended', () => {
             return;
         }
     }
-    
+
     // Done looping or loop disabled -> go to next
     pywebview.api.next_media();
 });
@@ -728,11 +788,11 @@ function updateImageTimer() {
 window.addEventListener('keydown', e => {
     // Prevent triggering if typing in an input or textarea
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-    
-    const hotkeys = appState.hotkeys || {next: ["ArrowRight", "Space"], prev: ["ArrowLeft"]};
+
+    const hotkeys = appState.hotkeys || { next: ["ArrowRight", "Space"], prev: ["ArrowLeft"] };
     const nextKeys = hotkeys.next || ["ArrowRight", "Space"];
     const prevKeys = hotkeys.prev || ["ArrowLeft"];
-    
+
     if (prevKeys.includes(e.code)) {
         pywebview.api.prev_media();
         e.preventDefault();
@@ -743,7 +803,6 @@ window.addEventListener('keydown', e => {
 });
 
 // --- Manga Translation Features ---
-let mangaTranslations = {};
 const mediaContainer = document.getElementById('media-container');
 const selectionBox = document.getElementById('selection-box');
 const transContainer = document.getElementById('translations-container');
@@ -755,12 +814,12 @@ let startX = 0, startY = 0;
 mediaContainer.addEventListener('mousedown', e => {
     if (imageViewer.style.display === 'none') return;
     if (e.target.closest('.manga-translation-box')) return; // Don't draw if clicking on existing box
-    
+
     isDrawing = true;
     const rect = mediaContainer.getBoundingClientRect();
     startX = e.clientX - rect.left;
     startY = e.clientY - rect.top;
-    
+
     selectionBox.style.left = startX + 'px';
     selectionBox.style.top = startY + 'px';
     selectionBox.style.width = '0px';
@@ -773,7 +832,7 @@ mediaContainer.addEventListener('mousemove', e => {
     const rect = mediaContainer.getBoundingClientRect();
     const currX = e.clientX - rect.left;
     const currY = e.clientY - rect.top;
-    
+
     selectionBox.style.left = Math.min(startX, currX) + 'px';
     selectionBox.style.top = Math.min(startY, currY) + 'px';
     selectionBox.style.width = Math.abs(currX - startX) + 'px';
@@ -784,47 +843,47 @@ mediaContainer.addEventListener('mouseup', e => {
     if (!isDrawing) return;
     isDrawing = false;
     selectionBox.style.display = 'none';
-    
+
     const rect = mediaContainer.getBoundingClientRect();
     const currX = e.clientX - rect.left;
     const currY = e.clientY - rect.top;
-    
+
     const selLeft = Math.min(startX, currX);
     const selTop = Math.min(startY, currY);
     const selWidth = Math.abs(currX - startX);
     const selHeight = Math.abs(currY - startY);
-    
+
     if (selWidth < 10 || selHeight < 10) return; // Too small
-    
+
     const imgRect = imageViewer.getBoundingClientRect();
     // Calculate relative to the image element
     const relX = (selLeft + rect.left) - imgRect.left;
     const relY = (selTop + rect.top) - imgRect.top;
-    
+
     if (relX < 0 || relY < 0 || relX > imgRect.width || relY > imgRect.height) return; // Outside image
-    
+
     const ocrMode = document.getElementById('ocr-mode').value;
     const currentPath = appState.current_path || playlist[currentIndex].path;
-    
+
     loadingOverlay.style.display = 'block';
-    
+
     pywebview.api.translate_rect(
-        currentPath, 
-        relX, relY, selWidth, selHeight, 
-        ocrMode, 
+        currentPath,
+        relX, relY, selWidth, selHeight,
+        ocrMode,
         imgRect.width, imgRect.height
     ).then(res => {
         loadingOverlay.style.display = 'none';
         if (res.status === 'success') {
             const filename = currentPath.split('\\').pop().split('/').pop();
             if (!mangaTranslations[filename]) mangaTranslations[filename] = [];
-            
+
             mangaTranslations[filename].push({
                 rect: res.rect,
                 text: res.text,
                 orig: res.orig
             });
-            
+
             pywebview.api.save_manga_info(currentPath, mangaTranslations);
             renderTranslations(currentPath);
         } else {
@@ -837,38 +896,38 @@ function renderTranslations(path) {
     transContainer.innerHTML = '';
     const filename = path.split('\\').pop().split('/').pop();
     const transList = mangaTranslations[filename] || [];
-    
+
     const imgRect = imageViewer.getBoundingClientRect();
     const containerRect = mediaContainer.getBoundingClientRect();
-    
+
     if (imgRect.width === 0) {
         // Image not loaded yet, retry shortly
         setTimeout(() => renderTranslations(path), 100);
         return;
     }
-    
+
     // The actual image size
     const natW = imageViewer.naturalWidth;
     const natH = imageViewer.naturalHeight;
     const ratioW = imgRect.width / natW;
     const ratioH = imgRect.height / natH;
-    
+
     transList.forEach((t, i) => {
         const box = document.createElement('div');
         box.className = 'manga-translation-box';
-        
+
         // t.rect is [orig_x, orig_y, orig_w, orig_h]
         const dispX = t.rect[0] * ratioW;
         const dispY = t.rect[1] * ratioH;
         const dispW = t.rect[2] * ratioW;
         const dispH = t.rect[3] * ratioH;
-        
+
         // Position relative to mediaContainer
         box.style.position = 'absolute';
         box.style.left = (imgRect.left - containerRect.left + dispX) + 'px';
         box.style.top = (imgRect.top - containerRect.top + dispY) + 'px';
         box.style.minWidth = dispW + 'px';
-        
+
         box.style.background = 'rgba(0, 0, 0, 0.8)';
         box.style.color = 'white';
         box.style.padding = '5px';
@@ -877,7 +936,7 @@ function renderTranslations(path) {
         box.style.pointerEvents = 'auto';
         box.style.zIndex = '20';
         box.style.fontSize = '14px';
-        
+
         const textArea = document.createElement('textarea');
         textArea.value = t.text;
         textArea.style.width = '100%';
@@ -890,7 +949,7 @@ function renderTranslations(path) {
             t.text = textArea.value;
             pywebview.api.save_manga_info(path, mangaTranslations);
         };
-        
+
         const delBtn = document.createElement('button');
         delBtn.innerHTML = 'X';
         delBtn.style.position = 'absolute';
@@ -908,13 +967,13 @@ function renderTranslations(path) {
             pywebview.api.save_manga_info(path, mangaTranslations);
             renderTranslations(path);
         };
-        
+
         box.appendChild(delBtn);
         box.appendChild(textArea);
-        
+
         // Orig text tooltip
         box.title = t.orig;
-        
+
         transContainer.appendChild(box);
     });
 }
@@ -983,10 +1042,10 @@ function loadNhentaiTags() {
 function searchOnlineManga() {
     const query = nhentaiSearchInput.value.trim();
     if (!query) return;
-    
+
     onlineMangaStatus.innerText = `Searching for "${query}"...`;
     nhentaiResultsArea.innerHTML = '';
-    
+
     pywebview.api.search_nhentai(query).then(res => {
         if (res.status === 'success') {
             onlineMangaStatus.innerText = `Found ${res.results.length} results for "${query}"`;
@@ -998,21 +1057,21 @@ function searchOnlineManga() {
                 card.style.display = 'flex';
                 card.style.flexDirection = 'column';
                 card.style.gap = '10px';
-                
+
                 const img = document.createElement('img');
                 img.src = item.thumb;
                 img.style.width = '100%';
                 img.style.height = '200px';
                 img.style.objectFit = 'cover';
                 img.style.borderRadius = '3px';
-                
+
                 const title = document.createElement('div');
                 title.innerText = item.title;
                 title.style.fontSize = '12px';
                 title.style.color = 'white';
                 title.style.textAlign = 'center';
                 title.style.flexGrow = '1';
-                
+
                 const dlBtn = document.createElement('button');
                 dlBtn.innerText = 'Download';
                 dlBtn.style.background = '#4CAF50';
@@ -1027,7 +1086,7 @@ function searchOnlineManga() {
                     dlBtn.style.background = '#888';
                     pywebview.api.download_nhentai(item.url, item.title);
                 };
-                
+
                 card.appendChild(img);
                 card.appendChild(title);
                 card.appendChild(dlBtn);
@@ -1043,11 +1102,306 @@ function downloadComplete(dir_path) {
     onlineMangaStatus.innerText = `Download complete! Loaded into playlist.`;
     onlineMangaStatus.style.color = '#4CAF50';
     setTimeout(() => { onlineMangaStatus.style.color = '#aaa'; }, 3000);
-    // Tell pywebview to load this directory
-    pywebview.api.open_manga_viewer(dir_path);
+
+    // Check if the online manga modal is currently closed
+    if (onlineMangaModal.style.display === 'none' || onlineMangaModal.style.display === '') {
+        if (confirm(`Manga download is done!\nLocation: ${dir_path}\n\nWould you like to open it now?`)) {
+            pywebview.api.open_manga_viewer(dir_path);
+        }
+    } else {
+        // Tell pywebview to load this directory automatically if the window is open
+        pywebview.api.open_manga_viewer(dir_path);
+    }
 }
 
 function downloadFailed(err) {
     onlineMangaStatus.innerText = `Download failed: ${err}`;
     onlineMangaStatus.style.color = 'red';
+    if (onlineMangaModal.style.display === 'none' || onlineMangaModal.style.display === '') {
+        alert(`Manga download failed!\nError: ${err}`);
+    }
+}
+
+// --- Audio Normalization Filter ---
+let audioCtx = null;
+let sourceNode = null;
+let compressorNode = null;
+let makeupGainNode = null;
+let isNormalized = true;
+
+// Create the toggle button dynamically and place it next to the play button
+const normBtn = document.createElement('button');
+normBtn.innerHTML = 'Norm: ON';
+normBtn.style.padding = '5px 10px';
+normBtn.style.marginLeft = '10px';
+normBtn.style.borderRadius = '3px';
+normBtn.style.border = 'none';
+normBtn.style.background = '#4CAF50';
+normBtn.style.color = 'white';
+normBtn.style.cursor = 'pointer';
+
+const normContainer = document.createElement('div');
+normContainer.style.display = 'inline-flex';
+normContainer.style.alignItems = 'center';
+normContainer.style.marginLeft = '10px';
+normContainer.style.gap = '5px';
+normContainer.style.color = 'white';
+
+const threshLabel = document.createElement('span');
+threshLabel.innerText = 'Loud:';
+threshLabel.style.fontSize = '12px';
+
+const thresholdSlider = document.createElement('input');
+thresholdSlider.type = 'range';
+thresholdSlider.min = '-60';
+thresholdSlider.max = '0';
+thresholdSlider.value = '-35';
+thresholdSlider.title = 'Threshold (Loud sounds)';
+thresholdSlider.style.width = '60px';
+
+const gainLabel = document.createElement('span');
+gainLabel.innerText = 'Quiet:';
+gainLabel.style.fontSize = '12px';
+
+const gainSlider = document.createElement('input');
+gainSlider.type = 'range';
+gainSlider.min = '0.5';
+gainSlider.max = '4.0';
+gainSlider.step = '0.1';
+gainSlider.value = '1.2';
+gainSlider.title = 'Makeup Gain (Quiet sounds)';
+gainSlider.style.width = '60px';
+
+normContainer.appendChild(normBtn);
+normContainer.appendChild(threshLabel);
+normContainer.appendChild(thresholdSlider);
+normContainer.appendChild(gainLabel);
+normContainer.appendChild(gainSlider);
+
+playBtn.parentNode.insertBefore(normContainer, playBtn.nextSibling);
+
+normBtn.addEventListener('click', () => {
+    isNormalized = !isNormalized;
+    normBtn.innerText = isNormalized ? 'Norm: ON' : 'Norm: OFF';
+    normBtn.style.background = isNormalized ? '#4CAF50' : '#555';
+    applyAudioRouting();
+});
+
+thresholdSlider.addEventListener('input', () => {
+    if (compressorNode && audioCtx) {
+        compressorNode.threshold.setValueAtTime(parseFloat(thresholdSlider.value), audioCtx.currentTime);
+    }
+});
+
+gainSlider.addEventListener('input', () => {
+    if (makeupGainNode && audioCtx) {
+        makeupGainNode.gain.setValueAtTime(parseFloat(gainSlider.value), audioCtx.currentTime);
+    }
+});
+
+function applyAudioRouting() {
+    if (!audioCtx || !sourceNode) return;
+
+    // Disconnect everything first to prevent double-routing
+    sourceNode.disconnect();
+    if (compressorNode) compressorNode.disconnect();
+    if (makeupGainNode) makeupGainNode.disconnect();
+
+    if (isNormalized) {
+        sourceNode.connect(compressorNode);
+        compressorNode.connect(makeupGainNode);
+        makeupGainNode.connect(audioCtx.destination);
+    } else {
+        sourceNode.connect(audioCtx.destination); // Direct bypass
+    }
+}
+
+videoPlayer.addEventListener('play', () => {
+    if (!audioCtx) {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AudioContext();
+        sourceNode = audioCtx.createMediaElementSource(videoPlayer);
+
+        compressorNode = audioCtx.createDynamicsCompressor();
+        // Settings for volume normalization (dynamic range compression)
+        compressorNode.threshold.setValueAtTime(parseFloat(thresholdSlider.value), audioCtx.currentTime); // Catch loud sounds even earlier
+        compressorNode.knee.setValueAtTime(5, audioCtx.currentTime); // Harder clamp on peaks
+        compressorNode.ratio.setValueAtTime(20, audioCtx.currentTime); // Maximum compression ratio
+        compressorNode.attack.setValueAtTime(0.002, audioCtx.currentTime); // Faster attack to immediately squash sudden noises
+        compressorNode.release.setValueAtTime(0.1, audioCtx.currentTime);
+
+        // Gain node to make up for the lost volume and boost quiet sounds
+        makeupGainNode = audioCtx.createGain();
+        makeupGainNode.gain.setValueAtTime(parseFloat(gainSlider.value), audioCtx.currentTime); // Reduced makeup gain
+
+        applyAudioRouting();
+    }
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+    }
+});
+
+// --- Manga Library Logic ---
+let currentMangaLibrary = [];
+const mangaLibraryModal = document.getElementById('manga-library-modal');
+const mangaLibraryGrid = document.getElementById('manga-library-grid');
+const mangaLibraryStatus = document.getElementById('manga-library-status');
+
+function openMangaLibrary() {
+    mangaLibraryModal.style.display = 'flex';
+    mangaLibraryStatus.innerText = 'Loading manga library...';
+    mangaLibraryGrid.innerHTML = '';
+
+    pywebview.api.get_manga_library().then(res => {
+        if (res.status === 'success') {
+            currentMangaLibrary = res.library;
+            mangaLibraryStatus.innerText = `Found ${currentMangaLibrary.length} manga.`;
+            renderMangaLibrary();
+        } else {
+            mangaLibraryStatus.innerText = `Error loading library: ${res.msg}`;
+        }
+    });
+}
+
+function renderMangaLibrary() {
+    mangaLibraryGrid.innerHTML = '';
+
+    if (currentMangaLibrary.length === 0) {
+        mangaLibraryGrid.innerHTML = '<div style="grid-column: 1 / -1; text-align: center; color: #666; margin-top: 20px;">No manga found. Mark a folder as manga or download some to see them here!</div>';
+        return;
+    }
+
+    const sortMode = document.getElementById('manga-sort') ? document.getElementById('manga-sort').value : 'recent';
+    let sortedLibrary = [...currentMangaLibrary];
+
+    if (sortMode === 'recent') {
+        sortedLibrary.sort((a, b) => b.mtime - a.mtime);
+    } else if (sortMode === 'az') {
+        sortedLibrary.sort((a, b) => a.name.localeCompare(b.name));
+    } else if (sortMode === 'za') {
+        sortedLibrary.sort((a, b) => b.name.localeCompare(a.name));
+    }
+
+    sortedLibrary.forEach(manga => {
+        const card = document.createElement('div');
+        card.style.background = '#333';
+        card.style.borderRadius = '5px';
+        card.style.padding = '10px';
+        card.style.display = 'flex';
+        card.style.flexDirection = 'column';
+        card.style.gap = '10px';
+        card.style.cursor = 'pointer';
+        card.title = 'Double-click to read | Right-click for options';
+        card.ondblclick = () => {
+            closeMangaLibrary();
+            pywebview.api.open_manga_viewer(manga.path);
+        };
+        card.oncontextmenu = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+
+            if (mlCm) {
+                mlCm.style.display = 'block';
+                let x = e.clientX;
+                let y = e.clientY;
+                if (x + mlCm.offsetWidth > window.innerWidth) x = window.innerWidth - mlCm.offsetWidth;
+                if (y + mlCm.offsetHeight > window.innerHeight) y = window.innerHeight - mlCm.offsetHeight;
+                mlCm.style.left = x + 'px';
+                mlCm.style.top = y + 'px';
+
+                document.getElementById('ml-cm-rename').onclick = () => {
+                    mlCm.style.display = 'none';
+                    const newName = prompt(`Rename manga "${manga.name}" to:`, manga.name);
+                    if (newName && newName !== manga.name) {
+                        pywebview.api.rename_manga(manga.path, newName).then(res => {
+                            if (res.status === 'success') openMangaLibrary();
+                            else alert("Failed to rename: " + res.msg);
+                        });
+                    }
+                };
+
+                document.getElementById('ml-cm-unmark').onclick = () => {
+                    mlCm.style.display = 'none';
+                    pywebview.api.unmark_folder_as_manga(manga.path).then(res => {
+                        if (res.status === 'success') {
+                            openMangaLibrary();
+                            updateState();
+                        } else alert("Failed to unmark: " + res.msg);
+                    });
+                };
+
+                document.getElementById('ml-cm-delete').onclick = () => {
+                    mlCm.style.display = 'none';
+                    if (confirm(`Are you sure you want to delete the manga "${manga.name}" and its folder from your disk?`)) {
+                        pywebview.api.delete_manga_folder(manga.path).then(res => {
+                            if (res.status === 'success') openMangaLibrary();
+                            else alert("Failed to delete: " + res.msg);
+                        });
+                    }
+                };
+            }
+        };
+
+        const imgContainer = document.createElement('div');
+        imgContainer.style.position = 'relative';
+
+        const img = document.createElement('img');
+        if (manga.thumb) {
+            img.src = `http://localhost:5050/thumbnail?path=${encodeURIComponent(manga.thumb)}`;
+        } else {
+            img.src = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='; // Transparent pixel
+            img.style.background = '#111';
+        }
+        img.style.width = '100%';
+        img.style.height = '200px';
+        img.style.objectFit = 'cover';
+        img.style.borderRadius = '3px';
+        img.style.display = 'block';
+
+        imgContainer.appendChild(img);
+
+        if (manga.page_count !== undefined) {
+            const pageBadge = document.createElement('div');
+            pageBadge.innerHTML = `<i class="fa-regular fa-images"></i> ${manga.page_count}`;
+            pageBadge.style.position = 'absolute';
+            pageBadge.style.bottom = '5px';
+            pageBadge.style.right = '5px';
+            pageBadge.style.background = 'rgba(0, 0, 0, 0.8)';
+            pageBadge.style.color = 'white';
+            pageBadge.style.padding = '3px 6px';
+            pageBadge.style.borderRadius = '4px';
+            pageBadge.style.fontSize = '11px';
+            imgContainer.appendChild(pageBadge);
+        }
+
+        const title = document.createElement('div');
+        title.innerText = manga.name;
+        title.style.fontSize = '12px';
+        title.style.color = 'white';
+        title.style.textAlign = 'center';
+        title.style.flexGrow = '1';
+        title.style.wordBreak = 'break-word';
+
+        card.appendChild(imgContainer);
+        card.appendChild(title);
+        mangaLibraryGrid.appendChild(card);
+    });
+}
+
+function closeMangaLibrary() {
+    mangaLibraryModal.style.display = 'none';
+}
+
+function checkForUpdates() {
+    pywebview.api.check_for_updates().then(res => {
+        if (res.status === 'update_available') {
+            if (confirm(`A new version (${res.version}) is available!\nWould you like to open the download page?`)) {
+                pywebview.api.open_external_url(res.url);
+            }
+        } else if (res.status === 'up_to_date') {
+            alert(`You are using the latest version (${res.version}).`);
+        } else {
+            alert(`Failed to check for updates: ${res.msg}\n\nPlease check www.xenohead.com manually.`);
+        }
+    });
 }

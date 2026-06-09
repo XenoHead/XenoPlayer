@@ -29,6 +29,9 @@ try:
 except ImportError:
     CV2_AVAILABLE = False
 
+# Lazy-loaded so the app doesn't freeze on initial startup/download
+manga_ocr_model = None
+
 try:
     from PIL import Image, ImageDraw, ImageFont
     from deep_translator import GoogleTranslator
@@ -42,9 +45,6 @@ try:
                 break
     import tempfile
     
-    # Lazy-loaded so the app doesn't freeze on initial startup/download
-    manga_ocr_model = None
-            
     TRANSLATION_AVAILABLE = True
 except ImportError:
     TRANSLATION_AVAILABLE = False
@@ -113,6 +113,12 @@ class TranslationWorker(QThread):
             pil_img = Image.open(io.BytesIO(self.img_bytes))
             
             if self.ocr_mode == "Japanese (Manga OCR)":
+                import builtins
+                import sys
+                import os
+                if getattr(sys, 'frozen', False) and not hasattr(builtins, '__file__'):
+                    builtins.__file__ = os.path.join(sys._MEIPASS, "dummy.py")
+                    
                 if manga_ocr_model is None:
                     self.status_update.emit("Initializing AI Model...")
                     from manga_ocr import MangaOcr
@@ -147,7 +153,8 @@ class TranslationWorker(QThread):
             translated_text = GoogleTranslator(source=source_lang, target=lang_code).translate(extracted_text)
             self.result_ready.emit(extracted_text, translated_text)
         except Exception as e:
-            self.error_occurred.emit(str(e))
+            import traceback
+            self.error_occurred.emit(f"{str(e)}\n\n{traceback.format_exc()}")
 class SavedTranslationLabel(QLabel):
     deleted = pyqtSignal(object)
     updated = pyqtSignal(object)
@@ -515,6 +522,9 @@ class MangaViewerWindow(QDialog):
         try:
             with open(self.json_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=4)
+            manga_marker = os.path.join(self.directory, ".manga")
+            if not os.path.exists(manga_marker):
+                open(manga_marker, 'w').close()
             self.show_toast("Manga info saved successfully!", is_error=False)
             self.name_edit.clearFocus()
             self.setFocus()

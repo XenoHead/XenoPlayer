@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -8,27 +9,36 @@
     <!-- Font Awesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
+
 <body>
     <div id="app">
         <!-- Sidebar -->
         <div id="sidebar">
             <div id="sidebar-header">
-                <img src="../icon.png" alt="Logo" class="logo" onerror="this.onerror=null; this.src='data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';">
+                <img src="../icon.png" alt="Logo" class="logo"
+                    onerror="this.onerror=null; this.src='data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';">
                 <h2>XenoPlayer</h2>
             </div>
-            
+
             <div id="sidebar-controls">
                 <button onclick="pywebview.api.open_dialog()"><i class="fa-solid fa-folder-open"></i> Load</button>
-                <button onclick="pywebview.api.play_favorites()"><i class="fa-solid fa-star"></i> Play Favorites</button>
-                <button onclick="pywebview.api.play_unfavorites()"><i class="fa-regular fa-star"></i> Play Unfavs</button>
-                <button onclick="openOnlineManga()" style="background-color: #ff477e; color: white; margin-top: 20px;"><i class="fa-solid fa-globe"></i> Online Manga</button>
+                <button onclick="pywebview.api.play_favorites()"><i class="fa-solid fa-star"></i> Play
+                    Favorites</button>
+                <button onclick="pywebview.api.play_unfavorites()"><i class="fa-regular fa-star"></i> Play
+                    Unfavs</button>
+                <button onclick="openMangaLibrary()"
+                    style="background-color: #89b4fa; color: #11111b; margin-top: 20px; font-weight: bold;"><i
+                        class="fa-solid fa-book-journal-whills"></i> Manga Library</button>
+                <button onclick="openOnlineManga()"
+                    style="background-color: #ff477e; color: white; margin-top: 10px;"><i class="fa-solid fa-globe"></i>
+                    Online Manga</button>
             </div>
-            
+
             <div id="playlist">
                 <!-- Playlist items populated by JS -->
             </div>
         </div>
-        
+
         <!-- Main Content Area -->
         <div id="main-content">
             <nav id="menu-bar">
@@ -53,48 +63,62 @@
                     <button class="dropbtn">Help</button>
                     <div class="dropdown-content">
                         <a href="#" onclick="openInstructionsModal()">Instructions</a>
-                        <a href="#" onclick="openAboutModal()">About</a>
+                        <a href="#" onclick="checkForUpdates()">Check for Updates</a>
+                        <a href="#" onclick="pywebview.api.show_about()">About</a>
                     </div>
                 </div>
             </nav>
 
             <div id="top-bar">
                 <span id="current-file-name">No file loaded</span>
-            
-            <button onclick="pywebview.api.open_manga_viewer(appState.current_path)" style="background:none; border:none; color:var(--text-primary); cursor:pointer; font-weight:bold; margin-right: 15px;"><i class="fa-solid fa-book-open"></i> READ MANGA</button>
-            <button id="favorite-btn" onclick="toggleFavorite()"><i class="fa-regular fa-star"></i></button>
-        </div>
+
+                <button onclick="pywebview.api.open_manga_viewer(appState.current_path)"
+                    style="background:none; border:none; color:var(--text-primary); cursor:pointer; font-weight:bold; margin-right: 15px;"><i
+                        class="fa-solid fa-book-open"></i> READ MANGA</button>
+                <button id="favorite-btn" onclick="toggleFavorite()"><i class="fa-regular fa-star"></i></button>
+            </div>
 
             <div id="media-container">
-            <video id="video-player" style="display:none;" autoplay></video>
-            <img id="image-viewer" src="" style="display:none;" alt="Viewer">
-            <div id="translations-container" style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none;"></div>
-            <div id="selection-box" style="position:absolute; border:2px dashed #4da6ff; background:rgba(77, 166, 255, 0.2); display:none; pointer-events:none;"></div>
-            <div id="manga-loading" style="display:none; position:absolute; background:rgba(0,0,0,0.8); color:white; padding:15px; border-radius:5px; z-index:50;">Translating...</div>
-        </div>
-            
+                <video id="video-player" style="display:none;" autoplay></video>
+                <img id="image-viewer" src="" style="display:none;" alt="Viewer">
+                <div id="translations-container"
+                    style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none;"></div>
+                <div id="selection-box"
+                    style="position:absolute; border:2px dashed #4da6ff; background:rgba(77, 166, 255, 0.2); display:none; pointer-events:none;">
+                </div>
+                <div id="manga-loading"
+                    style="display:none; position:absolute; background:rgba(0,0,0,0.8); color:white; padding:15px; border-radius:5px; z-index:50;">
+                    Translating...</div>
+            </div>
+
             <div id="bottom-controls">
                 <button onclick="pywebview.api.prev_media()"><i class="fa-solid fa-backward-step"></i></button>
                 <button onclick="togglePlay()" id="play-btn"><i class="fa-solid fa-pause"></i></button>
                 <button onclick="pywebview.api.next_media()"><i class="fa-solid fa-forward-step"></i></button>
-                
-                <div id="progress-container" style="display:flex; align-items:center; gap:5px; margin-left: 15px; width: 250px;">
+
+                <div id="progress-container"
+                    style="display:flex; align-items:center; gap:5px; margin-left: 15px; width: 250px;">
                     <span id="current-time" style="font-size:12px; min-width:35px; text-align:right;">0:00</span>
-                    <input type="range" id="progress-slider" min="0" max="100" value="0" step="0.1" style="flex-grow:1; cursor:pointer;">
+                    <input type="range" id="progress-slider" min="0" max="100" value="0" step="0.1"
+                        style="flex-grow:1; cursor:pointer;">
                     <span id="total-time" style="font-size:12px; min-width:35px;">0:00</span>
                 </div>
-                
+
                 <i class="fa-solid fa-volume-high" style="margin-left:15px; font-size:12px; color:#a0a0b0;"></i>
-                <input type="range" id="volume-slider" min="0" max="100" value="100" oninput="changeVolume(this.value)" style="width:70px;">
-                
+                <input type="range" id="volume-slider" min="0" max="100" value="100" oninput="changeVolume(this.value)"
+                    style="width:70px;">
+
                 <div id="loop-controls" style="display:flex; align-items:center; gap:5px; margin-left: 15px;">
                     <input type="checkbox" id="loop-checkbox" onchange="resetLoopCount()">
                     <label for="loop-checkbox">Loop</label>
-                    <input type="number" id="loop-count" min="1" max="99" value="3" style="width: 45px; background: #222; color: white; border: 1px solid #444; border-radius: 4px; padding: 2px 5px;" onchange="resetLoopCount()">
+                    <input type="number" id="loop-count" min="1" max="99" value="3"
+                        style="width: 45px; background: #222; color: white; border: 1px solid #444; border-radius: 4px; padding: 2px 5px;"
+                        onchange="resetLoopCount()">
                     <label for="loop-count">x</label>
                 </div>
-                
-                <select id="ocr-mode" style="margin-left: 20px; background: #222; color: white; border: 1px solid #444; border-radius: 4px; padding: 4px;">
+
+                <select id="ocr-mode"
+                    style="margin-left: 20px; background: #222; color: white; border: 1px solid #444; border-radius: 4px; padding: 4px;">
                     <option value="Japanese (Manga OCR)">Japanese (Manga OCR)</option>
                     <option value="Japanese (Tesseract)">Japanese (Tesseract)</option>
                     <option value="English">English</option>
@@ -102,13 +126,15 @@
                     <option value="Chinese (Traditional)">Chinese (Traditional)</option>
                     <option value="Russian">Russian</option>
                 </select>
-                
+
                 <div style="display:flex; align-items:center; gap:5px; margin-left: 20px;">
                     <label for="image-timer">Timer (s):</label>
-                    <input type="number" id="image-timer" min="0" max="60" value="0" style="width: 45px; background: #222; color: white; border: 1px solid #444; border-radius: 4px; padding: 2px 5px;" onchange="updateImageTimer()">
+                    <input type="number" id="image-timer" min="0" max="60" value="0"
+                        style="width: 45px; background: #222; color: white; border: 1px solid #444; border-radius: 4px; padding: 2px 5px;"
+                        onchange="updateImageTimer()">
                 </div>
             </div>
-            
+
             <div id="move-targets-container">
                 <!-- Dynamic move target buttons injected here -->
             </div>
@@ -116,16 +142,23 @@
     </div>
 
     <!-- Modals -->
-    <div id="instructions-modal" class="modal" style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:#1e1e2e; color:#cdd6f4; padding:20px; z-index:1000; width:600px; border-radius: 8px;">
+    <div id="instructions-modal" class="modal"
+        style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:#1e1e2e; color:#cdd6f4; padding:20px; z-index:1000; width:600px; border-radius: 8px;">
         <span class="close" onclick="closeModals()" style="color:#cdd6f4;">&times;</span>
         <h2 style="margin-top:0; color:#89b4fa; text-align:center;">XenoPlayer Instructions</h2>
-        
+
         <div style="display:flex; border-bottom: 2px solid #313244; margin-bottom: 15px;">
-            <button class="tab-btn" style="flex:1; background:#ff477e; color:white; border:none; padding:10px; cursor:pointer; font-weight:bold; border-radius: 4px 4px 0 0;" onclick="switchTab('tab-main')">Main Player</button>
-            <button class="tab-btn" style="flex:1; background:#444; color:white; border:none; padding:10px; cursor:pointer; font-weight:bold; border-radius: 4px 4px 0 0;" onclick="switchTab('tab-files')">File Management</button>
-            <button class="tab-btn" style="flex:1; background:#444; color:white; border:none; padding:10px; cursor:pointer; font-weight:bold; border-radius: 4px 4px 0 0;" onclick="switchTab('tab-manga')">Manga Viewer</button>
+            <button class="tab-btn"
+                style="flex:1; background:#ff477e; color:white; border:none; padding:10px; cursor:pointer; font-weight:bold; border-radius: 4px 4px 0 0;"
+                onclick="switchTab('tab-main')">Main Player</button>
+            <button class="tab-btn"
+                style="flex:1; background:#444; color:white; border:none; padding:10px; cursor:pointer; font-weight:bold; border-radius: 4px 4px 0 0;"
+                onclick="switchTab('tab-files')">File Management</button>
+            <button class="tab-btn"
+                style="flex:1; background:#444; color:white; border:none; padding:10px; cursor:pointer; font-weight:bold; border-radius: 4px 4px 0 0;"
+                onclick="switchTab('tab-manga')">Manga Viewer</button>
         </div>
-        
+
         <div id="tab-main" class="tab-content" style="background:#181825; padding:15px; border-radius:5px;">
             <h3 style="color:#f38ba8; margin-top:0;">Media Controls</h3>
             <ul style="line-height: 1.6; margin-top: 0;">
@@ -135,31 +168,37 @@
                 <li><b>Timer:</b> Auto-advance images every X seconds</li>
             </ul>
         </div>
-        
-        <div id="tab-files" class="tab-content" style="display:none; background:#181825; padding:15px; border-radius:5px;">
+
+        <div id="tab-files" class="tab-content"
+            style="display:none; background:#181825; padding:15px; border-radius:5px;">
             <h3 style="color:#a6e3a1; margin-top:0;">File Operations</h3>
             <ul style="line-height: 1.6; margin-top: 0;">
                 <li><b>Move Targets:</b> Configure preset folders to quickly move files via the sidebar buttons</li>
                 <li><b>Delete Dupes:</b> Scans current folder to remove duplicate media files</li>
-                <li><b>Favorites:</b> Click the <i class="fa-regular fa-star"></i> icon to favorite. View them via 'Play Favorites'</li>
+                <li><b>Favorites:</b> Click the <i class="fa-regular fa-star"></i> icon to favorite. View them via 'Play
+                    Favorites'</li>
             </ul>
         </div>
 
-        <div id="tab-manga" class="tab-content" style="display:none; background:#181825; padding:15px; border-radius:5px;">
+        <div id="tab-manga" class="tab-content"
+            style="display:none; background:#181825; padding:15px; border-radius:5px;">
             <h3 style="color:#cba6f7; margin-top:0;">Reading</h3>
             <ul style="line-height: 1.6; margin-top: 0;">
                 <li><b>READ MANGA Button:</b> Opens the current folder in the advanced Manga Viewer window</li>
                 <li><b>Online Manga:</b> Search, browse, and directly download manga into your library</li>
             </ul>
         </div>
-        
-        <button onclick="closeModals()" style="margin-top: 20px; width: 100%; background: #89b4fa; color: #11111b; font-weight: bold; padding: 10px; border-radius: 5px; border: none; cursor:pointer;">Got It!</button>
+
+        <button onclick="closeModals()"
+            style="margin-top: 20px; width: 100%; background: #89b4fa; color: #11111b; font-weight: bold; padding: 10px; border-radius: 5px; border: none; cursor:pointer;">Got
+            It!</button>
     </div>
 
     <div id="about-modal" class="modal">
         <div class="modal-content">
             <span class="close" onclick="closeModals()">&times;</span>
-            <img src="../XenoHead_logo.png" alt="XenoHead Logo" style="max-width: 200px;" onerror="this.onerror=null; this.src='../icon.png';">
+            <img src="../XenoHead_logo.png" alt="XenoHead Logo" style="max-width: 200px;"
+                onerror="this.onerror=null; this.src='../icon.png';">
             <h2>About XenoPlayer</h2>
             <p>Created by XenoHead</p>
             <a href="http://www.xenohead.com" target="_blank">www.xenohead.com</a>
@@ -189,41 +228,45 @@
             <button onclick="saveFavsModal()" style="margin-top: 15px; width: 100%;">Save Changes</button>
         </div>
     </div>
-        <!-- Options Modal -->
-        <div id="options-modal" class="modal" style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:#333; padding:20px; z-index:1000; width:600px; border-radius: 8px;">
-            <h2 style="margin-top:0;">Options</h2>
-            
-            <h3 style="margin-top: 10px; margin-bottom: 5px; color:#89b4fa;">Saved Folders</h3>
-            <div id="options-list">
-                <!-- Javascript will render 5 inputs here -->
-            </div>
+    <!-- Options Modal -->
+    <div id="options-modal" class="modal"
+        style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:#333; padding:20px; z-index:1000; width:600px; border-radius: 8px;">
+        <h2 style="margin-top:0;">Options</h2>
 
-            <h3 style="margin-top: 15px; margin-bottom: 5px; color:#a6e3a1;">External Applications</h3>
-            <p style="font-size: 11px; color: #aaa; margin-top: 0;">Add paths to external .exe files. These will appear in the "Open With" right-click menu.</p>
-            <div id="external-apps-list">
-                <!-- Javascript will render 5 inputs here -->
-            </div>
-            
-            <button onclick="saveOptionsModal()" style="margin-top: 15px; width: 100%;">Save Options</button>
-            <button onclick="closeModals()" style="margin-top: 5px; width: 100%; background: #444;">Cancel</button>
+        <h3 style="margin-top: 10px; margin-bottom: 5px; color:#89b4fa;">Saved Folders</h3>
+        <div id="options-list">
+            <!-- Javascript will render 5 inputs here -->
         </div>
-        <!-- Hotkeys Modal -->
-        <div id="hotkeys-modal" class="modal" style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:#333; padding:20px; z-index:1000; width:500px; border-radius: 8px;">
-            <h2 style="margin-top:0;">Edit Hotkeys</h2>
-            <p style="font-size: 12px; color: #ccc;">Click on an input and press a key to assign it. Press Backspace to clear.</p>
-            <div style="display:flex; gap: 20px;">
-                <div style="flex: 1;">
-                    <h3>Previous Media</h3>
-                    <div id="hotkeys-prev-list"></div>
-                </div>
-                <div style="flex: 1;">
-                    <h3>Next Media</h3>
-                    <div id="hotkeys-next-list"></div>
-                </div>
-            </div>
-            <button onclick="saveHotkeysModal()" style="margin-top: 15px; width: 100%;">Save Hotkeys</button>
-            <button onclick="closeModals()" style="margin-top: 5px; width: 100%; background: #444;">Cancel</button>
+
+        <h3 style="margin-top: 15px; margin-bottom: 5px; color:#a6e3a1;">External Applications</h3>
+        <p style="font-size: 11px; color: #aaa; margin-top: 0;">Add paths to external .exe files. These will appear in
+            the "Open With" right-click menu.</p>
+        <div id="external-apps-list">
+            <!-- Javascript will render 5 inputs here -->
         </div>
+
+        <button onclick="saveOptionsModal()" style="margin-top: 15px; width: 100%;">Save Options</button>
+        <button onclick="closeModals()" style="margin-top: 5px; width: 100%; background: #444;">Cancel</button>
+    </div>
+    <!-- Hotkeys Modal -->
+    <div id="hotkeys-modal" class="modal"
+        style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:#333; padding:20px; z-index:1000; width:500px; border-radius: 8px;">
+        <h2 style="margin-top:0;">Edit Hotkeys</h2>
+        <p style="font-size: 12px; color: #ccc;">Click on an input and press a key to assign it. Press Backspace to
+            clear.</p>
+        <div style="display:flex; gap: 20px;">
+            <div style="flex: 1;">
+                <h3>Previous Media</h3>
+                <div id="hotkeys-prev-list"></div>
+            </div>
+            <div style="flex: 1;">
+                <h3>Next Media</h3>
+                <div id="hotkeys-next-list"></div>
+            </div>
+        </div>
+        <button onclick="saveHotkeysModal()" style="margin-top: 15px; width: 100%;">Save Hotkeys</button>
+        <button onclick="closeModals()" style="margin-top: 5px; width: 100%; background: #444;">Cancel</button>
+    </div>
 
     <!-- Online Manga Modal -->
     <div id="online-manga-modal" class="modal">
@@ -232,62 +275,130 @@
                 <h3 style="margin: 0; color: #ff477e;"><i class="fa-solid fa-globe"></i> Online Manga Browser</h3>
                 <span class="close-btn" onclick="closeOnlineManga()">&times;</span>
             </div>
-            
+
             <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-                <input type="text" id="nhentai-search-input" placeholder="Search tags, titles, etc..." style="flex-grow: 1; padding: 10px; border-radius: 4px; border: 1px solid #444; background: #222; color: white; font-size: 16px;" onkeydown="if(event.key === 'Enter') searchOnlineManga()">
-                <button onclick="searchOnlineManga()" style="background-color: #ff477e; color: white; padding: 10px 20px; font-size: 16px;"><i class="fa-solid fa-magnifying-glass"></i> Search</button>
+                <input type="text" id="nhentai-search-input" placeholder="Search tags, titles, etc..."
+                    style="flex-grow: 1; padding: 10px; border-radius: 4px; border: 1px solid #444; background: #222; color: white; font-size: 16px;"
+                    onkeydown="if(event.key === 'Enter') searchOnlineManga()">
+                <button onclick="searchOnlineManga()"
+                    style="background-color: #ff477e; color: white; padding: 10px 20px; font-size: 16px;"><i
+                        class="fa-solid fa-magnifying-glass"></i> Search</button>
             </div>
-            
-            <div style="margin-bottom: 15px; font-size: 13px; color: #bbb; display: flex; align-items: center; gap: 10px;">
-                <span>Download Location: <span id="manga-dl-dir-display" style="color: #fff; font-family: monospace;">Loading...</span></span>
-                <button onclick="changeMangaDownloadDir()" style="padding: 2px 8px; font-size: 12px; background: #444; color: white; border: none; border-radius: 3px; cursor: pointer;">Change</button>
+
+            <div
+                style="margin-bottom: 15px; font-size: 13px; color: #bbb; display: flex; align-items: center; gap: 10px;">
+                <span>Download Location: <span id="manga-dl-dir-display"
+                        style="color: #fff; font-family: monospace;">Loading...</span></span>
+                <button onclick="changeMangaDownloadDir()"
+                    style="padding: 2px 8px; font-size: 12px; background: #444; color: white; border: none; border-radius: 3px; cursor: pointer;">Change</button>
             </div>
-            
+
             <div id="online-manga-status" style="margin-bottom: 10px; color: #aaa;"></div>
-            
+
             <div style="display: flex; gap: 20px; flex-grow: 1; overflow: hidden;">
                 <!-- Tags sidebar -->
                 <div style="width: 200px; background: #222; border-radius: 4px; padding: 10px; overflow-y: auto;">
-                    <h4 style="margin-top: 0; margin-bottom: 10px; color: #fff; border-bottom: 1px solid #444; padding-bottom: 5px;">Popular Tags</h4>
+                    <h4
+                        style="margin-top: 0; margin-bottom: 10px; color: #fff; border-bottom: 1px solid #444; padding-bottom: 5px;">
+                        Popular Tags</h4>
                     <div id="nhentai-tags-list" style="display: flex; flex-direction: column; gap: 5px;">
                         <span style="color: #666;">Loading tags...</span>
                     </div>
                 </div>
-                
+
                 <!-- Results area -->
-                <div id="nhentai-results-area" style="flex-grow: 1; background: #222; border-radius: 4px; padding: 10px; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 15px; align-content: start;">
+                <div id="nhentai-results-area"
+                    style="flex-grow: 1; background: #222; border-radius: 4px; padding: 10px; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 15px; align-content: start;">
                     <div style="grid-column: 1 / -1; text-align: center; color: #666; margin-top: 20px;">
                         Enter a search term or click a popular tag to begin.
                     </div>
                 </div>
             </div>
+
+            <div style="text-align: right; margin-top: 15px;">
+                <button onclick="closeOnlineManga()"
+                    style="background-color: #444; color: white; padding: 10px 20px; font-size: 14px; border: none; border-radius: 4px; cursor: pointer;">Close
+                    (Downloads continue in background)</button>
+            </div>
         </div>
     </div>
-    
+
+    <!-- Manga Library Modal -->
+    <div id="manga-library-modal" class="modal">
+        <div class="modal-content" style="max-width: 900px; max-height: 80vh; display: flex; flex-direction: column;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h3 style="margin: 0; color: #89b4fa;"><i class="fa-solid fa-book-journal-whills"></i> Manga Library
+                </h3>
+                <span class="close" onclick="closeMangaLibrary()">&times;</span>
+            </div>
+
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <div id="manga-library-status" style="color: #aaa;">Loading...</div>
+                <div>
+                    <label for="manga-sort" style="color: #ccc; font-size: 14px;">Sort by: </label>
+                    <select id="manga-sort" onchange="renderMangaLibrary()"
+                        style="background: #222; color: white; border: 1px solid #444; border-radius: 4px; padding: 4px;">
+                        <option value="recent">Recently Added</option>
+                        <option value="az">Alphabetical (A-Z)</option>
+                        <option value="za">Alphabetical (Z-A)</option>
+                    </select>
+                </div>
+            </div>
+
+            <div id="manga-library-grid"
+                style="flex-grow: 1; background: #222; border-radius: 4px; padding: 15px; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 15px; align-content: start;">
+                <!-- Manga cards go here -->
+            </div>
+
+            <div style="display: flex; justify-content: space-between; margin-top: 15px;">
+                <button onclick="openMangaLibrary()"
+                    style="background-color: #4CAF50; color: white; padding: 10px 20px; font-size: 14px; border: none; border-radius: 4px; cursor: pointer;"><i
+                        class="fa-solid fa-arrows-rotate"></i> Refresh</button>
+                <button onclick="closeMangaLibrary()"
+                    style="background-color: #444; color: white; padding: 10px 20px; font-size: 14px; border: none; border-radius: 4px; cursor: pointer;">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Manga Library Context Menu -->
+    <div id="manga-library-context-menu" class="context-menu"
+        style="display:none; position:absolute; z-index:1000; background:#1e1e2e; border:1px solid #444; border-radius:5px; padding:5px; box-shadow: 0 4px 6px rgba(0,0,0,0.5);">
+        <button id="ml-cm-rename" class="cm-btn"><i class="fa-solid fa-pen"></i> Rename</button>
+        <button id="ml-cm-unmark" class="cm-btn"><i class="fa-solid fa-book-open-reader"></i> Unmark as Manga</button>
+        <hr style="border-color:#444; margin:5px 0;">
+        <button id="ml-cm-delete" class="cm-btn" style="color:#f38ba8;"><i class="fa-solid fa-trash"></i> Delete
+            Folder</button>
+    </div>
+
     <!-- Context Menu -->
-    <div id="context-menu" class="context-menu" style="display:none; position:absolute; z-index:1000; background:#1e1e2e; border:1px solid #444; border-radius:5px; padding:5px; box-shadow: 0 4px 6px rgba(0,0,0,0.5);">
+    <div id="context-menu" class="context-menu"
+        style="display:none; position:absolute; z-index:1000; background:#1e1e2e; border:1px solid #444; border-radius:5px; padding:5px; box-shadow: 0 4px 6px rgba(0,0,0,0.5);">
         <button onclick="cmPlay()" class="cm-btn"><i class="fa-solid fa-play"></i> Play</button>
         <button onclick="cmRename()" class="cm-btn" id="cm-rename-btn"><i class="fa-solid fa-pen"></i> Rename</button>
         <button onclick="cmOpenFolder()" class="cm-btn"><i class="fa-regular fa-folder-open"></i> Open Folder</button>
-        
+
         <div class="cm-dropdown" id="cm-open-with-container" style="display:none;">
-            <button class="cm-btn"><i class="fa-solid fa-rocket"></i> Open With <i class="fa-solid fa-caret-right" style="float:right; margin-top:3px;"></i></button>
+            <button class="cm-btn"><i class="fa-solid fa-rocket"></i> Open With <i class="fa-solid fa-caret-right"
+                    style="float:right; margin-top:3px;"></i></button>
             <div class="cm-dropdown-content" id="cm-open-with-list">
                 <!-- Open With targets injected here -->
             </div>
         </div>
-        
+
         <div class="cm-dropdown">
-            <button class="cm-btn"><i class="fa-solid fa-arrow-right-to-bracket"></i> Move to <i class="fa-solid fa-caret-right" style="float:right; margin-top:3px;"></i></button>
+            <button class="cm-btn"><i class="fa-solid fa-arrow-right-to-bracket"></i> Move to <i
+                    class="fa-solid fa-caret-right" style="float:right; margin-top:3px;"></i></button>
             <div class="cm-dropdown-content" id="cm-move-targets">
                 <!-- Move targets injected here -->
             </div>
         </div>
-        
+
         <hr style="border-color:#444; margin:5px 0;">
-        <button onclick="cmDelete()" class="cm-btn" style="color:#f38ba8;"><i class="fa-solid fa-trash"></i> Delete</button>
+        <button onclick="cmDelete()" class="cm-btn" style="color:#f38ba8;"><i class="fa-solid fa-trash"></i>
+            Delete</button>
     </div>
 
     <script src="app.js?v=3"></script>
 </body>
+
 </html>

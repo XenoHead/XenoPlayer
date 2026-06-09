@@ -5,12 +5,22 @@ import json
 import re
 import cv2
 import webview
+# Ensure xeno_ui package is importable (add repository root to sys.path)
+import sys
+repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'xeno_ui'))
+if repo_root not in sys.path:
+    sys.path.insert(0, repo_root)
 import shutil
 import hashlib
 import urllib.parse
 from flask import Flask, request, send_file, Response
 
 app = Flask(__name__)
+
+@app.after_request
+def add_cors_headers(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response
 
 def resource_path(relative_path):
     import sys
@@ -32,7 +42,7 @@ def load_settings():
             with open(SETTINGS_FILE, "r") as f:
                 return json.load(f)
         except: pass
-    return {"favorites": [], "last_video": None, "max_volume": 100, "move_targets": {}, "saved_folders": ["", "", "", "", ""], "external_apps": ["", "", "", "", ""], "default_folder": -1, "hotkeys": {"next": ["ArrowRight", "Space", "", "", ""], "prev": ["ArrowLeft", "", "", "", ""]}}
+    return {"favorites": [], "last_video": None, "max_volume": 100, "move_targets": {}, "saved_folders": ["", "", "", "", ""], "external_apps": ["", "", "", "", ""], "default_folder": -1, "hotkeys": {"next": ["ArrowRight", "Space", "", "", ""], "prev": ["ArrowLeft", "", "", "", ""]}, "saved_volumes": {}}
 
 def save_settings(s):
     with open(SETTINGS_FILE, "w") as f:
@@ -177,15 +187,22 @@ class Api:
 
     def get_state(self):
         current_path = self.playlist[self.current_index] if (0 <= self.current_index < len(self.playlist)) else None
+        is_manga = False
+        if current_path:
+            dir_path = os.path.dirname(current_path)
+            if os.path.exists(os.path.join(dir_path, '.manga')) or os.path.exists(os.path.join(dir_path, 'manga_info.json')):
+                is_manga = True
         return {
             "favorites": self.settings.get("favorites", []),
             "move_targets": self.settings.get("move_targets", {}),
+            "saved_volumes": self.settings.get("saved_volumes", {}),
             "saved_folders": self.settings.get("saved_folders", ["", "", "", "", ""]),
             "external_apps": self.settings.get("external_apps", ["", "", "", "", ""]),
             "default_folder": self.settings.get("default_folder", -1),
             "hotkeys": self.settings.get("hotkeys", {"next": ["ArrowRight", "Space", "", "", ""], "prev": ["ArrowLeft", "", "", "", ""]}),
             "current_path": current_path,
-            "is_favorite": current_path in self.settings.get("favorites", []) if current_path else False
+            "is_favorite": current_path in self.settings.get("favorites", []) if current_path else False,
+            "is_manga_folder": is_manga
         }
 
     def toggle_favorite(self):
@@ -199,6 +216,13 @@ class Api:
         self.settings["favorites"] = favs
         save_settings(self.settings)
         return self.get_state()
+
+    def save_volume(self, path, volume):
+        vols = self.settings.get("saved_volumes", {})
+        vols[path] = volume
+        self.settings["saved_volumes"] = vols
+        save_settings(self.settings)
+        return {"status": "ok"}
 
     def save_favorites(self, favs):
         self.settings["favorites"] = favs
@@ -248,6 +272,84 @@ class Api:
         save_settings(self.settings)
         return self.get_state()
 
+    def mark_as_manga(self):
+        if not self.playlist: return {"status": "error"}
+        dir_path = os.path.dirname(self.playlist[0])
+        manga_marker = os.path.join(dir_path, ".manga")
+        open(manga_marker, 'w').close()
+        
+        known = self.settings.get("known_manga_folders", [])
+        if dir_path not in known:
+            known.append(dir_path)
+            self.settings["known_manga_folders"] = known
+            save_settings(self.settings)
+            
+        return self.get_state()
+
+    def unmark_as_manga(self):
+        if not self.playlist: return {"status": "error"}
+        dir_path = os.path.dirname(self.playlist[0])
+        
+        manga_marker = os.path.join(dir_path, ".manga")
+        if os.path.exists(manga_marker):
+            try: os.remove(manga_marker)
+            except: pass
+            
+        manga_info = os.path.join(dir_path, "manga_info.json")
+        if os.path.exists(manga_info):
+            try: os.rename(manga_info, manga_info + ".bak")
+            except: pass
+            
+        known = self.settings.get("known_manga_folders", [])
+        if dir_path in known:
+            known.remove(dir_path)
+            self.settings["known_manga_folders"] = known
+            save_settings(self.settings)
+            
+        return self.get_state()
+
+    def unmark_folder_as_manga(self, dir_path):
+        if not dir_path or not os.path.exists(dir_path):
+            return {"status": "error", "msg": "Invalid path"}
+            
+        manga_marker = os.path.join(dir_path, ".manga")
+        if os.path.exists(manga_marker):
+            try: os.remove(manga_marker)
+            except: pass
+            
+        manga_info = os.path.join(dir_path, "manga_info.json")
+        if os.path.exists(manga_info):
+            try: os.rename(manga_info, manga_info + ".bak")
+            except: pass
+            
+        known = self.settings.get("known_manga_folders", [])
+        if dir_path in known:
+            known.remove(dir_path)
+            self.settings["known_manga_folders"] = known
+            save_settings(self.settings)
+            
+        return {"status": "success"}
+
+    def rename_manga(self, dir_path, new_name):
+        if not dir_path or not os.path.exists(dir_path):
+            return {"status": "error", "msg": "Invalid path"}
+            
+        json_path = os.path.join(dir_path, "manga_info.json")
+        data = {}
+        if os.path.exists(json_path):
+            try:
+                with open(json_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except: pass
+            
+        data["name"] = new_name
+        try:
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4)
+            return {"status": "success"}
+        except Exception as e:
+            return {"status": "error", "msg": str(e)}
+
     def get_manga_info(self, current_path):
         if not current_path or not os.path.isfile(current_path): return {}
         dir_path = os.path.dirname(current_path)
@@ -266,6 +368,16 @@ class Api:
         try:
             with open(json_path, "w", encoding="utf-8") as f:
                 json.dump({"translations": translations}, f, indent=4)
+            manga_marker = os.path.join(dir_path, ".manga")
+            if not os.path.exists(manga_marker):
+                open(manga_marker, 'w').close()
+                
+            known = self.settings.get("known_manga_folders", [])
+            if dir_path not in known:
+                known.append(dir_path)
+                self.settings["known_manga_folders"] = known
+                save_settings(self.settings)
+                
             return {"status": "success"}
         except Exception as e:
             return {"status": "error", "msg": str(e)}
@@ -308,9 +420,15 @@ class Api:
             
             extracted_text = ""
             if ocr_mode == "Japanese (Manga OCR)":
+                import builtins
+                import sys
+                import os
+                if getattr(sys, 'frozen', False) and not hasattr(builtins, '__file__'):
+                    builtins.__file__ = os.path.join(sys._MEIPASS, "dummy.py")
+                    
                 if manga_ocr_model is None:
                     from manga_ocr import MangaOcr
-                    model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'manga_ocr_model')
+                    model_path = resource_path('manga_ocr_model')
                     if os.path.exists(model_path):
                         manga_ocr_model = MangaOcr(pretrained_model_name_or_path=model_path)
                     else:
@@ -318,6 +436,12 @@ class Api:
                 extracted_text = manga_ocr_model(cropped).strip()
             else:
                 import pytesseract
+                import shutil
+                if os.name == 'nt' and not shutil.which('tesseract'):
+                    for tp in [r'D:\Programs\Tesseract-OCR\tesseract.exe', r'C:\Program Files\Tesseract-OCR\tesseract.exe']:
+                        if os.path.exists(tp):
+                            pytesseract.pytesseract.tesseract_cmd = tp
+                            break
                 lang_map = {
                     "Russian": "rus",
                     "Chinese (Simplified)": "chi_sim",
@@ -341,7 +465,8 @@ class Api:
                 "rect": [orig_x, orig_y, orig_w, orig_h]
             }
         except Exception as e:
-            return {"status": "error", "msg": str(e)}
+            import traceback
+            return {"status": "error", "msg": f"{str(e)}\n\n{traceback.format_exc()}"}
 
     def open_manga_viewer(self, path):
         if not path: return
@@ -417,7 +542,9 @@ class Api:
     def get_manga_download_dir(self):
         d = self.settings.get("manga_download_dir", "")
         if not d:
-            d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Downloads", "nhentai")
+            import sys
+            base = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+            d = os.path.join(base, "Downloads", "nhentai")
         return {"dir": d}
 
     def download_nhentai(self, url, title):
@@ -436,7 +563,12 @@ class Api:
         def run_download():
             try:
                 os.makedirs(download_dir, exist_ok=True)
-                subprocess.run([sys.executable, "-m", "gallery_dl", "-d", download_dir, url], check=True, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+                manga_marker = os.path.join(download_dir, ".manga")
+                open(manga_marker, 'w').close()
+                if getattr(sys, 'frozen', False):
+                    subprocess.run([sys.executable, "gallery_dl_module", "-d", download_dir, url], check=True, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+                else:
+                    subprocess.run([sys.executable, "-m", "gallery_dl", "-d", download_dir, url], check=True, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
                 # Escape for JS evaluation
                 safe_dir = download_dir.replace('\\', '\\\\')
                 self._window.evaluate_js(f'downloadComplete("{safe_dir}")')
@@ -446,6 +578,96 @@ class Api:
                 
         threading.Thread(target=run_download, daemon=True).start()
         return {"status": "started"}
+
+    def get_manga_library(self):
+        known = self.settings.get("known_manga_folders", [])
+        library = []
+        
+        dl_dir = self.get_manga_download_dir()["dir"]
+        if os.path.exists(dl_dir):
+            try:
+                for d in os.listdir(dl_dir):
+                    full_path = os.path.join(dl_dir, d)
+                    if os.path.isdir(full_path) and full_path not in known:
+                        if os.path.exists(os.path.join(full_path, ".manga")) or os.path.exists(os.path.join(full_path, "manga_info.json")):
+                            known.append(full_path)
+            except: pass
+
+        folders = self.settings.get("saved_folders", [])
+        for fld in folders:
+            if fld and os.path.isdir(fld):
+                try:
+                    for sub in os.listdir(fld):
+                        full_path = os.path.join(fld, sub)
+                        if os.path.isdir(full_path) and full_path not in known:
+                            if os.path.exists(os.path.join(full_path, ".manga")) or os.path.exists(os.path.join(full_path, "manga_info.json")):
+                                known.append(full_path)
+                except: pass
+
+        valid_known = []
+        for d in known:
+            if os.path.exists(d) and os.path.isdir(d):
+                valid_known.append(d)
+                
+                name = os.path.basename(d)
+                json_path = os.path.join(d, "manga_info.json")
+                if os.path.exists(json_path):
+                    try:
+                        with open(json_path, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                            if "name" in data and data["name"].strip():
+                                name = data["name"].strip()
+                    except: pass
+                
+                first_image = None
+                page_count = 0
+                try:
+                    files = os.listdir(d)
+                    supported = {'.jpg', '.jpeg', '.png', '.webp', '.gif'}
+                    image_files = [f for f in files if os.path.isfile(os.path.join(d, f)) and os.path.splitext(f)[1].lower() in supported]
+                    image_files.sort(key=natural_sort_key)
+                    page_count = len(image_files)
+                    if image_files:
+                        first_image = os.path.join(d, image_files[0])
+                except: pass
+                
+                mtime = 0
+                try:
+                    mtime = os.path.getctime(d)
+                except: pass
+                
+                library.append({
+                    "path": d,
+                    "name": name,
+                    "thumb": first_image,
+                    "mtime": mtime,
+                    "page_count": page_count
+                })
+                
+        self.settings["known_manga_folders"] = valid_known
+        save_settings(self.settings)
+        return {"status": "success", "library": library}
+
+    def delete_manga_folder(self, path):
+        if not path: return {"status": "error", "msg": "Invalid path"}
+        
+        known = self.settings.get("known_manga_folders", [])
+        if path in known:
+            known.remove(path)
+            self.settings["known_manga_folders"] = known
+            save_settings(self.settings)
+            
+        if os.path.exists(path) and os.path.isdir(path):
+            try:
+                try:
+                    import send2trash
+                    send2trash.send2trash(path)
+                except ImportError:
+                    shutil.rmtree(path)
+            except Exception as e:
+                return {"status": "error", "msg": str(e)}
+                
+        return {"status": "success"}
 
     def move_file_to(self, target_name):
         if not (0 <= self.current_index < len(self.playlist)): return {"status": "error", "msg": "No file selected"}
@@ -547,6 +769,39 @@ class Api:
     def exit_app(self):
         self._window.destroy()
 
+    def show_about(self):
+        """Show the shared XenoHead About dialog in a subprocess."""
+        from xeno_ui.about import show_about_subprocess
+        show_about_subprocess("XenoPlayer")
+
+    def check_for_updates(self):
+        try:
+            import urllib.request
+            import json
+            # Replace with your actual update URL or GitHub API endpoint if different
+            url = "https://api.github.com/repos/XenoHead/XenoPlayer/releases/latest"
+            req = urllib.request.Request(url, headers={'User-Agent': 'XenoPlayer'})
+            with urllib.request.urlopen(req, timeout=5) as response:
+                data = json.loads(response.read().decode())
+                latest_version = data.get("tag_name", "").lstrip('v')
+                current_version = "1.0.0" # Update this string whenever you release a new version
+                
+                if latest_version and latest_version != current_version:
+                    return {
+                        "status": "update_available", 
+                        "version": latest_version,
+                        "url": data.get("html_url", "https://www.xenohead.com")
+                    }
+                else:
+                    return {"status": "up_to_date", "version": current_version}
+        except Exception as e:
+            return {"status": "error", "msg": str(e)}
+
+    def open_external_url(self, url):
+        import webbrowser
+        webbrowser.open(url)
+        return {"status": "success"}
+
 api = Api()
 
 # FLASK ROUTES
@@ -630,6 +885,10 @@ def get_thumbnail():
             
     return "Error", 500
 
+def on_about():
+    from xeno_ui.about import show_about_dialog
+    show_about_dialog("Vivid Image Converter")
+
 def run_server():
     # Disable flask request logging for cleaner output
     import logging
@@ -643,6 +902,12 @@ if __name__ == '__main__':
         import MangaViewer
         sys.argv = [sys.argv[0], sys.argv[2]]
         MangaViewer.main()
+        sys.exit(0)
+
+    if len(sys.argv) >= 2 and sys.argv[1] == "gallery_dl_module":
+        import gallery_dl
+        sys.argv = [sys.argv[0]] + sys.argv[2:]
+        gallery_dl.main()
         sys.exit(0)
 
     # Start the backend media server
