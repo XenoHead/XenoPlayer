@@ -13,22 +13,51 @@ def build():
     import PyInstaller.__main__
     
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    target_script = os.path.join(script_dir, "XenoPlayer.py")
+    ui_script = os.path.join(script_dir, "XenoPlayer.py")
+    ocr_script = os.path.join(script_dir, "ocr_worker.py")
     
-    print(f"Building executable for {target_script}...")
+    # PHASE A: Package the OCR background runtime execution engine
+    print(f"Building background OCR worker binary...")
     PyInstaller.__main__.run([
-        target_script,
-        '--onefile',
+        ocr_script,
+        '--onedir',
+        # NOTE: do NOT use --windowed here. windowed mode disables stdout,
+        # which breaks capture_output=True in the parent. The flash window
+        # is suppressed by CREATE_NO_WINDOW in the subprocess call instead.
+        '--clean',
+        '--name=ocr_worker',
+        '--add-data=manga_ocr_model;manga_ocr_model',
+        '--hidden-import=manga_ocr',
+        '--collect-all=unidic_lite',
+        '--collect-all=fugashi',
+        '--collect-all=manga_ocr',
+        '--collect-submodules=transformers',
+        '--collect-data=transformers',
+        '--collect-submodules=torch',
+        '--exclude-module=torch.cuda',
+        '--exclude-module=torch.utils.tensorboard',
+        '--exclude-module=triton',
+        '--noconfirm'
+    ])
+
+    # PHASE B: Package the core application user interface layout
+    print(f"Building application master player interface...")
+    PyInstaller.__main__.run([
+        ui_script,
+        '--onedir',        
         '--windowed',
         '--clean',
         '--name=XenoPlayer',
         '--icon=icon.ico',
         '--add-data=web;web',
         '--add-data=manga_ocr_model;manga_ocr_model',
+        
+        # Inject the newly compiled asset binary folder layout
+        f'--add-data={os.path.join(script_dir, "dist", "ocr_worker", "ocr_worker.exe")};.',
+        
         '--hidden-import=PyQt6',
         '--hidden-import=pytesseract',
         '--hidden-import=speech_recognition',
-        '--hidden-import=manga_ocr',
         '--hidden-import=cloudscraper',
         '--hidden-import=bs4',
         '--hidden-import=cv2',
@@ -38,30 +67,10 @@ def build():
         '--hidden-import=gallery_dl',
         '--hidden-import=flask',
         '--hidden-import=webview',
-        '--hidden-import=MangaViewer',
-        '--hidden-import=torch',
-        '--hidden-import=fugashi',
-        '--hidden-import=unidic_lite',
-        '--hidden-import=huggingface_hub',
-        '--collect-all=unidic_lite',
-        '--collect-all=fugashi',
-        '--collect-all=manga_ocr',
-        '--collect-all=transformers',
-        '--copy-metadata=transformers',
-        '--copy-metadata=tqdm',
-        '--copy-metadata=regex',
-        '--copy-metadata=requests',
-        '--copy-metadata=packaging',
-        '--copy-metadata=filelock',
-        '--copy-metadata=numpy',
-        '--copy-metadata=tokenizers',
-        '--copy-metadata=torch',
-        '--copy-metadata=huggingface-hub',
-        '--copy-metadata=safetensors',
-        '--copy-metadata=pyyaml',
         '--noconfirm'
     ])
-    print("\nBuild complete! You can find your standalone executable in the 'dist' folder.")
+    
+print("\nBuild complete! Check inside 'dist/XenoPlayer' for your completed execution directory.")
 
 if __name__ == "__main__":
     build()

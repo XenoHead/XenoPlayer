@@ -1,7 +1,19 @@
-import sys
 import os
+import sys
+
+# 1. Force CPU mode and disable warnings
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+
+# 2. CRITICAL: Disable transformers lazy-loading system to fix the 'name' is not defined bug
+os.environ["TRANSFORMERS_DYNAMIC_MODULES_PREVENT_IMPORTS"] = "1"
+os.environ["FORCE_TRANSFORMERS_NO_LAZY"] = "1" 
+
+if getattr(sys, 'frozen', False):
+    os.environ["TRANSFORMERS_CACHE"] = os.path.join(sys._MEIPASS, "manga_ocr_model")
 
 class DummyWriter:
+    encoding = 'utf-8'
     def write(self, *args, **kwargs): pass
     def flush(self, *args, **kwargs): pass
     def isatty(self): return False
@@ -12,16 +24,20 @@ import shutil
 import json
 import hashlib
 import re
-from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
-                             QPushButton, QFileDialog, QListWidget, QListWidgetItem,
-                             QListView, QCheckBox, QSpinBox, QLabel, QDial,
-                             QSlider, QDialog, QMenu, QMenuBar, QInputDialog, QMessageBox,
-                             QAbstractItemView, QStackedWidget, QComboBox, QLineEdit,
-                             QRubberBand, QTextEdit)
+from PyQt6.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
+    QPushButton, QFileDialog, QListWidget, QListWidgetItem,
+    QListView, QCheckBox, QSpinBox, QLabel, QDial,
+    QSlider, QDialog, QMenu, QMenuBar, QInputDialog, QMessageBox,
+    QAbstractItemView, QStackedWidget, QComboBox, QLineEdit,
+    QRubberBand, QTextEdit
+    )
+
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QVideoWidget
 from PyQt6.QtCore import QUrl, Qt, QThread, pyqtSignal, QSize, QSettings, QPoint, QRect, QTimer
 from PyQt6.QtGui import QImage, QPixmap, QIcon, QMovie
+
 
 def resource_path(relative_path):
     if getattr(sys, 'frozen', False):
@@ -114,31 +130,66 @@ class TranslationWorker(QThread):
 
     def run(self):
         import io
+        import subprocess
         from PIL import Image
         from deep_translator import GoogleTranslator
-        global manga_ocr_model
+        
         try:
             pil_img = Image.open(io.BytesIO(self.img_bytes))
             
             if self.ocr_mode == "Japanese (Manga OCR)":
-                import builtins
-                import sys
-                import os
-                if getattr(sys, 'frozen', False) and not hasattr(builtins, '__file__'):
-                    builtins.__file__ = os.path.join(sys._MEIPASS, "dummy.py")
+                self.status_update.emit("Spawning OCR Worker Process...")
+                
+                # 1. Write the cropped selection to a temp file on disk
+                temp_dir = tempfile.gettempdir()
+                temp_img_path = os.path.join(temp_dir, "manga_ocr_crop.png")
+                pil_img.save(temp_img_path)
+                
+                # 2. Strict absolute lookup path mapping for local model config folder
+                if getattr(sys, 'frozen', False):
+                    # In a COLLECT/onedir build, ocr_worker.exe sits next to the main exe
+                    exe_dir = os.path.dirname(sys.executable)
+                    worker_exe = os.path.join(exe_dir, "ocr_worker.exe")
+                    # manga_ocr_model is bundled inside _MEIPASS
+                    base_dir = sys._MEIPASS
+                else:
+                    base_dir = os.path.dirname(os.path.abspath(__file__))
+                    worker_exe = sys.executable
                     
-                if manga_ocr_model is None:
-                    self.status_update.emit("Initializing AI Model...")
-                    from manga_ocr import MangaOcr
-                    model_path = resource_path('manga_ocr_model')
-                    if os.path.exists(model_path):
-                        manga_ocr_model = MangaOcr(pretrained_model_name_or_path=model_path)
-                    else:
-                        manga_ocr_model = MangaOcr()
+                model_path = os.path.normpath(os.path.join(base_dir, 'manga_ocr_model'))
+                
+                # If running via development source environment, step up to project root if needed
+                if not os.path.exists(os.path.join(model_path, "config.json")):
+                    model_path = os.path.normpath(os.path.join(base_dir, '..', 'manga_ocr_model'))
+                
+                # 3. Build command flags based on frozen layout states
+                if getattr(sys, 'frozen', False):
+                    cmd = [worker_exe, temp_img_path, model_path]
+                else:
+                    worker_script = os.path.join(base_dir, "ocr_worker.py")
+                    cmd = [worker_exe, worker_script, temp_img_path, model_path]
+                
+                # Set PYTHONIOENCODING as belt-and-suspenders for the child process
+                env = os.environ.copy()
+                env["PYTHONIOENCODING"] = "utf-8"
+                
+                # Execute process silently 
+                creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8',
+                                        env=env, creationflags=creationflags)
+                
+                # Clean up temp image file safely
+                try: os.remove(temp_img_path)
+                except: pass
+                
+                extracted_text = result.stdout.strip()
+                
+                if result.returncode != 0 or extracted_text.startswith("ERROR:"):
+                    self.error_occurred.emit(f"OCR Worker Failed:\n{extracted_text}\n{result.stderr}")
+                    return
                     
-                self.status_update.emit("Reading text with Manga OCR...")
-                extracted_text = manga_ocr_model(pil_img).strip()
                 source_lang = 'ja'
+
             else:
                 import pytesseract
                 self.status_update.emit(f"Reading text with Tesseract ({self.ocr_mode})...")
@@ -163,6 +214,7 @@ class TranslationWorker(QThread):
         except Exception as e:
             import traceback
             self.error_occurred.emit(f"{str(e)}\n\n{traceback.format_exc()}")
+
 class SavedTranslationLabel(QLabel):
     deleted = pyqtSignal(object)
     updated = pyqtSignal(object)
@@ -252,8 +304,11 @@ class MangaViewerWindow(QDialog):
         
     def showEvent(self, event):
         super().showEvent(event)
-        self.showFullScreen()
         
+        if hasattr(self, '_ui_setup_done'):
+            return
+        self._ui_setup_done = True
+
         layout = QVBoxLayout(self)
         
         # Top Bar
@@ -400,14 +455,21 @@ class MangaViewerWindow(QDialog):
                             if img not in valid_saved:
                                 valid_saved.append(img)
                         self.image_paths = valid_saved
+                    if 'last_index' in data:
+                        idx = data['last_index']
+                        if 0 <= idx < len(self.image_paths):
+                            self.current_index = idx
             except Exception as e:
                 print(f"Error loading manga info: {e}")
                 
-    def save_manga_info(self):
+    def save_manga_info(self, silent=False):
+        if type(silent) is not bool:
+            silent = False
         data = {
             "name": self.name_edit.text(),
             "order": [os.path.basename(p) for p in self.image_paths],
-            "translations": self.manga_translations
+            "translations": self.manga_translations,
+            "last_index": self.current_index
         }
         try:
             with open(self.json_path, 'w', encoding='utf-8') as f:
@@ -415,7 +477,8 @@ class MangaViewerWindow(QDialog):
             manga_marker = os.path.join(self.directory, ".manga")
             if not os.path.exists(manga_marker):
                 open(manga_marker, 'w').close()
-            self.show_toast("Manga info saved successfully!", is_error=False)
+            if not silent:
+                self.show_toast("Manga info saved successfully!", is_error=False)
             self.name_edit.clearFocus()
             self.setFocus()
         except Exception as e:
@@ -663,7 +726,7 @@ class MangaViewerWindow(QDialog):
         
         # update trans_data inplace
         lbl.trans_data["rect"] = [orig_x, orig_y, orig_w, orig_h]
-        self.save_manga_info()
+        self.save_manga_info(silent=True)
             
     def edit_saved_translation(self, lbl):
         current_text = lbl.trans_data.get("text", "")
@@ -671,14 +734,14 @@ class MangaViewerWindow(QDialog):
         if ok and new_text != current_text:
             lbl.trans_data["text"] = new_text
             lbl.setText(new_text)
-            self.save_manga_info()
+            self.save_manga_info(silent=True)
             
     def delete_saved_translation(self, lbl):
         filename = os.path.basename(self.image_paths[self.current_index])
         if filename in self.manga_translations:
             if lbl.trans_data in self.manga_translations[filename]:
                 self.manga_translations[filename].remove(lbl.trans_data)
-                self.save_manga_info()
+                self.save_manga_info(silent=True)
         self.render_saved_translations()
             
     def resizeEvent(self, event):
@@ -722,10 +785,10 @@ def main():
         folder = sys.argv[1] if len(sys.argv) > 1 else ""
         if folder and os.path.isfile(folder):
             folder = os.path.dirname(folder)
-            
         if not folder or not os.path.isdir(folder):
-            print("Please provide a valid directory.")
-            sys.exit(1)
+            folder = QFileDialog.getExistingDirectory(None, "Select Manga Folder")
+        if not folder:
+            return
         image_paths = []
         for f in os.listdir(folder):
             if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):

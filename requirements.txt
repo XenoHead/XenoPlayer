@@ -10,3 +10,4 @@ flask
 manga-ocr
 SpeechRecognition
 PyAudio
+cv2
