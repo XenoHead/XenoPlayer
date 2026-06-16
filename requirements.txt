@@ -10,4 +10,6 @@ flask
 manga-ocr
 SpeechRecognition
 PyAudio
-cv2
+cloudscraper
+tensorboard
+transformers

@@ -147,9 +147,11 @@ class TranslationWorker(QThread):
                 
                 # 2. Strict absolute lookup path mapping for local model config folder
                 if getattr(sys, 'frozen', False):
-                    # In a COLLECT/onedir build, ocr_worker.exe sits next to the main exe
+                    # In a COLLECT/onedir build, ocr_worker.exe sits in ocr_worker/ or next to the main exe
                     exe_dir = os.path.dirname(sys.executable)
-                    worker_exe = os.path.join(exe_dir, "ocr_worker.exe")
+                    worker_exe = os.path.join(exe_dir, "ocr_worker", "ocr_worker.exe")
+                    if not os.path.exists(worker_exe):
+                        worker_exe = os.path.join(exe_dir, "ocr_worker.exe")
                     # manga_ocr_model is bundled inside _MEIPASS
                     base_dir = sys._MEIPASS
                 else:

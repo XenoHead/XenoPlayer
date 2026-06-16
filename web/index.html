@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>XenoPlayer</title>
-    <link rel="stylesheet" href="style.css?v=3">
+    <link rel="stylesheet" href="style.css?v=4">
     <!-- Font Awesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
@@ -21,7 +21,14 @@
             </div>
 
             <div id="sidebar-controls">
-                <button onclick="pywebview.api.open_dialog()"><i class="fa-solid fa-folder-open"></i> Load</button>
+                <div style="display: flex; gap: 6px; width: 100%;">
+                    <button onclick="loadFolderAction()" style="flex: 1; width: auto; padding: 10px 5px; font-size: 13px;"><i class="fa-solid fa-folder-open"></i> Load Folder</button>
+                    <button onclick="pywebview.api.open_dialog()" style="flex: 1; width: auto; padding: 10px 5px; font-size: 13px; background-color: #313244; color: #cdd6f4; border: 1px solid #45475a;"><i class="fa-solid fa-file"></i> Load File</button>
+                </div>
+                <div style="display:flex; align-items:center; gap:8px; margin: 4px 0 8px 0; font-size:11px; color:#a0a0b0; user-select:none;">
+                    <input type="checkbox" id="recursive-load-checkbox" onchange="toggleRecursiveLoad(this.checked)" style="cursor:pointer; width:13px; height:13px;">
+                    <label for="recursive-load-checkbox" style="cursor:pointer; white-space:nowrap;">Load Subfolders Recursively</label>
+                </div>
                 <button onclick="pywebview.api.play_favorites()"><i class="fa-solid fa-star"></i> Play
                     Favorites</button>
                 <button onclick="pywebview.api.play_unfavorites()"><i class="fa-regular fa-star"></i> Play
@@ -32,6 +39,15 @@
                 <button onclick="openOnlineManga()"
                     style="background-color: #ff477e; color: white; margin-top: 10px;"><i class="fa-solid fa-globe"></i>
                     Online Manga</button>
+                <button onclick="openOnlineAudio()"
+                    style="background-color: #89dceb; color: #11111b; margin-top: 10px; font-weight: bold;"><i
+                        class="fa-solid fa-music"></i>
+                    Online Audio</button>
+            </div>
+
+            <div id="split-tabs-container" style="display:none; margin: 10px; border-bottom: 2px solid #313244;">
+                <button class="sidebar-tab-btn active" id="tab-btn-left" onclick="switchSidebarTab('left')" style="flex:1; background:#313244; color:#cdd6f4; border:none; padding:8px; cursor:pointer; font-weight:bold; border-radius: 4px 0 0 0; font-size: 12px;"><i class="fa-solid fa-video"></i> Videos (Left)</button>
+                <button class="sidebar-tab-btn" id="tab-btn-right" onclick="switchSidebarTab('right')" style="flex:1; background:#181825; color:#a0a0b0; border:none; padding:8px; cursor:pointer; font-weight:bold; border-radius: 0 4px 0 0; font-size: 12px;"><i class="fa-solid fa-image"></i> Images (Right)</button>
             </div>
 
             <div id="playlist">
@@ -45,7 +61,8 @@
                 <div class="dropdown">
                     <button class="dropbtn">File</button>
                     <div class="dropdown-content">
-                        <a href="#" onclick="pywebview.api.open_dialog()">Load Folder/File</a>
+                        <a href="#" onclick="loadFolderAction()"><i class="fa-solid fa-folder-open" style="margin-right: 8px; color: #f9e2af;"></i> Load Folder</a>
+                        <a href="#" onclick="pywebview.api.open_dialog()"><i class="fa-solid fa-file" style="margin-right: 8px; color: #89b4fa;"></i> Load File</a>
                         <a href="#" onclick="pywebview.api.exit_app()">Exit</a>
                     </div>
                 </div>
@@ -54,9 +71,37 @@
                     <div class="dropdown-content">
                         <a href="#" onclick="openMoveTargetsModal()">Move Targets</a>
                         <a href="#" onclick="deleteDupes()">Delete Dupes</a>
+                        <a href="#" onclick="cleanLibrary()">Clean Library</a>
                         <a href="#" onclick="openFavsModal()">Favs</a>
                         <a href="#" onclick="openOptionsModal()">Options</a>
                         <a href="#" onclick="openHotkeysModal()">Hotkeys</a>
+                    </div>
+                </div>
+                <div class="dropdown">
+                    <button class="dropbtn">View</button>
+                    <div class="dropdown-content" style="min-width: 200px;">
+                        <a href="#" style="pointer-events: none; color: var(--text-secondary); font-size: 12px;"
+                            id="media-dimensions-display">Resolution: Unknown</a>
+                        <hr style="border-color: #333; margin: 2px 0;">
+                        <a href="#" onclick="setMediaAlignment('left')" id="align-left-btn"><i
+                                class="fa-solid fa-align-left"></i> Left</a>
+                        <a href="#" onclick="setMediaAlignment('center')" id="align-center-btn"><i
+                                class="fa-solid fa-align-center"></i> Center <i class="fa-solid fa-check"
+                                style="float: right; margin-top: 3px;"></i></a>
+                        <a href="#" onclick="setMediaAlignment('right')" id="align-right-btn"><i
+                                class="fa-solid fa-align-right"></i> Right</a>
+                        <hr style="border-color: #333; margin: 2px 0;">
+                        <a href="#" onclick="setMediaZoom('fit')" id="zoom-fit-btn"><i class="fa-solid fa-compress"></i>
+                            Fit Screen <i class="fa-solid fa-check" style="float: right; margin-top: 3px;"></i></a>
+                        <a href="#" onclick="setMediaZoom('original')" id="zoom-original-btn"><i
+                                class="fa-solid fa-expand"></i> Original (100%)</a>
+                        <a href="#" onclick="setMediaZoom('double')" id="zoom-double-btn"><i
+                                class="fa-solid fa-magnifying-glass-plus"></i> Double (200%)</a>
+                        <hr style="border-color: #333; margin: 2px 0;">
+                        <a href="#" onclick="openDownloadHistoryModal()" id="view-history-btn"><i
+                                class="fa-solid fa-clock-rotate-left"></i> Download History</a>
+                        <a href="#" onclick="toggleDownloads()" id="view-downloads-btn"><i
+                                class="fa-solid fa-download"></i> Downloads</a>
                     </div>
                 </div>
                 <div class="dropdown">
@@ -67,6 +112,7 @@
                         <a href="#" onclick="pywebview.api.show_about()">About</a>
                     </div>
                 </div>
+                <button onclick="toggleSplitScreen()" id="split-screen-toggle-btn" class="split-btn" style="float: right; margin-right: 15px; margin-top: 5px; background: #313244; color: #cdd6f4; border: 1px solid #45475a; border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 13px; font-weight: bold; transition: all 0.2s ease;"><i class="fa-solid fa-columns"></i> Split View</button>
             </nav>
 
             <div id="top-bar">
@@ -79,22 +125,51 @@
             </div>
 
             <div id="media-container">
-                <video id="video-player" style="display:none;" autoplay></video>
-                <img id="image-viewer" src="" style="display:none;" alt="Viewer">
-                <div id="translations-container"
-                    style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none;"></div>
-                <div id="selection-box"
-                    style="position:absolute; border:2px dashed #4da6ff; background:rgba(77, 166, 255, 0.2); display:none; pointer-events:none;">
+                <!-- Left Split Pane (Videos) -->
+                <div id="left-split-pane" class="split-pane-wrapper">
+                    <div class="pane-header" id="left-pane-header" style="display:none; align-items:center; justify-content:space-between; background:#181825; padding:8px 15px; border-bottom:1px solid #313244; font-size:13px; color:#cdd6f4;">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span style="font-weight:bold; color:#89b4fa;"><i class="fa-solid fa-video"></i> Video Pane</span>
+                            <button onclick="browsePaneFolder('left')" style="background:#313244; border:1px solid #45475a; color:#cdd6f4; border-radius:3px; padding:2px 8px; cursor:pointer;"><i class="fa-solid fa-folder-open"></i> Load</button>
+                        </div>
+                        <span id="left-pane-file-name" style="word-break:break-all; text-align:right; max-width:60%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">No folder loaded</span>
+                    </div>
+                    <div class="pane-content" style="flex:1; position:relative; display:flex; justify-content:center; align-items:center; height: 100%; overflow:hidden;">
+                        <video id="video-player" style="display:none;" autoplay></video>
+                    </div>
                 </div>
-                <div id="manga-loading"
-                    style="display:none; position:absolute; background:rgba(0,0,0,0.8); color:white; padding:15px; border-radius:5px; z-index:50;">
-                    Translating...</div>
+
+                <!-- Right Split Pane (Images) -->
+                <div id="right-split-pane" class="split-pane-wrapper">
+                    <div class="pane-header" id="right-pane-header" style="display:none; align-items:center; justify-content:space-between; background:#181825; padding:8px 15px; border-bottom:1px solid #313244; font-size:13px; color:#cdd6f4;">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span style="font-weight:bold; color:#a6e3a1;"><i class="fa-solid fa-image"></i> Image Pane</span>
+                            <button onclick="browsePaneFolder('right')" style="background:#313244; border:1px solid #45475a; color:#cdd6f4; border-radius:3px; padding:2px 8px; cursor:pointer;"><i class="fa-solid fa-folder-open"></i> Load</button>
+                        </div>
+                        <div style="display:flex; align-items:center; gap:10px; max-width:60%;">
+                            <button onclick="navigatePaneImage(-1)" style="background:#313244; border:none; color:#cdd6f4; border-radius:3px; padding:2px 6px; cursor:pointer;"><i class="fa-solid fa-chevron-left"></i></button>
+                            <span id="right-pane-file-name" style="word-break:break-all; max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">No folder loaded</span>
+                            <button onclick="navigatePaneImage(1)" style="background:#313244; border:none; color:#cdd6f4; border-radius:3px; padding:2px 6px; cursor:pointer;"><i class="fa-solid fa-chevron-right"></i></button>
+                        </div>
+                    </div>
+                    <div class="pane-content" style="flex:1; position:relative; display:flex; justify-content:center; align-items:center; height: 100%; overflow:hidden;">
+                        <img id="image-viewer" src="" style="display:none;" alt="Viewer">
+                        <div id="translations-container"
+                            style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none;"></div>
+                        <div id="selection-box"
+                            style="position:absolute; border:2px dashed #4da6ff; background:rgba(77, 166, 255, 0.2); display:none; pointer-events:none;">
+                        </div>
+                        <div id="manga-loading"
+                            style="display:none; position:absolute; background:rgba(0,0,0,0.8); color:white; padding:15px; border-radius:5px; z-index:50;">
+                            Translating...</div>
+                    </div>
+                </div>
             </div>
 
             <div id="bottom-controls">
-                <button onclick="pywebview.api.prev_media()"><i class="fa-solid fa-backward-step"></i></button>
+                <button onclick="handlePrevMedia()"><i class="fa-solid fa-backward-step"></i></button>
                 <button onclick="togglePlay()" id="play-btn"><i class="fa-solid fa-pause"></i></button>
-                <button onclick="pywebview.api.next_media()"><i class="fa-solid fa-forward-step"></i></button>
+                <button onclick="handleNextMedia()"><i class="fa-solid fa-forward-step"></i></button>
 
                 <div id="progress-container"
                     style="display:flex; align-items:center; gap:5px; margin-left: 15px; width: 250px;">
@@ -141,6 +216,24 @@
         </div>
     </div>
 
+    <!-- History Modal -->
+    <div id="history-modal" class="modal"
+        style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:#333; padding:20px; z-index:1000; width:750px; border-radius: 8px;">
+        <span class="close" onclick="closeModals()">&times;</span>
+        <h2 style="margin-top:0; color:#89b4fa;"><i class="fa-solid fa-clock-rotate-left"></i> Download History</h2>
+        <div id="history-list"
+            style="max-height: 400px; overflow-y: auto; background: #222; padding: 10px; border-radius: 5px; margin-bottom: 15px; display: flex; flex-direction: column; gap: 8px;">
+            <!-- Populated by JS -->
+        </div>
+        <div style="display: flex; justify-content: space-between;">
+            <button onclick="clearDownloadHistory()"
+                style="background: #d32f2f; color: white; padding: 8px 15px; border: none; border-radius: 4px; cursor: pointer;"><i
+                    class="fa-solid fa-trash"></i> Clear History</button>
+            <button onclick="closeModals()"
+                style="background: #444; color: white; padding: 8px 15px; border: none; border-radius: 4px; cursor: pointer;">Close</button>
+        </div>
+    </div>
+
     <!-- Modals -->
     <div id="instructions-modal" class="modal"
         style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:#1e1e2e; color:#cdd6f4; padding:20px; z-index:1000; width:600px; border-radius: 8px;">
@@ -150,13 +243,13 @@
         <div style="display:flex; border-bottom: 2px solid #313244; margin-bottom: 15px;">
             <button class="tab-btn"
                 style="flex:1; background:#ff477e; color:white; border:none; padding:10px; cursor:pointer; font-weight:bold; border-radius: 4px 4px 0 0;"
-                onclick="switchTab('tab-main')">Main Player</button>
+                onclick="switchTab('tab-main', this)">Main Player</button>
             <button class="tab-btn"
                 style="flex:1; background:#444; color:white; border:none; padding:10px; cursor:pointer; font-weight:bold; border-radius: 4px 4px 0 0;"
-                onclick="switchTab('tab-files')">File Management</button>
+                onclick="switchTab('tab-files', this)">File Management</button>
             <button class="tab-btn"
                 style="flex:1; background:#444; color:white; border:none; padding:10px; cursor:pointer; font-weight:bold; border-radius: 4px 4px 0 0;"
-                onclick="switchTab('tab-manga')">Manga Viewer</button>
+                onclick="switchTab('tab-manga', this)">Manga Viewer</button>
         </div>
 
         <div id="tab-main" class="tab-content" style="background:#181825; padding:15px; border-radius:5px;">
@@ -245,6 +338,62 @@
             <!-- Javascript will render 5 inputs here -->
         </div>
 
+        <h3 style="margin-top: 15px; margin-bottom: 5px; color:#cba6f7;">Define Favs</h3>
+        <div style="display: flex; gap: 15px; align-items: center; margin-bottom: 15px;">
+            <label style="cursor: pointer;">
+                <input type="radio" name="favs-scope" value="folder" id="favs-scope-folder"> Folder-specific
+            </label>
+            <label style="cursor: pointer;">
+                <input type="radio" name="favs-scope" value="global" id="favs-scope-global"> Global (All Folders)
+            </label>
+        </div>
+
+        <h3 style="margin-top: 15px; margin-bottom: 5px; color:#f9e2af;">Folder Load Behavior</h3>
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 15px; font-size:13px; color:#cdd6f4;">
+            <input type="checkbox" id="opt-recursive-load" style="cursor:pointer; width:15px; height:15px;">
+            <label for="opt-recursive-load" style="cursor:pointer; user-select:none;">Scan subfolders recursively when loading directories</label>
+        </div>
+
+        <h3 style="margin-top: 15px; margin-bottom: 5px; color:#f9e2af;">Custom Manga Sites</h3>
+        <p style="font-size: 11px; color: #aaa; margin-top: 0;">Add custom manga sites. Select them in the Online Manga
+            Browser to open URLs and download.</p>
+        <div id="manga-sites-list"
+            style="width: 100%; max-height: 120px; overflow-y: auto; background: #222; border-radius: 4px; padding: 5px; margin-bottom: 5px; text-align: left;">
+            <!-- Dynamically populated list of manga sites -->
+        </div>
+        <div style="display: flex; gap: 5px; width: 100%; margin-bottom: 10px;">
+            <input type="text" id="new-site-name" placeholder="Site Name (e.g. MangaDex)"
+                style="flex: 1; min-width: 0;">
+            <input type="text" id="new-site-url" placeholder="Site URL (e.g. https://mangadex.org)"
+                style="flex: 2; min-width: 0;">
+            <button onclick="addMangaSite()"
+                style="background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; padding: 5px 15px; font-weight: bold;">Add</button>
+        </div>
+
+        <h3 style="margin-top: 15px; margin-bottom: 5px; color:#89dceb;">Custom Audio Sites</h3>
+        <p style="font-size: 11px; color: #aaa; margin-top: 0;">Add custom online audio sites to stream or browse
+            in-app.</p>
+        <div id="audio-sites-list"
+            style="width: 100%; max-height: 120px; overflow-y: auto; background: #222; border-radius: 4px; padding: 5px; margin-bottom: 5px; text-align: left;">
+            <!-- Dynamically populated list of audio sites -->
+        </div>
+        <div
+            style="display: flex; gap: 5px; flex-direction: column; width: 100%; margin-bottom: 10px; background: #222; padding: 10px; border-radius: 4px; border: 1px solid #444;">
+            <div style="display: flex; gap: 5px; width: 100%;">
+                <input type="text" id="new-audio-site-name" placeholder="Site Name (e.g. Yerf Audio)"
+                    style="flex: 1; min-width: 0;">
+                <input type="text" id="new-audio-site-url" placeholder="Site URL (e.g. https://liltsome.yerf.org/)"
+                    style="flex: 2; min-width: 0;">
+            </div>
+            <div style="display: flex; gap: 5px; width: 100%; margin-top: 5px;">
+                <input type="text" id="new-audio-site-tags"
+                    placeholder="Tags (comma-separated, e.g. music, lo-fi, radio)" style="flex: 1; min-width: 0;">
+                <button onclick="addAudioSite()"
+                    style="background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; padding: 5px 15px; font-weight: bold;">Add
+                    Site</button>
+            </div>
+        </div>
+
         <button onclick="saveOptionsModal()" style="margin-top: 15px; width: 100%;">Save Options</button>
         <button onclick="closeModals()" style="margin-top: 5px; width: 100%; background: #444;">Cancel</button>
     </div>
@@ -252,7 +401,8 @@
     <div id="hotkeys-modal" class="modal"
         style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:#333; padding:20px; z-index:1000; width:500px; border-radius: 8px;">
         <h2 style="margin-top:0;">Edit Hotkeys</h2>
-        <p style="font-size: 12px; color: #ccc;">Click on an input and press a key to assign it. Press Backspace to
+        <p style="font-size: 12px; color: #ccc;">Click on an input and press a key or click a mouse button to assign it.
+            Press Backspace to
             clear.</p>
         <div style="display:flex; gap: 20px;">
             <div style="flex: 1;">
@@ -273,16 +423,65 @@
         <div class="modal-content" style="max-width: 800px; max-height: 80vh; display: flex; flex-direction: column;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
                 <h3 style="margin: 0; color: #ff477e;"><i class="fa-solid fa-globe"></i> Online Manga Browser</h3>
-                <span class="close-btn" onclick="closeOnlineManga()">&times;</span>
+                <div style="display: flex; gap: 12px; align-items: center;">
+                    <span class="maximize-btn" onclick="toggleMaximizeMangaBrowser()"
+                        style="color: #aaa; font-size: 14px; cursor: pointer; display: inline-flex; align-items: center;"
+                        title="Maximize"><i class="fa-regular fa-square" id="manga-max-icon"></i></span>
+                    <span class="close-btn" onclick="closeOnlineManga()"
+                        style="color: #aaa; font-size: 28px; font-weight: bold; cursor: pointer; line-height: 1; display: inline-block;"
+                        title="Close">&times;</span>
+                </div>
             </div>
 
-            <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+            <div
+                style="display: flex; gap: 15px; margin-bottom: 15px; align-items: center; justify-content: flex-start;">
+                <label for="manga-source-select" style="color: #ccc; font-weight: bold; font-size: 14px;">Select
+                    Source:</label>
+                <select id="manga-source-select" onchange="onMangaSourceChanged()"
+                    style="background: #222; color: white; border: 1px solid #444; border-radius: 4px; padding: 6px; font-size: 14px;">
+                    <option value="nhentai">NHentai (Built-in Search)</option>
+                </select>
+                <select id="hentaiyoga-media-type"
+                    style="display: none; background: #222; color: white; border: 1px solid #444; border-radius: 4px; padding: 6px; font-size: 14px;">
+                    <option value="all">Download: All (Video & Images)</option>
+                    <option value="vid">Download: Video Only</option>
+                    <option value="img">Download: Images Only</option>
+                </select>
+                <button id="browse-source-btn" onclick="browseSelectedMangaSource()"
+                    style="display: none; background-color: #89b4fa; color: #11111b; font-weight: bold; padding: 6px 12px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px;"><i
+                        class="fa-solid fa-up-right-from-square"></i> Browse Site</button>
+            </div>
+
+            <div id="manga-direct-download-container"
+                style="display: none; background: #222; padding: 15px; border-radius: 4px; margin-bottom: 15px; text-align: left; border: 1px solid #444;">
+                <h4 style="margin-top: 0; margin-bottom: 5px; color: #a6e3a1;"><i class="fa-solid fa-download"></i>
+                    Direct URL Downloader</h4>
+                <p style="font-size: 11px; color: #aaa; margin-top: 0; margin-bottom: 10px;">Paste a chapter or gallery
+                    URL from the browsed site to download it directly via gallery-dl.</p>
+                <div style="display: flex; gap: 10px;">
+                    <input type="text" id="manga-direct-url" placeholder="https://mangadex.org/chapter/... or other URL"
+                        style="flex-grow: 1; padding: 8px; border-radius: 4px; border: 1px solid #444; background: #111; color: white;">
+                    <button onclick="downloadDirectMangaUrl()"
+                        style="background-color: #4CAF50; color: white; padding: 8px 15px; font-weight: bold; border: none; border-radius: 4px; cursor: pointer;">Download</button>
+                </div>
+            </div>
+
+            <div id="nhentai-search-container"
+                style="display: flex; gap: 10px; margin-bottom: 15px; align-items: center;">
                 <input type="text" id="nhentai-search-input" placeholder="Search tags, titles, etc..."
                     style="flex-grow: 1; padding: 10px; border-radius: 4px; border: 1px solid #444; background: #222; color: white; font-size: 16px;"
                     onkeydown="if(event.key === 'Enter') searchOnlineManga()">
                 <button onclick="searchOnlineManga()"
                     style="background-color: #ff477e; color: white; padding: 10px 20px; font-size: 16px;"><i
                         class="fa-solid fa-magnifying-glass"></i> Search</button>
+                <label for="manga-columns-select"
+                    style="color: #aaa; font-size: 13px; white-space: nowrap;">Columns:</label>
+                <select id="manga-columns-select" onchange="onMangaColumnsChanged()"
+                    style="background: #222; color: white; border: 1px solid #444; border-radius: 4px; padding: 8px 6px; font-size: 14px;">
+                    <option value="3">3</option>
+                    <option value="6" selected>6</option>
+                    <option value="9">9</option>
+                </select>
             </div>
 
             <div
@@ -297,10 +496,29 @@
 
             <div style="display: flex; gap: 20px; flex-grow: 1; overflow: hidden;">
                 <!-- Tags sidebar -->
-                <div style="width: 200px; background: #222; border-radius: 4px; padding: 10px; overflow-y: auto;">
+                <div id="tags-sidebar" style="width: 200px; background: #222; border-radius: 4px; padding: 10px; overflow-y: auto; resize: horizontal; overflow: auto;">
                     <h4
-                        style="margin-top: 0; margin-bottom: 10px; color: #fff; border-bottom: 1px solid #444; padding-bottom: 5px;">
-                        Popular Tags</h4>
+                        style="margin-top: 0; margin-bottom: 10px; color: #ffbc47; border-bottom: 1px solid #444; padding-bottom: 5px; display: flex; align-items: center; gap: 6px;">
+                        <i class="fa-solid fa-star"></i> Favorite Tags
+                    </h4>
+                    <button id="toggle-tags-btn" onclick="toggleTagsSidebar()" style="margin-bottom: 8px; background: #444; color: #fff; border: none; border-radius: 3px; padding: 4px 8px; cursor: pointer; font-size: 12px;">Hide Tags</button>
+                    <div id="favorite-tags-list"
+                        style="display: flex; flex-direction: column; gap: 5px; margin-bottom: 20px;">
+                        <span style="color: #666; font-size: 11px; font-style: italic; padding: 5px;">No favorite tags
+                            yet.</span>
+                    </div>
+
+                    <h4
+                        style="margin-top: 0; margin-bottom: 10px; color: #fff; border-bottom: 1px solid #444; padding-bottom: 5px; display: flex; align-items: center; gap: 6px;">
+                        <i class="fa-solid fa-fire"></i> Popular Tags
+                    </h4>
+
+                    <div style="display: flex; gap: 5px; margin-bottom: 10px;">
+                        <input type="text" id="manga-tag-search" placeholder="Search tags..."
+                            style="width: 100%; padding: 6px 8px; font-size: 12px; background: #111; border: 1px solid #444; border-radius: 4px; color: white;"
+                            oninput="onMangaTagSearchChanged()">
+                    </div>
+
                     <div id="nhentai-tags-list" style="display: flex; flex-direction: column; gap: 5px;">
                         <span style="color: #666;">Loading tags...</span>
                     </div>
@@ -308,7 +526,7 @@
 
                 <!-- Results area -->
                 <div id="nhentai-results-area"
-                    style="flex-grow: 1; background: #222; border-radius: 4px; padding: 10px; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 15px; align-content: start;">
+                    style="flex-grow: 1; background: #222; border-radius: 4px; padding: 10px; overflow-y: auto; display: grid; grid-template-columns: repeat(6, 1fr); gap: 15px; align-content: start;">
                     <div style="grid-column: 1 / -1; text-align: center; color: #666; margin-top: 20px;">
                         Enter a search term or click a popular tag to begin.
                     </div>
@@ -319,6 +537,176 @@
                 <button onclick="closeOnlineManga()"
                     style="background-color: #444; color: white; padding: 10px 20px; font-size: 14px; border: none; border-radius: 4px; cursor: pointer;">Close
                     (Downloads continue in background)</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Online Audio Modal -->
+    <div id="online-audio-modal" class="modal">
+        <div class="modal-content"
+            style="max-width: 950px; max-height: 85vh; display: flex; flex-direction: column; width: 95%; height: 80vh; padding: 0;">
+            <!-- Header (always full width) -->
+            <div
+                style="display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 15px 20px; border-bottom: 1px solid #444; background: var(--bg-panel); border-radius: 8px 8px 0 0;">
+                <h3 style="margin: 0; color: #89dceb; font-size: 18px; display: flex; align-items: center; gap: 8px;"><i
+                        class="fa-solid fa-music"></i> Online Audio Streamer</h3>
+                <span class="close" onclick="closeOnlineAudio()"
+                    style="position: static; font-size: 24px;">&times;</span>
+            </div>
+
+            <!-- Main Panel (Sidebar + Content) -->
+            <div style="display: flex; flex-grow: 1; overflow: hidden; width: 100%;">
+                <!-- Sidebar -->
+                <div
+                    style="width: 220px; border-right: 1px solid #444; background: #16161f; display: flex; flex-direction: column; padding: 15px; gap: 15px;">
+                    <div style="display: flex; flex-direction: column; gap: 6px;">
+                        <button class="audio-sidebar-btn active" id="audio-btn-sites"
+                            onclick="switchAudioTab('sites')"><i class="fa-solid fa-globe"></i> Audio Sites</button>
+                        <button class="audio-sidebar-btn" id="audio-btn-playlists"
+                            onclick="switchAudioTab('playlists')"><i class="fa-solid fa-list-ul"></i> Online
+                            Playlists</button>
+                    </div>
+
+                    <hr style="border-color: #333; margin: 5px 0;">
+
+                    <!-- Sidebar Context Specific Actions -->
+                    <div id="audio-sidebar-actions"
+                        style="display: flex; flex-direction: column; gap: 10px; flex-grow: 1; justify-content: flex-end;">
+                        <button onclick="openCreatePlaylistPrompt()"
+                            style="background-color: #a6e3a1; color: #11111b; font-weight: bold; padding: 8px; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; width: 100%;"><i
+                                class="fa-solid fa-plus"></i> New Playlist</button>
+                    </div>
+                </div>
+
+                <!-- Content Body -->
+                <div id="audio-modal-content"
+                    style="flex-grow: 1; display: flex; flex-direction: column; padding: 20px; background: #1c1c27; overflow: hidden; position: relative;">
+
+                    <!-- TAB 1: Sites List View -->
+                    <div id="audio-tab-sites-view"
+                        style="display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden;">
+                        <div class="audio-search-wrapper"
+                            style="width: 100%; margin-bottom: 10px; display: flex; gap: 10px; align-items: center; background: #111; padding: 8px 12px; border-radius: 6px; border: 1px solid #444;">
+                            <i class="fa-solid fa-magnifying-glass" style="color: #89dceb; font-size: 14px;"></i>
+                            <input type="text" id="audio-search-box"
+                                placeholder="Search bookmarked sites by name, URL or tag..."
+                                oninput="onAudioSearchChanged()"
+                                style="flex: 1; background: transparent; border: none; outline: none; color: white; font-size: 14px; padding: 4px 0; box-shadow: none !important;">
+                            <button onclick="clearAudioFilters()"
+                                style="background: #444; border: none; color: white; padding: 4px 10px; border-radius: 4px; font-size: 11px; cursor: pointer;">Reset</button>
+                        </div>
+                        <div style="width: 100%; margin-bottom: 15px; text-align: left;">
+                            <div
+                                style="font-size: 11px; color: #888; font-weight: bold; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.5px;">
+                                Filter by Tags:</div>
+                            <div id="audio-tags-filter-bar" style="display: flex; flex-wrap: wrap; gap: 6px;"></div>
+                        </div>
+                        <div id="online-audio-list" class="audio-card-grid"
+                            style="flex-grow: 1; overflow-y: auto; width: 100%;">
+                            <!-- Sites populates here -->
+                        </div>
+                    </div>
+
+                    <!-- TAB 2: Playlists List View -->
+                    <div id="audio-tab-playlists-view"
+                        style="display: none; flex-direction: column; height: 100%; width: 100%; overflow: auto;">
+                        <h4 style="margin-top: 0; color: #cba6f7; margin-bottom: 10px; text-align: left;"><i
+                                class="fa-solid fa-list-ol"></i> My Online Playlists</h4>
+                        <div id="online-playlists-grid" class="audio-card-grid" style="width: 100%;">
+                            <!-- Custom online playlists cards populate here -->
+                        </div>
+                    </div>
+
+                    <!-- SUB-VIEW: Tracks browser (replaces active tab view) -->
+                    <div id="audio-tracks-browser-view"
+                        style="display: none; flex-direction: column; height: 100%; width: 100%; overflow: hidden;">
+                        <!-- Site/Playlist Header bar -->
+                        <div
+                            style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid #444; padding-bottom: 10px; width: 100%;">
+                            <div style="text-align: left; display: flex; align-items: center;">
+                                <button onclick="exitTracksBrowser()"
+                                    style="background: #313244; color: #cdd6f4; border: 1px solid #45475a; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: bold; margin-right: 15px;"><i
+                                        class="fa-solid fa-arrow-left"></i> Back</button>
+                                <div>
+                                    <span id="tracks-browser-title"
+                                        style="font-size: 16px; font-weight: bold; color: white;">Browsing Tracks</span>
+                                    <div id="tracks-browser-subtitle"
+                                        style="font-size: 11px; color: #888; margin-top: 3px; word-break: break-all;">
+                                        Site URL</div>
+                                </div>
+                            </div>
+                            <!-- Action buttons -->
+                            <div id="tracks-browser-header-actions"
+                                style="display: flex; gap: 8px; align-items: center;">
+                                <select id="playlist-add-target"
+                                    style="background: #222; color: white; border: 1px solid #444; border-radius: 4px; padding: 6px; font-size: 12px;">
+                                    <option value="">Select Playlist...</option>
+                                </select>
+                                <button id="btn-add-all-tracks" onclick="addAllTracksToSelectedPlaylist()"
+                                    style="background-color: #89b4fa; color: #11111b; font-weight: bold; padding: 6px 12px; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;"><i
+                                        class="fa-solid fa-plus"></i> Add All</button>
+                                <button id="btn-play-all-tracks" onclick="playCurrentTracksBrowserList()"
+                                    style="background-color: #4CAF50; color: white; font-weight: bold; padding: 6px 12px; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;"><i
+                                        class="fa-solid fa-play"></i> Play All</button>
+                            </div>
+                        </div>
+
+                        <!-- Tracks Search -->
+                        <div class="audio-search-wrapper"
+                            style="width: 100%; margin-bottom: 10px; display: flex; gap: 10px; align-items: center; background: #111; padding: 8px 12px; border-radius: 6px; border: 1px solid #444;">
+                            <i class="fa-solid fa-magnifying-glass" style="color: #89b4fa; font-size: 14px;"></i>
+                            <input type="text" id="tracks-search-box" placeholder="Filter tracks in list..."
+                                oninput="onTracksSearchChanged()"
+                                style="flex: 1; background: transparent; border: none; outline: none; color: white; font-size: 14px; padding: 4px 0; box-shadow: none !important;">
+                        </div>
+
+                        <!-- Track list scroll box -->
+                        <div id="audio-tracks-list"
+                            style="flex-grow: 1; overflow-y: auto; background: #111; border-radius: 6px; padding: 5px; border: 1px solid #333; width: 100%;">
+                            <!-- Individual track rows injected here -->
+                        </div>
+
+                        <!-- Modal Player Panel -->
+                        <div id="modal-audio-player-container">
+                            <div style="display: flex; justify-content: space-between; align-items: center; gap: 15px;">
+                                <div style="display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0;">
+                                    <span
+                                        style="font-size: 10px; color: #89dceb; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; text-align: left;">Now
+                                        Playing</span>
+                                    <span id="modal-player-track-name" style="text-align: left;">Track Name</span>
+                                </div>
+                                <div style="display: flex; align-items: center; gap: 12px;">
+                                    <button onclick="playPrevModalTrack()"
+                                        style="background: none; border: none; color: #cdd6f4; cursor: pointer; font-size: 16px;"><i
+                                            class="fa-solid fa-backward-step"></i></button>
+                                    <button id="modal-player-play-btn" onclick="toggleModalPlay()"
+                                        style="background: #89dceb; color: #11111b; border: none; border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 14px;"><i
+                                            class="fa-solid fa-play"></i></button>
+                                    <button onclick="playNextModalTrack()"
+                                        style="background: none; border: none; color: #cdd6f4; cursor: pointer; font-size: 16px;"><i
+                                            class="fa-solid fa-forward-step"></i></button>
+                                </div>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 10px; width: 100%;">
+                                <span id="modal-player-current-time"
+                                    style="font-size: 11px; color: #a6adc8; min-width: 30px; text-align: right;">0:00</span>
+                                <input type="range" id="modal-player-progress-slider" min="0" max="100" value="0"
+                                    step="0.1">
+                                <span id="modal-player-total-time"
+                                    style="font-size: 11px; color: #a6adc8; min-width: 30px;">0:00</span>
+                            </div>
+                            <audio id="modal-audio-element" style="display: none;"></audio>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+
+            <!-- Footer (always full width) -->
+            <div
+                style="display: flex; justify-content: flex-end; padding: 15px 20px; border-top: 1px solid #444; background: var(--bg-panel); border-radius: 0 0 8px 8px; width: 100%;">
+                <button onclick="closeOnlineAudio()"
+                    style="background-color: #444; color: white; padding: 8px 25px; font-size: 14px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">Close</button>
             </div>
         </div>
     </div>
@@ -370,6 +758,15 @@
             Folder</button>
     </div>
 
+    <!-- Online Manga Context Menu -->
+    <div id="online-manga-context-menu" class="context-menu"
+        style="display:none; position:absolute; z-index:1000; background:#1e1e2e; border:1px solid #444; border-radius:5px; padding:5px; box-shadow: 0 4px 6px rgba(0,0,0,0.5);">
+        <button id="om-cm-tags" class="cm-btn"><i class="fa-solid fa-tags"></i> Show Tags</button>
+        <button id="om-cm-count" class="cm-btn"><i class="fa-solid fa-images"></i> Show Image Count</button>
+        <hr style="border-color:#444; margin:5px 0;">
+        <button id="om-cm-open" class="cm-btn"><i class="fa-solid fa-up-right-from-square"></i> Open Site</button>
+    </div>
+
     <!-- Context Menu -->
     <div id="context-menu" class="context-menu"
         style="display:none; position:absolute; z-index:1000; background:#1e1e2e; border:1px solid #444; border-radius:5px; padding:5px; box-shadow: 0 4px 6px rgba(0,0,0,0.5);">
@@ -400,7 +797,7 @@
             Delete</button>
     </div>
 
-    <script src="app.js?v=3"></script>
+    <script src="app.js?v=4"></script>
 </body>
 
 </html>
