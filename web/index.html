@@ -22,25 +22,31 @@
 
             <div id="sidebar-controls">
                 <div style="display: flex; gap: 6px; width: 100%;">
-                    <button onclick="loadFolderAction()" style="flex: 1; width: auto; padding: 10px 5px; font-size: 13px;"><i class="fa-solid fa-folder-open"></i> Load Folder</button>
-                    <button onclick="pywebview.api.open_dialog()" style="flex: 1; width: auto; padding: 10px 5px; font-size: 13px; background-color: #313244; color: #cdd6f4; border: 1px solid #45475a;"><i class="fa-solid fa-file"></i> Load File</button>
+                    <button onclick="loadFolderAction()" style="flex: 1; width: auto; padding: 6px 5px; font-size: 13px;"><i class="fa-solid fa-folder-open"></i> Folder</button>
+                    <button onclick="pywebview.api.open_dialog()" style="flex: 1; width: auto; padding: 6px 5px; font-size: 13px; background-color: #313244; color: #cdd6f4; border: 1px solid #45475a;"><i class="fa-solid fa-file"></i> File</button>
                 </div>
-                <div style="display:flex; align-items:center; gap:8px; margin: 4px 0 8px 0; font-size:11px; color:#a0a0b0; user-select:none;">
-                    <input type="checkbox" id="recursive-load-checkbox" onchange="toggleRecursiveLoad(this.checked)" style="cursor:pointer; width:13px; height:13px;">
-                    <label for="recursive-load-checkbox" style="cursor:pointer; white-space:nowrap;">Load Subfolders Recursively</label>
+                <div style="display: flex; justify-content: space-between; gap: 8px; width: 100%; margin: 2px 0 4px 0;">
+                    <div style="display:flex; align-items:center; gap:6px; font-size:11px; color:#a0a0b0; user-select:none;">
+                        <input type="checkbox" id="recursive-load-checkbox" onchange="toggleRecursiveLoad(this.checked)" style="cursor:pointer; width:13px; height:13px;">
+                        <label for="recursive-load-checkbox" style="cursor:pointer; white-space:nowrap;">Load Subfolders</label>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:6px; font-size:11px; color:#a0a0b0; user-select:none;">
+                        <input type="checkbox" id="show-folders-checkbox" onchange="toggleShowFolders(this.checked)" style="cursor:pointer; width:13px; height:13px;">
+                        <label for="show-folders-checkbox" style="cursor:pointer; white-space:nowrap;">Show Folders</label>
+                    </div>
                 </div>
                 <button onclick="pywebview.api.play_favorites()"><i class="fa-solid fa-star"></i> Play
                     Favorites</button>
                 <button onclick="pywebview.api.play_unfavorites()"><i class="fa-regular fa-star"></i> Play
                     Unfavs</button>
                 <button onclick="openMangaLibrary()"
-                    style="background-color: #89b4fa; color: #11111b; margin-top: 20px; font-weight: bold;"><i
+                    style="background-color: #89b4fa; color: #11111b; margin-top: 10px; font-weight: bold;"><i
                         class="fa-solid fa-book-journal-whills"></i> Manga Library</button>
                 <button onclick="openOnlineManga()"
-                    style="background-color: #ff477e; color: white; margin-top: 10px;"><i class="fa-solid fa-globe"></i>
+                    style="background-color: #ff477e; color: white;"><i class="fa-solid fa-globe"></i>
                     Online Manga</button>
                 <button onclick="openOnlineAudio()"
-                    style="background-color: #89dceb; color: #11111b; margin-top: 10px; font-weight: bold;"><i
+                    style="background-color: #89dceb; color: #11111b; font-weight: bold;"><i
                         class="fa-solid fa-music"></i>
                     Online Audio</button>
             </div>
@@ -48,6 +54,10 @@
             <div id="split-tabs-container" style="display:none; margin: 10px; border-bottom: 2px solid #313244;">
                 <button class="sidebar-tab-btn active" id="tab-btn-left" onclick="switchSidebarTab('left')" style="flex:1; background:#313244; color:#cdd6f4; border:none; padding:8px; cursor:pointer; font-weight:bold; border-radius: 4px 0 0 0; font-size: 12px;"><i class="fa-solid fa-video"></i> Videos (Left)</button>
                 <button class="sidebar-tab-btn" id="tab-btn-right" onclick="switchSidebarTab('right')" style="flex:1; background:#181825; color:#a0a0b0; border:none; padding:8px; cursor:pointer; font-weight:bold; border-radius: 0 4px 0 0; font-size: 12px;"><i class="fa-solid fa-image"></i> Images (Right)</button>
+            </div>
+
+            <div id="folder-tree-container">
+                <div id="folder-tree"></div>
             </div>
 
             <div id="playlist">
@@ -115,12 +125,19 @@
                 <button onclick="toggleSplitScreen()" id="split-screen-toggle-btn" class="split-btn" style="float: right; margin-right: 15px; margin-top: 5px; background: #313244; color: #cdd6f4; border: 1px solid #45475a; border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 13px; font-weight: bold; transition: all 0.2s ease;"><i class="fa-solid fa-columns"></i> Split View</button>
             </nav>
 
+            <div id="view-controls-bar">
+                <!-- Alignment Controls -->
+                <div id="alignment-controls">
+                    <button id="btn-align-left" onclick="setMediaAlignment('left')" title="Align Left"><i class="fa-solid fa-align-left"></i></button>
+                    <button id="btn-align-center" onclick="setMediaAlignment('center')" title="Align Center"><i class="fa-solid fa-align-center"></i></button>
+                    <button id="btn-align-right" onclick="setMediaAlignment('right')" title="Align Right"><i class="fa-solid fa-align-right"></i></button>
+                </div>
+                <button id="read-manga-btn" onclick="pywebview.api.open_manga_viewer(appState.current_path)" style="display: none;"><i class="fa-solid fa-book-open"></i> READ MANGA</button>
+            </div>
+
             <div id="top-bar">
                 <span id="current-file-name">No file loaded</span>
 
-                <button onclick="pywebview.api.open_manga_viewer(appState.current_path)"
-                    style="background:none; border:none; color:var(--text-primary); cursor:pointer; font-weight:bold; margin-right: 15px;"><i
-                        class="fa-solid fa-book-open"></i> READ MANGA</button>
                 <button id="favorite-btn" onclick="toggleFavorite()"><i class="fa-regular fa-star"></i></button>
             </div>
 

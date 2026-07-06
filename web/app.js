@@ -5,6 +5,81 @@ const playlistContainer = document.getElementById('playlist');
 const fileNameDisplay = document.getElementById('current-file-name');
 fileNameDisplay.style.fontWeight = 'bold';
 fileNameDisplay.style.color = 'lightblue';
+
+// --- Style Injection for Correct Alignment ---
+// This corrects layout issues by injecting a style block directly,
+// overriding any problematic external CSS for alignment.
+const alignmentStyles = `
+    #media-container.splash-view,
+    #media-container.splash-view .pane-content {
+        justify-content: center !important;
+    }
+    #media-container {
+        padding-left: 25px;
+        padding-right: 25px;
+        box-sizing: border-box;
+    }
+    #media-container.align-left { justify-content: flex-start; }
+    #media-container.align-center { justify-content: center; }
+    #media-container.align-right { justify-content: flex-end; }
+
+    /* New View Controls Bar */
+    #view-controls-bar {
+        background: #11111b;
+        padding: 5px 20px;
+        display: flex;
+        align-items: center;
+        gap: 20px;
+        border-bottom: 1px solid #313244;
+    }
+
+    #read-manga-btn {
+        background: #313244;
+        color: #cdd6f4;
+        border: 1px solid #45475a;
+        border-radius: 4px;
+        padding: 4px 10px;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: bold;
+        transition: all 0.2s ease;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+    #read-manga-btn:hover {
+        background: #45475a;
+        color: #ffffff;
+    }
+
+    #alignment-controls {
+        display: inline-flex;
+    }
+
+    /* Alignment buttons in bottom controls */
+    #alignment-controls button {
+        background: transparent;
+        border: 1px solid #444;
+        color: #a0a0b0;
+        padding: 4px 8px;
+        cursor: pointer;
+        font-size: 14px;
+        line-height: 1;
+    }
+    #alignment-controls button:first-child { border-radius: 4px 0 0 4px; }
+    #alignment-controls button:last-child { border-radius: 0 4px 4px 0; }
+    #alignment-controls button:not(:last-child) { border-right: none; }
+    #alignment-controls button:hover {
+        background: #45475a;
+        color: #cdd6f4;
+    }
+    #alignment-controls button.active {
+        background: #89b4fa;
+        color: #11111b;
+        border-color: #89b4fa;
+    }
+`;
+
 const playBtn = document.getElementById('play-btn');
 
 // Dynamically create Previous and Next buttons for the media controls
@@ -31,7 +106,7 @@ let currentIndex = -1;
 let selectedIndices = new Set();
 let lastSelectedIndex = -1;
 let mangaTranslations = {};
-let currentAlignment = 'center'; // 'left', 'center', 'right'
+let currentAlignment = 'left'; // 'left', 'center', 'right'
 let currentZoom = 'fit'; // 'fit', 'original', 'double'
 let showDownloadsUI = true;
 let listeningInput = null;
@@ -81,11 +156,123 @@ window.addEventListener('contextmenu', e => e.preventDefault());
 let appState = {};
 
 window.addEventListener('pywebviewready', function () {
-    pywebview.api.init().then(response => {
-        console.log("Backend ready", response);
-        updateState();
+    pywebview.api.get_startup_info().then(info => {
+        if (info && info.art_path) {
+            // Display the startup image
+            const mediaUrl = `http://localhost:5050/media?path=${encodeURIComponent(info.art_path)}`;
+            imageViewer.style.display = 'block';
+            videoPlayer.style.display = 'none';
+            imageViewer.src = mediaUrl;
+
+            // Explicitly set pane displays to ensure correct layout and alignment on load
+            document.getElementById('left-split-pane').style.display = 'none';
+            document.getElementById('right-split-pane').style.display = 'flex';
+
+            // Add a special class for centered startup view
+            mediaContainer.classList.add('splash-view');
+
+            // Set a default filename display
+            fileNameDisplay.textContent = 'XenoPlayer';
+        }
+
+        // Now, proceed with normal initialization
+        pywebview.api.init().then(response => {
+            console.log("Backend ready", response);
+            // If init() didn't load a file, we need to manually update state
+            if (currentIndex === -1) {
+                updateState();
+            }
+        });
     });
+
+    // Inject the alignment correction styles into the document head
+    const styleSheet = document.createElement("style");
+    styleSheet.innerText = alignmentStyles;
+    document.head.appendChild(styleSheet);
+    updateViewMenuCheckmarks();
 });
+
+function loadMedia(path, index) {
+    // Remove splash view class if it exists
+    mediaContainer.classList.remove('splash-view');
+
+    if (splitScreenActive) {
+        const cleanPath = path.split('?')[0];
+        const ext = cleanPath.split('.').pop().toLowerCase();
+        if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) {
+            loadRightMedia(path);
+        } else {
+            loadLeftMedia(path);
+        }
+        return;
+    }
+
+    if (currentIndex !== index) {
+        resetLoopCount();
+    }
+    currentIndex = index;
+    if (showFoldersActive) {
+        autoExpandActiveFolder(path);
+    }
+    const display = document.getElementById('media-dimensions-display');
+    if (display) display.textContent = "Resolution: Loading...";
+    const isOnline = path.startsWith('http://') || path.startsWith('https');
+    const parts = path.split(/[/\\]/);
+    const fileName = parts.pop();
+    const folderName = parts.pop() || "";
+    const fullDisplayName = folderName ? (folderName + " / " + fileName) : fileName;
+    fileNameDisplay.textContent = fullDisplayName + '  -  ';
+
+    // Update active class
+    renderPlaylist();
+
+    const cleanPath = path.split('?')[0];
+    const ext = cleanPath.split('.').pop().toLowerCase();
+    const mediaUrl = isOnline ? path : `http://localhost:5050/media?path=${encodeURIComponent(path)}`;
+
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) {
+        // Single view image
+        document.getElementById('left-split-pane').style.display = 'none';
+        document.getElementById('right-split-pane').style.display = 'flex';
+
+        videoPlayer.style.display = 'none';
+        videoPlayer.pause();
+        imageViewer.style.display = 'block';
+        imageViewer.src = mediaUrl;
+
+        playBtn.innerHTML = '<i class="fa-solid fa-play"></i>'; // Images don't play
+
+        // Load manga info
+        pywebview.api.get_manga_info(path).then(info => {
+            mangaTranslations = info || {};
+            renderTranslations(path);
+        });
+        updateImageTimer();
+    } else {
+        // Single view video
+        document.getElementById('left-split-pane').style.display = 'flex';
+        document.getElementById('right-split-pane').style.display = 'none';
+
+        imageViewer.style.display = 'none';
+        videoPlayer.style.display = 'block';
+        videoPlayer.src = mediaUrl;
+        videoPlayer.play();
+        playBtn.innerHTML = '<i class="fa-solid fa-pause"></i>';
+        document.getElementById('translations-container').innerHTML = '';
+        if (imageTimerInterval) {
+            clearInterval(imageTimerInterval);
+            imageTimerInterval = null;
+        }
+        if (appState.saved_volumes && appState.saved_volumes[path] !== undefined) {
+            const savedVol = appState.saved_volumes[path];
+            videoPlayer.volume = savedVol / 100.0;
+            // Auto-update volume slider visually if it exists
+            const volSlider = document.querySelector('input[type="range"][onchange*="changeVolume"]') || document.querySelector('input[oninput*="changeVolume"]');
+            if (volSlider) volSlider.value = savedVol;
+        }
+    }
+    updateState();
+}
 
 function updateState() {
     pywebview.api.get_state().then(state => {
@@ -133,8 +320,8 @@ function renderState() {
     const isVideo = videoPlayer.style.display === 'block';
     const buttons = document.querySelectorAll('button');
     buttons.forEach(b => {
-        if (b.innerText.includes('Read Manga')) {
-            b.style.display = (appState.is_manga_folder && !isVideo) ? 'inline-block' : 'none';
+        if (b.innerText.toLowerCase().includes('read manga')) {
+            b.style.display = (appState.is_manga_folder && !isVideo) ? 'inline-flex' : 'none';
         }
     });
 }
@@ -177,6 +364,13 @@ function applyMediaStyles() {
     mediaContainer.classList.remove('align-left', 'align-center', 'align-right');
     mediaContainer.classList.add(`align-${currentAlignment}`);
 
+    // --- DEFINITIVE FIX for alignment bug ---
+    // Force a browser repaint by making a trivial style change and then removing it.
+    // This is more reliable than offsetHeight or setTimeout for forcing the browser
+    // to apply the alignment classes above before proceeding.
+    mediaContainer.style.outline = '1px solid transparent';
+    setTimeout(() => { mediaContainer.style.outline = ''; }, 0);
+    
     // 2. Apply Zoom class and layout
     imageViewer.classList.remove('zoom-fit', 'zoom-original', 'zoom-double');
     videoPlayer.classList.remove('zoom-fit', 'zoom-original', 'zoom-double');
@@ -271,10 +465,20 @@ function applyMediaStyles() {
 function updateViewMenuCheckmarks() {
     const alignments = ['left', 'center', 'right'];
     alignments.forEach(align => {
-        const btn = document.getElementById(`align-${align}-btn`);
-        if (btn) {
-            btn.innerHTML = `<i class="fa-solid fa-align-${align}"></i> ${align.charAt(0).toUpperCase() + align.slice(1)}` +
+        // Update dropdown menu
+        const menuBtn = document.getElementById(`align-${align}-btn`);
+        if (menuBtn) {
+            menuBtn.innerHTML = `<i class="fa-solid fa-align-${align}"></i> ${align.charAt(0).toUpperCase() + align.slice(1)}` +
                 (currentAlignment === align ? ' <i class="fa-solid fa-check" style="float: right; margin-top: 3px;"></i>' : '');
+        }
+        // Update bottom bar buttons
+        const bottomBtn = document.getElementById(`btn-align-${align}`);
+        if (bottomBtn) {
+            if (currentAlignment === align) {
+                bottomBtn.classList.add('active');
+            } else {
+                bottomBtn.classList.remove('active');
+            }
         }
     });
 
@@ -1013,7 +1217,26 @@ function updatePlaylist() {
                 }
             }
         }
-        renderPlaylist();
+        if (showFoldersActive && typeof pywebview.api.get_dir_tree === 'function') {
+            pywebview.api.get_dir_tree().then(res => {
+                currentSubdirs = res ? res.subdirs : [];
+                let activePath = playlist[currentIndex]?.path;
+                if (splitScreenActive) {
+                    if (activeSidebarTab === 'left') {
+                        activePath = leftPlaylist[leftCurrentIndex]?.path;
+                    } else {
+                        activePath = rightPlaylist[rightCurrentIndex]?.path;
+                    }
+                }
+                if (activePath) {
+                    autoExpandActiveFolder(activePath);
+                }
+                renderPlaylist();
+            });
+        } else {
+            currentSubdirs = [];
+            renderPlaylist();
+        }
     });
 }
 
@@ -1043,6 +1266,17 @@ function renderPlaylist() {
         } else {
             listToRender = rightPlaylist;
             activeIdx = rightCurrentIndex;
+        }
+    }
+
+    // Toggle folder tree container visibility and render if active
+    const folderTreeContainer = document.getElementById('folder-tree-container');
+    if (folderTreeContainer) {
+        if (showFoldersActive) {
+            folderTreeContainer.style.display = 'block';
+            renderFolderTree(listToRender, currentSubdirs);
+        } else {
+            folderTreeContainer.style.display = 'none';
         }
     }
 
@@ -1296,82 +1530,6 @@ function cmMoveTo(target) {
     });
 }
 
-function loadMedia(path, index) {
-    if (splitScreenActive) {
-        const cleanPath = path.split('?')[0];
-        const ext = cleanPath.split('.').pop().toLowerCase();
-        if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) {
-            loadRightMedia(path);
-        } else {
-            loadLeftMedia(path);
-        }
-        return;
-    }
-
-    if (currentIndex !== index) {
-        resetLoopCount();
-    }
-    currentIndex = index;
-    const display = document.getElementById('media-dimensions-display');
-    if (display) display.textContent = "Resolution: Loading...";
-    const isOnline = path.startsWith('http://') || path.startsWith('https://');
-    const parts = path.split(/[/\\]/);
-    const fileName = parts.pop();
-    const folderName = parts.pop() || "";
-    const fullDisplayName = folderName ? (folderName + " / " + fileName) : fileName;
-    fileNameDisplay.textContent = fullDisplayName + '  -  ';
-
-    // Update active class
-    renderPlaylist();
-
-    const cleanPath = path.split('?')[0];
-    const ext = cleanPath.split('.').pop().toLowerCase();
-    const mediaUrl = isOnline ? path : `http://localhost:5050/media?path=${encodeURIComponent(path)}`;
-
-    if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) {
-        // Single view image
-        document.getElementById('left-split-pane').style.display = 'none';
-        document.getElementById('right-split-pane').style.display = 'flex';
-
-        videoPlayer.style.display = 'none';
-        videoPlayer.pause();
-        imageViewer.style.display = 'block';
-        imageViewer.src = mediaUrl;
-
-        playBtn.innerHTML = '<i class="fa-solid fa-play"></i>'; // Images don't play
-
-        // Load manga info
-        pywebview.api.get_manga_info(path).then(info => {
-            mangaTranslations = info || {};
-            renderTranslations(path);
-        });
-        updateImageTimer();
-    } else {
-        // Single view video
-        document.getElementById('left-split-pane').style.display = 'flex';
-        document.getElementById('right-split-pane').style.display = 'none';
-
-        imageViewer.style.display = 'none';
-        videoPlayer.style.display = 'block';
-        videoPlayer.src = mediaUrl;
-        videoPlayer.play();
-        playBtn.innerHTML = '<i class="fa-solid fa-pause"></i>';
-        document.getElementById('translations-container').innerHTML = '';
-        if (imageTimerInterval) {
-            clearInterval(imageTimerInterval);
-            imageTimerInterval = null;
-        }
-        if (appState.saved_volumes && appState.saved_volumes[path] !== undefined) {
-            const savedVol = appState.saved_volumes[path];
-            videoPlayer.volume = savedVol / 100.0;
-            // Auto-update volume slider visually if it exists
-            const volSlider = document.querySelector('input[type="range"][onchange*="changeVolume"]') || document.querySelector('input[oninput*="changeVolume"]');
-            if (volSlider) volSlider.value = savedVol;
-        }
-    }
-    updateState();
-}
-
 function togglePlay() {
     if (splitScreenActive || videoPlayer.style.display !== 'none') {
         if (videoPlayer.paused) {
@@ -1431,9 +1589,22 @@ videoPlayer.addEventListener('loadedmetadata', () => {
     totalTimeDisplay.textContent = formatTime(videoPlayer.duration);
     progressSlider.value = 0;
     currentTimeDisplay.textContent = "0:00";
-
+    
     updateMediaDimensions();
-    applyMediaStyles();
+    
+    // Only run the repaint fix on the very first load.
+    if (currentIndex === 0 && !videoPlayer.dataset.initialLoadDone) {
+        videoPlayer.dataset.initialLoadDone = 'true';
+        imageViewer.dataset.initialLoadDone = 'true'; // Sync the flag
+        applyMediaStyles(); // Apply the correct styles first.
+        setTimeout(() => {
+            const originalZoom = currentZoom;
+            setMediaZoom('double'); // Force a repaint by changing zoom
+            setMediaZoom(originalZoom); // Immediately revert
+        }, 10);
+    } else {
+        applyMediaStyles();
+    }
 });
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -2811,7 +2982,20 @@ function checkForUpdates() {
 
 imageViewer.addEventListener('load', () => {
     updateMediaDimensions();
-    applyMediaStyles();
+    
+    // Only run the repaint fix on the very first load.
+    if (currentIndex === 0 && !imageViewer.dataset.initialLoadDone) {
+        imageViewer.dataset.initialLoadDone = 'true';
+        videoPlayer.dataset.initialLoadDone = 'true'; // Sync the flag
+        applyMediaStyles(); // Apply the correct styles first.
+        setTimeout(() => {
+            const originalZoom = currentZoom;
+            setMediaZoom('double'); // Force a repaint by changing zoom
+            setMediaZoom(originalZoom); // Immediately revert
+        }, 10);
+    } else {
+        applyMediaStyles();
+    }
 });
 
 // --- Online Audio Logic ---
@@ -3914,4 +4098,258 @@ function loadFolderAction() {
     });
 }
 
+// --- Folder Tree-view & Navigation Helpers ---
+let showFoldersActive = false;
+let currentSubdirs = [];
+const openFolders = new Set();
 
+function toggleShowFolders(enabled) {
+    showFoldersActive = enabled;
+    updatePlaylist();
+}
+
+function autoExpandActiveFolder(activePath) {
+    if (!activePath) return;
+    const isWindows = activePath.includes('\\');
+    const separator = isWindows ? '\\' : '/';
+    const parts = activePath.split(/[/\\]/);
+    
+    for (let i = 1; i < parts.length - 1; i++) {
+        const parentParts = parts.slice(0, i + 1);
+        let parentPath = parentParts.join(separator);
+        if (isWindows && parentParts[0].endsWith(':') && parentParts.length > 1) {
+            parentPath = parentParts[0] + separator + parentParts.slice(1).join(separator);
+        }
+        openFolders.add(parentPath);
+    }
+}
+
+function getCommonRootPath(flatPlaylist) {
+    if (!flatPlaylist || flatPlaylist.length === 0) return '';
+    const paths = flatPlaylist.map(item => item.path.replace(/\\/g, '/'));
+    const firstParts = paths[0].split('/');
+    let commonPrefixLength = 0;
+    
+    while (commonPrefixLength < firstParts.length - 1) {
+        const part = firstParts[commonPrefixLength];
+        const allMatch = paths.every(p => p.split('/')[commonPrefixLength] === part);
+        if (allMatch) {
+            commonPrefixLength++;
+        } else {
+            break;
+        }
+    }
+    
+    const rootParts = firstParts.slice(0, commonPrefixLength);
+    const isWindows = flatPlaylist[0].path.includes('\\');
+    const separator = isWindows ? '\\' : '/';
+    let rootPath = rootParts.join(separator);
+    if (isWindows && rootParts[0].endsWith(':') && rootParts.length > 1) {
+        rootPath = rootParts[0] + separator + rootParts.slice(1).join(separator);
+    }
+    return rootPath;
+}
+
+function getParentDirectory(path) {
+    if (!path) return null;
+    const isWindows = path.includes('\\');
+    const separator = isWindows ? '\\' : '/';
+    const normPath = path.replace(/\\/g, '/');
+    const parts = normPath.split('/');
+    if (parts.length <= 1) return null;
+    
+    parts.pop();
+    let parent = parts.join(separator);
+    if (isWindows && parent.endsWith(':')) {
+        parent += '\\';
+    }
+    return parent;
+}
+
+function buildFolderOnlyTree(flatPlaylist, subdirs) {
+    const tree = { name: 'Root', type: 'directory', children: [], path: '' };
+    if ((!flatPlaylist || flatPlaylist.length === 0) && (!subdirs || subdirs.length === 0)) return tree;
+    
+    let commonRoot = '';
+    if (flatPlaylist && flatPlaylist.length > 0) {
+        commonRoot = getCommonRootPath(flatPlaylist);
+    } else if (subdirs && subdirs.length > 0) {
+        const paths = subdirs.map(p => p.replace(/\\/g, '/'));
+        const parts = paths[0].split('/');
+        parts.pop();
+        commonRoot = parts.join('/');
+    }
+    
+    tree.path = commonRoot;
+    
+    const commonNorm = commonRoot.replace(/\\/g, '/');
+    const commonParts = commonNorm ? commonNorm.split('/') : [];
+    const commonPrefixLength = commonParts.length;
+    
+    function addDirectoryToTree(dirPath) {
+        const normPath = dirPath.replace(/\\/g, '/');
+        const parts = normPath.split('/');
+        const relParts = parts.slice(commonPrefixLength);
+        
+        let currentNode = tree;
+        relParts.forEach((part, i) => {
+            let dirNode = currentNode.children.find(c => c.type === 'directory' && c.name === part);
+            if (!dirNode) {
+                const dirParts = parts.slice(0, commonPrefixLength + i + 1);
+                const isWindows = dirPath.includes('\\');
+                const separator = isWindows ? '\\' : '/';
+                let currentDirPath = dirParts.join(separator);
+                if (isWindows && dirParts[0].endsWith(':') && dirParts.length > 1) {
+                    currentDirPath = dirParts[0] + separator + dirParts.slice(1).join(separator);
+                }
+                
+                dirNode = {
+                    name: part,
+                    type: 'directory',
+                    path: currentDirPath,
+                    children: [],
+                    open: openFolders.has(currentDirPath)
+                };
+                currentNode.children.push(dirNode);
+            }
+            currentNode = dirNode;
+        });
+    }
+    
+    if (subdirs) {
+        subdirs.forEach(addDirectoryToTree);
+    }
+    
+    if (flatPlaylist) {
+        flatPlaylist.forEach(item => {
+            const normPath = item.path.replace(/\\/g, '/');
+            const parts = normPath.split('/');
+            const dirParts = parts.slice(0, -1);
+            const relParts = dirParts.slice(commonPrefixLength);
+            
+            let currentNode = tree;
+            relParts.forEach((part, i) => {
+                let dirNode = currentNode.children.find(c => c.type === 'directory' && c.name === part);
+                if (!dirNode) {
+                    const currentParts = dirParts.slice(0, commonPrefixLength + i + 1);
+                    const isWindows = item.path.includes('\\');
+                    const separator = isWindows ? '\\' : '/';
+                    let currentDirPath = currentParts.join(separator);
+                    if (isWindows && currentParts[0].endsWith(':') && currentParts.length > 1) {
+                        currentDirPath = currentParts[0] + separator + currentParts.slice(1).join(separator);
+                    }
+                    
+                    dirNode = {
+                        name: part,
+                        type: 'directory',
+                        path: currentDirPath,
+                        children: [],
+                        open: openFolders.has(currentDirPath)
+                    };
+                    currentNode.children.push(dirNode);
+                }
+                currentNode = dirNode;
+            });
+        });
+    }
+    
+    return tree;
+}
+
+function renderFolderTree(listToRender, currentSubdirs) {
+    const container = document.getElementById('folder-tree');
+    if (!container) return;
+    container.innerHTML = '';
+    
+    const commonRoot = getCommonRootPath(listToRender);
+    const parentDir = getParentDirectory(commonRoot);
+    
+    const headerDiv = document.createElement('div');
+    headerDiv.style.display = 'flex';
+    headerDiv.style.justifyContent = 'space-between';
+    headerDiv.style.alignItems = 'center';
+    headerDiv.style.marginBottom = '6px';
+    headerDiv.style.fontSize = '12px';
+    headerDiv.style.fontWeight = 'bold';
+    headerDiv.style.color = '#cdd6f4';
+    headerDiv.innerHTML = `<span>Folders</span>`;
+    
+    if (parentDir) {
+        const goUpBtn = document.createElement('button');
+        goUpBtn.className = 'go-up-btn';
+        goUpBtn.style.background = 'none';
+        goUpBtn.style.border = 'none';
+        goUpBtn.style.color = '#a6e3a1';
+        goUpBtn.style.cursor = 'pointer';
+        goUpBtn.style.fontSize = '11px';
+        goUpBtn.style.padding = '2px 5px';
+        goUpBtn.innerHTML = `<i class="fa-solid fa-level-up-alt" style="transform: rotate(-90deg); margin-right: 4px;"></i>Up`;
+        goUpBtn.onclick = () => {
+            pywebview.api.load_selected_directory(parentDir);
+        };
+        headerDiv.appendChild(goUpBtn);
+    }
+    container.appendChild(headerDiv);
+    
+    const tree = buildFolderOnlyTree(listToRender, currentSubdirs);
+    
+    function renderFolderNode(node, depth) {
+        if (node.name === 'Root') {
+            node.children.forEach(child => renderFolderNode(child, depth));
+            return;
+        }
+        
+        const div = document.createElement('div');
+        div.className = 'tree-folder-item';
+        div.style.paddingLeft = (10 + depth * 12) + 'px';
+        
+        const toggleIcon = document.createElement('span');
+        toggleIcon.style.marginRight = '6px';
+        toggleIcon.style.display = 'inline-block';
+        toggleIcon.style.width = '12px';
+        toggleIcon.style.textAlign = 'center';
+        toggleIcon.innerHTML = node.open ? '<i class="fa-solid fa-chevron-down" style="font-size: 8px;"></i>' : '<i class="fa-solid fa-chevron-right" style="font-size: 8px;"></i>';
+        
+        const folderIcon = document.createElement('span');
+        folderIcon.innerHTML = '<i class="fa-solid fa-folder" style="color: #f9e2af; margin-right: 6px;"></i>';
+        
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'playlist-name';
+        nameSpan.style.whiteSpace = 'nowrap';
+        nameSpan.style.overflow = 'hidden';
+        nameSpan.style.textOverflow = 'ellipsis';
+        nameSpan.textContent = node.name;
+        
+        div.appendChild(toggleIcon);
+        div.appendChild(folderIcon);
+        div.appendChild(nameSpan);
+        
+        div.onclick = (e) => {
+            if (openFolders.has(node.path)) {
+                openFolders.delete(node.path);
+            } else {
+                openFolders.add(node.path);
+            }
+            renderPlaylist();
+        };
+        
+        div.ondblclick = (e) => {
+            e.stopPropagation();
+            pywebview.api.load_selected_directory(node.path);
+        };
+        
+        container.appendChild(div);
+        
+        if (node.open && node.children) {
+            const sortedChildren = [...node.children].sort((a, b) => {
+                return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+            });
+            sortedChildren.forEach(child => renderFolderNode(child, depth + 1));
+        }
+    }
+    
+    tree.children.sort((a, b) => {
+        return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+    });
+    tree.children.forEach(child => renderFolderNode(child, 0));
+}

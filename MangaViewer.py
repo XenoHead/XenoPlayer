@@ -158,13 +158,7 @@ class TranslationWorker(QThread):
                     base_dir = os.path.dirname(os.path.abspath(__file__))
                     worker_exe = sys.executable
                     
-                model_path = os.path.normpath(os.path.join(base_dir, 'manga_ocr_model'))
-                
-                # If running via development source environment, step up to project root if needed
-                if not os.path.exists(os.path.join(model_path, "config.json")):
-                    model_path = os.path.normpath(os.path.join(base_dir, '..', 'manga_ocr_model'))
-                
-                # 3. Build command flags based on frozen layout states
+                model_path = find_manga_ocr_model_path()
                 if getattr(sys, 'frozen', False):
                     cmd = [worker_exe, temp_img_path, model_path]
                 else:
@@ -216,6 +210,22 @@ class TranslationWorker(QThread):
         except Exception as e:
             import traceback
             self.error_occurred.emit(f"{str(e)}\n\n{traceback.format_exc()}")
+
+def find_manga_ocr_model_path():
+    """Locates the manga_ocr_model directory in both dev and frozen states."""
+    if getattr(sys, 'frozen', False):
+        # In a frozen build, the model is in the _MEIPASS directory
+        base_dir = sys._MEIPASS
+    else:
+        # In a dev environment, it's relative to this script
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+
+    model_path = os.path.normpath(os.path.join(base_dir, 'manga_ocr_model'))
+    if not os.path.exists(os.path.join(model_path, "config.json")):
+        # Fallback for running from within a subfolder in dev
+        model_path = os.path.normpath(os.path.join(base_dir, '..', 'manga_ocr_model'))
+
+    return model_path
 
 class SavedTranslationLabel(QLabel):
     deleted = pyqtSignal(object)
@@ -357,7 +367,16 @@ class MangaViewerWindow(QDialog):
         self.image_label.selection_cleared.connect(self.hide_translation)        
         self.image_label.next_page_requested.connect(self.go_next_page)
         self.image_label.prev_page_requested.connect(self.go_prev_page)
-        layout.addWidget(self.image_label, stretch=1)
+
+        # This layout will control the horizontal alignment of the image
+        self.image_alignment_layout = QHBoxLayout()
+        self.image_alignment_layout.setContentsMargins(10, 0, 10, 0) # 10px margin on left/right
+        self.image_alignment_layout.addStretch(1)
+        self.image_alignment_layout.addWidget(self.image_label)
+        self.image_alignment_layout.addStretch(1)
+        
+        # The main layout adds the alignment layout
+        layout.addLayout(self.image_alignment_layout, stretch=1)
         
         # Translation Overlay (Interactive)
         self.translation_container = QWidget(self)

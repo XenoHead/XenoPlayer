@@ -77,6 +77,12 @@ class Api:
         self._window = None
         self.cancel_flags = {}
 
+    def get_startup_info(self):
+        art_path = resource_path('XenoHead_art.png')
+        if os.path.exists(art_path):
+            return {"art_path": art_path}
+        return {"art_path": None}
+
     def init(self):
         if len(sys.argv) > 1 and os.path.exists(sys.argv[1]):
             self.load_directory(sys.argv[1])
@@ -97,18 +103,18 @@ class Api:
                             if first_file:
                                 break
                         if first_file:
-                            self.load_directory(first_file)
+                            self.load_directory(first_file, play=False)
                             return {"status": "ready"}
                     else:
                         first_file = next((f for f in os.listdir(def_folder) if os.path.isfile(os.path.join(def_folder, f)) and os.path.splitext(f)[1].lower() in supported), None)
                         if first_file:
-                            self.load_directory(os.path.join(def_folder, first_file))
+                            self.load_directory(os.path.join(def_folder, first_file), play=False)
                             return {"status": "ready"}
                 except Exception: pass
                 
         last_video = self.settings.get("last_video")
         if last_video and os.path.exists(last_video):
-            self.load_directory(last_video)
+            self.load_directory(last_video, play=False)
         return {"status": "ready"}
 
     def open_dialog(self):
@@ -164,7 +170,7 @@ class Api:
         else:
             self.current_index = 0 if self.playlist else -1
 
-    def load_directory(self, filepath):
+    def load_directory(self, filepath, play=True):
         filepath = os.path.abspath(filepath)
         if not os.path.isfile(filepath): return
         directory = os.path.dirname(filepath)
@@ -192,7 +198,8 @@ class Api:
         self.settings["last_video"] = filepath
         save_settings(self.settings)
         self._window.evaluate_js('updatePlaylist()')
-        self.play_current()
+        if play:
+            self.play_current()
 
     def load_selected_directory(self, directory_path):
         directory_path = os.path.abspath(directory_path)
@@ -287,7 +294,7 @@ class Api:
         dir_path = ""
         if current_path:
             dir_path = os.path.dirname(current_path)
-            if os.path.exists(os.path.join(dir_path, '.manga')) or os.path.exists(os.path.join(dir_path, 'manga_info.json')):
+            if os.path.exists(os.path.join(dir_path, '.manga')):
                 is_manga = True
         
         favs_mode = self.settings.get("favs_mode", "folder")
@@ -313,6 +320,37 @@ class Api:
             "online_playlists": self.settings.get("online_playlists", {}),
             "favorite_manga_tags": self.settings.get("favorite_manga_tags", {"nhentai": [], "danbooru": [], "hentaiyoga": [], "rule34art": [], "ehentai": []}),
             "recursive_load": self.settings.get("recursive_load", False)
+        }
+
+    def get_dir_tree(self):
+        if not self.full_playlist:
+            return {"root": "", "subdirs": []}
+        
+        paths = [p for p in self.full_playlist if not (p.startswith('http://') or p.startswith('https://'))]
+        if not paths:
+            return {"root": "", "subdirs": []}
+            
+        try:
+            dirs = [os.path.dirname(p) for p in paths]
+            common_root = os.path.commonpath(dirs)
+        except Exception:
+            common_root = os.path.dirname(paths[0])
+        
+        if not common_root or not os.path.isdir(common_root):
+            return {"root": "", "subdirs": []}
+            
+        subdirs = []
+        try:
+            for root, dirs, files in os.walk(common_root):
+                dirs[:] = [d for d in dirs if not d.startswith('.')]
+                for d in dirs:
+                    subdirs.append(os.path.normpath(os.path.join(root, d)))
+        except:
+            pass
+            
+        return {
+            "root": common_root,
+            "subdirs": subdirs
         }
 
     def toggle_favorite(self):
@@ -1948,6 +1986,6 @@ def run_server():
 if __name__ == '__main__':
     threading.Thread(target=run_server, daemon=True).start()
     html_path = resource_path(os.path.join('web', 'index.html'))
-    window = webview.create_window('XenoPlayer', html_path, js_api=api, width=1000, height=700)
+    window = webview.create_window('XenoPlayer', html_path, js_api=api, width=1000, height=700, maximized=True)
     api._window = window
-    webview.start(debug=False)
+    webview.start(debug=True)

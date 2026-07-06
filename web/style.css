@@ -52,11 +52,11 @@ body, html {
 }
 
 #sidebar-controls {
-    padding: 15px;
+    padding: 10px 15px;
     border-bottom: 1px solid #333;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 8px;
 }
 
 #sidebar-controls button {
@@ -64,7 +64,7 @@ body, html {
     background-color: var(--accent);
     color: white;
     border: none;
-    padding: 10px;
+    padding: 6px 10px;
     border-radius: 5px;
     cursor: pointer;
     font-weight: bold;
@@ -166,6 +166,11 @@ body, html {
 #media-container.align-right,
 #media-container.align-right .pane-content {
     justify-content: flex-end !important;
+}
+
+#media-container.splash-view,
+#media-container.splash-view .pane-content {
+    justify-content: center !important;
 }
 
 video, img {
@@ -724,11 +729,11 @@ video.zoom-double, img.zoom-double {
     display: none;
 }
 
-#media-container:not(.split-active) .split-pane-wrapper:has(#video-player:not([style*="display: none"])) {
+#media-container:not(.split-active) .split-pane-wrapper:has(#video-player:not([style*="display:none"]):not([style*="display: none"])) {
     display: flex !important;
 }
 
-#media-container:not(.split-active) .split-pane-wrapper:has(#image-viewer:not([style*="display: none"])) {
+#media-container:not(.split-active) .split-pane-wrapper:has(#image-viewer:not([style*="display:none"]):not([style*="display: none"])) {
     display: flex !important;
 }
 
@@ -754,4 +759,41 @@ video.zoom-double, img.zoom-double {
 .pane-header button:hover {
     background: #45475a !important;
     color: #ffffff !important;
+}
+
+/* Folder Tree Pane Styles */
+#folder-tree-container {
+    background-color: #11111b;
+    border-bottom: 1px solid #313244;
+    overflow-y: auto;
+    max-height: 220px;
+    min-height: 80px;
+    padding: 8px 10px;
+    display: none;
+    scrollbar-width: thin;
+}
+
+.tree-folder-item {
+    display: flex;
+    align-items: center;
+    padding: 4px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-bottom: 2px;
+    font-size: 13px;
+    color: #cdd6f4;
+    user-select: none;
+}
+
+.tree-folder-item:hover {
+    background-color: #313244;
+}
+
+.go-up-btn {
+    transition: color 0.2s;
+}
+
+.go-up-btn:hover {
+    color: #a6e3a1 !important;
+    text-shadow: 0 0 5px rgba(166, 227, 161, 0.4);
 }
