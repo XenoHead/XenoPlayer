@@ -293,24 +293,24 @@ class SavedTranslationLabel(QLabel):
         else:
             super().mouseReleaseEvent(event)
 
-class MangaViewerWindow(QDialog):
+class CollectionViewerWindow(QDialog):
     def __init__(self, directory, image_paths, parent=None):
         super().__init__(parent)
         self.directory = directory
         self.image_paths = image_paths
         self.current_index = 0
-        self.json_path = os.path.join(self.directory, "manga_info.json")
+        self.json_path = os.path.join(self.directory, "collection_info.json")
         self.current_pixmap = None
         
-        self.manga_translations = {}
+        self.collection_translations = {}
         self.saved_labels = []
         self.last_selection_rect = None
         self.last_translated_text = ""
         self.last_orig_text = ""
         
-        self.setWindowTitle("Manga Viewer")
+        self.setWindowTitle("Collection Viewer")
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.WindowMaximizeButtonHint | Qt.WindowType.WindowMinimizeButtonHint | Qt.WindowType.WindowCloseButtonHint)
-        self.showFullScreen()
+        self.showMaximized()
         self.setStyleSheet("background-color: black; color: white;")
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         
@@ -331,14 +331,14 @@ class MangaViewerWindow(QDialog):
         top_layout.addWidget(self.page_count_label)
         
         self.name_edit = QLineEdit()
-        self.name_edit.setPlaceholderText("Enter Manga Name...")
+        self.name_edit.setPlaceholderText("Enter Collection Name...")
         self.name_edit.setStyleSheet("background-color: #333; color: white; padding: 5px; border-radius: 3px;")
-        top_layout.addWidget(QLabel("Manga Name:"))
+        top_layout.addWidget(QLabel("Collection Name:"))
         top_layout.addWidget(self.name_edit)
         
         self.btn_save = QPushButton("Save Info")
         self.btn_save.setStyleSheet("background-color: #333; color: white; padding: 5px; border-radius: 3px;")
-        self.btn_save.clicked.connect(self.save_manga_info)
+        self.btn_save.clicked.connect(self.save_collection_info)
         top_layout.addWidget(self.btn_save)
         
         self.combo_ocr_lang = QComboBox()
@@ -435,7 +435,7 @@ class MangaViewerWindow(QDialog):
         self.toast_timer.timeout.connect(self.toast_label.hide)
         self.toast_timer.setSingleShot(True)
         
-        self.load_manga_info()
+        self.load_collection_info()
         self.load_current_image()
         
         self.setFocus()
@@ -460,7 +460,7 @@ class MangaViewerWindow(QDialog):
         self.toast_label.raise_()
         self.toast_timer.start(3000)
         
-    def load_manga_info(self):
+    def load_collection_info(self):
         if os.path.exists(self.json_path):
             try:
                 with open(self.json_path, 'r', encoding='utf-8') as f:
@@ -468,7 +468,7 @@ class MangaViewerWindow(QDialog):
                     if 'name' in data:
                         self.name_edit.setText(data['name'])
                     if 'translations' in data:
-                        self.manga_translations = data['translations']
+                        self.collection_translations = data['translations']
                     if 'order' in data:
                         saved_order = data['order']
                         valid_saved = [os.path.join(self.directory, p) for p in saved_order if os.path.exists(os.path.join(self.directory, p))]
@@ -481,25 +481,25 @@ class MangaViewerWindow(QDialog):
                         if 0 <= idx < len(self.image_paths):
                             self.current_index = idx
             except Exception as e:
-                print(f"Error loading manga info: {e}")
+                print(f"Error loading collection info: {e}")
                 
-    def save_manga_info(self, silent=False):
+    def save_collection_info(self, silent=False):
         if type(silent) is not bool:
             silent = False
         data = {
             "name": self.name_edit.text(),
             "order": [os.path.basename(p) for p in self.image_paths],
-            "translations": self.manga_translations,
+            "translations": self.collection_translations,
             "last_index": self.current_index
         }
         try:
             with open(self.json_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=4)
-            manga_marker = os.path.join(self.directory, ".manga")
-            if not os.path.exists(manga_marker):
-                open(manga_marker, 'w').close()
+            collection_marker = os.path.join(self.directory, ".collection")
+            if not os.path.exists(collection_marker):
+                open(collection_marker, 'w').close()
             if not silent:
-                self.show_toast("Manga info saved successfully!", is_error=False)
+                self.show_toast("Collection info saved successfully!", is_error=False)
             self.name_edit.clearFocus()
             self.setFocus()
         except Exception as e:
@@ -532,7 +532,7 @@ class MangaViewerWindow(QDialog):
         self.translation_worker.error_occurred.connect(self.show_translation_error)
         self.translation_worker.status_update.connect(self.show_translation_status)
         self.translation_worker.start()
-        self.setWindowTitle(f"Manga Viewer - TRANSLATING...")
+        self.setWindowTitle(f"Collection Viewer - TRANSLATING...")
         self.hide_translation()
         
     def show_translation_status(self, status_text):
@@ -602,11 +602,11 @@ class MangaViewerWindow(QDialog):
             "orig": self.last_orig_text
         }
         
-        if filename not in self.manga_translations:
-            self.manga_translations[filename] = []
-        self.manga_translations[filename].append(trans_data)
+        if filename not in self.collection_translations:
+            self.collection_translations[filename] = []
+        self.collection_translations[filename].append(trans_data)
         
-        self.save_manga_info()
+        self.save_collection_info()
         self.hide_translation()
         self.render_saved_translations()
         
@@ -685,7 +685,7 @@ class MangaViewerWindow(QDialog):
         if self.current_pixmap and not self.current_pixmap.isNull():
             scaled_pixmap = self.current_pixmap.scaled(self.image_label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             self.image_label.setPixmap(scaled_pixmap)
-            self.setWindowTitle(f"Manga Viewer - {self.name_edit.text() or 'Unknown'} - ({self.current_index + 1}/{len(self.image_paths)})")
+            self.setWindowTitle(f"Collection Viewer - {self.name_edit.text() or 'Unknown'} - ({self.current_index + 1}/{len(self.image_paths)})")
             if hasattr(self, 'page_count_label'):
                 self.page_count_label.setText(f"Page: {self.current_index + 1} / {len(self.image_paths)}")
             
@@ -696,7 +696,7 @@ class MangaViewerWindow(QDialog):
         
         if not self.current_pixmap: return
         filename = os.path.basename(self.image_paths[self.current_index])
-        if filename not in self.manga_translations: return
+        if filename not in self.collection_translations: return
         
         lbl_size = self.image_label.size()
         pix_size = self.current_pixmap.size()
@@ -707,7 +707,7 @@ class MangaViewerWindow(QDialog):
         ratio_w = scaled_size.width() / pix_size.width()
         ratio_h = scaled_size.height() / pix_size.height()
         
-        for t_data in self.manga_translations[filename]:
+        for t_data in self.collection_translations[filename]:
             rect = t_data.get("rect", [0, 0, 0, 0])
             x = int(rect[0] * ratio_w + offset_x)
             y = int(rect[1] * ratio_h + offset_y)
@@ -724,7 +724,7 @@ class MangaViewerWindow(QDialog):
             
     def update_saved_translation(self, lbl):
         filename = os.path.basename(self.image_paths[self.current_index])
-        if filename not in self.manga_translations: return
+        if filename not in self.collection_translations: return
         
         lbl_size = self.image_label.size()
         pix_size = self.current_pixmap.size()
@@ -747,7 +747,7 @@ class MangaViewerWindow(QDialog):
         
         # update trans_data inplace
         lbl.trans_data["rect"] = [orig_x, orig_y, orig_w, orig_h]
-        self.save_manga_info(silent=True)
+        self.save_collection_info(silent=True)
             
     def edit_saved_translation(self, lbl):
         current_text = lbl.trans_data.get("text", "")
@@ -755,14 +755,14 @@ class MangaViewerWindow(QDialog):
         if ok and new_text != current_text:
             lbl.trans_data["text"] = new_text
             lbl.setText(new_text)
-            self.save_manga_info(silent=True)
+            self.save_collection_info(silent=True)
             
     def delete_saved_translation(self, lbl):
         filename = os.path.basename(self.image_paths[self.current_index])
-        if filename in self.manga_translations:
-            if lbl.trans_data in self.manga_translations[filename]:
-                self.manga_translations[filename].remove(lbl.trans_data)
-                self.save_manga_info(silent=True)
+        if filename in self.collection_translations:
+            if lbl.trans_data in self.collection_translations[filename]:
+                self.collection_translations[filename].remove(lbl.trans_data)
+                self.save_collection_info(silent=True)
         self.render_saved_translations()
             
     def resizeEvent(self, event):
@@ -807,7 +807,7 @@ def main():
         if folder and os.path.isfile(folder):
             folder = os.path.dirname(folder)
         if not folder or not os.path.isdir(folder):
-            folder = QFileDialog.getExistingDirectory(None, "Select Manga Folder")
+            folder = QFileDialog.getExistingDirectory(None, "Select Collection Folder")
         if not folder:
             return
         image_paths = []
@@ -818,7 +818,7 @@ def main():
         def natural_sort_key(s):
             return [int(text) if text.isdigit() else text.lower() for text in re.split(r"(\d+)", os.path.basename(s))]
         image_paths.sort(key=natural_sort_key)
-        window = MangaViewerWindow(folder, image_paths)
+        window = CollectionViewerWindow(folder, image_paths)
         window.exec()
     except Exception as e:
         with open("crash_log.txt", "w") as f:

@@ -20,8 +20,8 @@ const alignmentStyles = `
         box-sizing: border-box;
     }
     #media-container.align-left { justify-content: flex-start; }
-    #media-container.align-center { justify-content: center; }
-    #media-container.align-right { justify-content: flex-end; }
+    #media-container.align-center { justify-content: safe center; }
+    #media-container.align-right { justify-content: safe flex-end; }
 
     /* New View Controls Bar */
     #view-controls-bar {
@@ -33,7 +33,7 @@ const alignmentStyles = `
         border-bottom: 1px solid #313244;
     }
 
-    #read-manga-btn {
+    #view-collection-btn {
         background: #313244;
         color: #cdd6f4;
         border: 1px solid #45475a;
@@ -47,7 +47,7 @@ const alignmentStyles = `
         align-items: center;
         gap: 6px;
     }
-    #read-manga-btn:hover {
+    #view-collection-btn:hover {
         background: #45475a;
         color: #ffffff;
     }
@@ -102,10 +102,18 @@ nextBtn.onclick = () => handleNextMedia();
 playBtn.parentNode.insertBefore(nextBtn, playBtn.nextSibling);
 
 let playlist = [];
+let sortAsc = true;
+
+function toggleSortDir() {
+    sortAsc = !sortAsc;
+    const btn = document.getElementById('sort-dir-btn');
+    if (btn) btn.innerHTML = sortAsc ? '<i class="fa-solid fa-arrow-up"></i>' : '<i class="fa-solid fa-arrow-down"></i>';
+    renderPlaylist();
+}
 let currentIndex = -1;
 let selectedIndices = new Set();
 let lastSelectedIndex = -1;
-let mangaTranslations = {};
+let collectionTranslations = {};
 let currentAlignment = 'left'; // 'left', 'center', 'right'
 let currentZoom = 'fit'; // 'fit', 'original', 'double'
 let showDownloadsUI = true;
@@ -143,8 +151,8 @@ function handleNextMedia() {
 }
 
 const cm = document.getElementById('context-menu');
-const mlCm = document.getElementById('manga-library-context-menu');
-const omCm = document.getElementById('online-manga-context-menu');
+const mlCm = document.getElementById('collection-library-context-menu');
+const omCm = document.getElementById('online-media-context-menu');
 
 window.addEventListener('click', () => {
     if (cm) cm.style.display = 'none';
@@ -242,9 +250,9 @@ function loadMedia(path, index) {
 
         playBtn.innerHTML = '<i class="fa-solid fa-play"></i>'; // Images don't play
 
-        // Load manga info
-        pywebview.api.get_manga_info(path).then(info => {
-            mangaTranslations = info || {};
+        // Load collection info
+        pywebview.api.get_collection_info(path).then(info => {
+            collectionTranslations = info || {};
             renderTranslations(path);
         });
         updateImageTimer();
@@ -316,12 +324,12 @@ function renderState() {
         }
     }
 
-    // Toggle Read Manga button visibility based on folder type and active media
+    // Toggle View Collection button visibility based on folder type and active media
     const isVideo = videoPlayer.style.display === 'block';
     const buttons = document.querySelectorAll('button');
     buttons.forEach(b => {
-        if (b.innerText.toLowerCase().includes('read manga')) {
-            b.style.display = (appState.is_manga_folder && !isVideo) ? 'inline-flex' : 'none';
+        if (b.innerText.toLowerCase().includes('view collection')) {
+            b.style.display = (appState.is_collection_folder && !isVideo) ? 'inline-flex' : 'none';
         }
     });
 }
@@ -532,7 +540,7 @@ function renderDownloadHistory() {
             div.style.background = '#111';
             div.style.padding = '10px';
             div.style.borderRadius = '4px';
-            div.style.borderLeft = item.type === 'manga' ? '4px solid #ff477e' : '4px solid #89dceb';
+            div.style.borderLeft = item.type === 'collection' ? '4px solid #ff477e' : '4px solid #89dceb';
             div.style.display = 'flex';
             div.style.justifyContent = 'space-between';
             div.style.alignItems = 'center';
@@ -555,7 +563,7 @@ function renderDownloadHistory() {
 
             const date = new Date(item.timestamp * 1000).toLocaleString();
             const meta = document.createElement('span');
-            meta.innerHTML = `<i class="fa-solid ${item.type === 'manga' ? 'fa-book' : 'fa-music'}"></i> ${item.type.toUpperCase()} &nbsp;&bull;&nbsp; ${date}`;
+            meta.innerHTML = `<i class="fa-solid ${item.type === 'collection' ? 'fa-book' : 'fa-music'}"></i> ${item.type.toUpperCase()} &nbsp;&bull;&nbsp; ${date}`;
             meta.style.color = '#666';
             meta.style.fontSize = '10px';
 
@@ -610,12 +618,12 @@ function deleteDupes() {
 
 function cleanLibrary() {
     if (confirm("Choose a directory to clean. Empty subfolders will be deleted, and nested media files will be pulled up to their parent folders (one level below the selected directory root). Continue?")) {
-        pywebview.api.clean_manga_directory().then(res => {
+        pywebview.api.clean_collection_directory().then(res => {
             if (res.status === 'success') {
                 alert(res.msg);
                 updateState();
-                if (typeof renderMangaLibrary === 'function') {
-                    renderMangaLibrary();
+                if (typeof renderCollectionLibrary === 'function') {
+                    renderCollectionLibrary();
                 }
             } else if (res.status === 'error') {
                 alert("Error: " + res.msg);
@@ -832,20 +840,21 @@ function saveTargets() {
     });
 }
 
-let tempMangaSites = [];
+let tempCollectionSites = [];
+let tempStorySites = [];
 let tempAudioSites = [];
 
-function renderMangaSitesEditorList() {
-    const container = document.getElementById('manga-sites-list');
+function renderCollectionSitesEditorList() {
+    const container = document.getElementById('collection-sites-list');
     if (!container) return;
     container.innerHTML = '';
 
-    if (tempMangaSites.length === 0) {
-        container.innerHTML = '<div style="color: #888; font-size: 11px; padding: 5px;">No custom manga sites added.</div>';
+    if (tempCollectionSites.length === 0) {
+        container.innerHTML = '<div style="color: #888; font-size: 11px; padding: 5px;">No custom collection sites added.</div>';
         return;
     }
 
-    tempMangaSites.forEach((site, index) => {
+    tempCollectionSites.forEach((site, index) => {
         const div = document.createElement('div');
         div.style.display = 'flex';
         div.style.justifyContent = 'space-between';
@@ -870,8 +879,8 @@ function renderMangaSitesEditorList() {
         delBtn.style.borderRadius = '3px';
         delBtn.style.fontSize = '11px';
         delBtn.onclick = () => {
-            tempMangaSites.splice(index, 1);
-            renderMangaSitesEditorList();
+            tempCollectionSites.splice(index, 1);
+            renderCollectionSitesEditorList();
         };
 
         div.appendChild(info);
@@ -880,7 +889,7 @@ function renderMangaSitesEditorList() {
     });
 }
 
-function addMangaSite() {
+function addCollectionSite() {
     const nameInput = document.getElementById('new-site-name');
     const urlInput = document.getElementById('new-site-url');
     if (!nameInput || !urlInput) return;
@@ -889,10 +898,10 @@ function addMangaSite() {
     const url = urlInput.value.trim();
 
     if (name && url) {
-        tempMangaSites.push({ name, url });
+        tempCollectionSites.push({ name, url });
         nameInput.value = '';
         urlInput.value = '';
-        renderMangaSitesEditorList();
+        renderCollectionSitesEditorList();
     } else {
         alert('Please enter both site name and URL.');
     }
@@ -1079,9 +1088,9 @@ function renderOptionsList() {
         if (folderRadio) folderRadio.checked = true;
     }
 
-    // Render Manga Sites
-    tempMangaSites = [...(appState.manga_sites || [])];
-    renderMangaSitesEditorList();
+    // Render Collection Sites
+    tempCollectionSites = [...(appState.collection_sites || [])];
+    renderCollectionSitesEditorList();
 
     // Render Audio Sites
     tempAudioSites = [...(appState.audio_sites || [])];
@@ -1119,11 +1128,11 @@ function saveOptionsModal() {
     appState.default_folder = defIndex;
     appState.external_apps = apps;
     appState.favs_mode = favsMode;
-    appState.manga_sites = tempMangaSites;
+    appState.collection_sites = tempCollectionSites;
     appState.audio_sites = tempAudioSites;
     appState.recursive_load = recursiveLoad;
 
-    pywebview.api.save_options(folders, defIndex, apps, favsMode, tempMangaSites, tempAudioSites, recursiveLoad).then(state => {
+    pywebview.api.save_options(folders, defIndex, apps, favsMode, tempCollectionSites, tempAudioSites, recursiveLoad).then(state => {
         appState = state;
         renderState();
         closeModals();
@@ -1191,7 +1200,7 @@ function saveHotkeysModal() {
 
 function updatePlaylist() {
     pywebview.api.get_playlist().then(items => {
-        playlist = items;
+        playlist = items.map((item, i) => ({ ...item, originalIndex: i }));
         if (splitScreenActive) {
             const videoExts = ['mp4', 'webm', 'ogg', 'mp3', 'wav', 'wave'];
             leftPlaylist = playlist.filter(f => {
@@ -1269,6 +1278,42 @@ function renderPlaylist() {
         }
     }
 
+    const filterSelect = document.getElementById('type-filter');
+    if (filterSelect && filterSelect.value !== 'all') {
+        const filterValue = filterSelect.value;
+        const extMap = {
+            'image': ['jpg', 'jpeg', 'png', 'webp', 'gif'],
+            'video': ['mp4', 'webm', 'ogg'],
+            'audio': ['mp3', 'wav', 'wave'],
+            'text': ['txt', 'md', 'json', 'csv']
+        };
+        const validExts = extMap[filterValue] || [];
+        
+        listToRender = listToRender.filter(item => {
+            const ext = item.path.split('.').pop().toLowerCase();
+            return validExts.includes(ext);
+        });
+    }
+
+    // Search filter
+    const searchInput = document.getElementById('playlist-search');
+    if (searchInput && searchInput.value.trim()) {
+        const query = searchInput.value.trim().toLowerCase();
+        listToRender = listToRender.filter(item => item.name.toLowerCase().includes(query));
+    }
+
+    // Sort
+    const sortSelect = document.getElementById('playlist-sort');
+    if (sortSelect) {
+        const sortVal = sortSelect.value;
+        const dir = sortAsc ? 1 : -1;
+        listToRender = [...listToRender].sort((a, b) => {
+            if (sortVal === 'date') return dir * ((a.date || 0) - (b.date || 0));
+            if (sortVal === 'size') return dir * ((a.size || 0) - (b.size || 0));
+            return dir * a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+        });
+    }
+
     // Toggle folder tree container visibility and render if active
     const folderTreeContainer = document.getElementById('folder-tree-container');
     if (folderTreeContainer) {
@@ -1282,23 +1327,25 @@ function renderPlaylist() {
 
     listToRender.forEach((item, index) => {
         const div = document.createElement('div');
-        const isSelected = selectedIndices.has(index);
-        div.className = 'playlist-item' + (index === activeIdx ? ' active' : '') + (isSelected ? ' selected' : '');
+        const itemOrigIdx = item.originalIndex !== undefined ? item.originalIndex : index;
+        const isActive = !splitScreenActive ? (itemOrigIdx === activeIdx) : (index === activeIdx);
+        const isSelected = selectedIndices.has(itemOrigIdx);
+        div.className = 'playlist-item' + (isActive ? ' active' : '') + (isSelected ? ' selected' : '');
 
         div.onclick = (e) => {
             if (e.ctrlKey || e.metaKey) {
-                if (selectedIndices.has(index)) selectedIndices.delete(index);
-                else selectedIndices.add(index);
-                lastSelectedIndex = index;
+                if (selectedIndices.has(itemOrigIdx)) selectedIndices.delete(itemOrigIdx);
+                else selectedIndices.add(itemOrigIdx);
+                lastSelectedIndex = itemOrigIdx;
             } else if (e.shiftKey && lastSelectedIndex !== -1) {
                 selectedIndices.clear();
-                const start = Math.min(lastSelectedIndex, index);
+                const start = Math.min(lastSelectedIndex, itemOrigIdx);
                 const end = Math.max(lastSelectedIndex, index);
                 for (let i = start; i <= end; i++) selectedIndices.add(i);
             } else {
                 selectedIndices.clear();
-                selectedIndices.add(index);
-                lastSelectedIndex = index;
+                selectedIndices.add(itemOrigIdx);
+                lastSelectedIndex = itemOrigIdx;
 
                 if (splitScreenActive) {
                     if (activeSidebarTab === 'left') {
@@ -1309,7 +1356,7 @@ function renderPlaylist() {
                         loadRightMedia(item.path);
                     }
                 } else {
-                    pywebview.api.play_index(index);
+                    pywebview.api.play_index(item.originalIndex !== undefined ? item.originalIndex : index);
                 }
             }
             renderPlaylist();
@@ -1424,35 +1471,35 @@ function showContextMenu(x, y) {
             tContainer.appendChild(browseBtn);
         }
 
-        // Add a "Mark as Manga" / "Unmark as Manga" button to the context menu
-        let markMangaBtn = document.getElementById('cm-mark-manga');
-        if (!markMangaBtn) {
-            markMangaBtn = document.createElement('button');
-            markMangaBtn.id = 'cm-mark-manga';
-            markMangaBtn.className = 'cm-btn';
-            cmLocal.appendChild(markMangaBtn);
+        // Add a "Make Collection" / "Unmark as Collection" button to the context menu
+        let markCollectionBtn = document.getElementById('cm-mark-collection');
+        if (!markCollectionBtn) {
+            markCollectionBtn = document.createElement('button');
+            markCollectionBtn.id = 'cm-mark-collection';
+            markCollectionBtn.className = 'cm-btn';
+            cmLocal.appendChild(markCollectionBtn);
         }
 
-        if (appState.is_manga_folder) {
-            markMangaBtn.innerHTML = '<i class="fa-solid fa-book-open-reader"></i> Unmark as Manga';
-            markMangaBtn.onclick = () => {
+        if (appState.is_collection_folder) {
+            markCollectionBtn.innerHTML = '<i class="fa-solid fa-book-open-reader"></i> Unmark as Collection';
+            markCollectionBtn.onclick = () => {
                 cmLocal.style.display = 'none';
-                pywebview.api.unmark_as_manga().then(state => {
+                pywebview.api.unmark_as_collection().then(state => {
                     appState = state;
                     renderState();
                 });
             };
         } else {
-            markMangaBtn.innerHTML = '<i class="fa-solid fa-book"></i> Mark as Manga Folder';
-            markMangaBtn.onclick = () => {
+            markCollectionBtn.innerHTML = '<i class="fa-solid fa-book"></i> Make Collection';
+            markCollectionBtn.onclick = () => {
                 cmLocal.style.display = 'none';
-                pywebview.api.mark_as_manga().then(state => {
+                pywebview.api.mark_as_collection().then(state => {
                     appState = state;
                     renderState();
                 });
             };
         }
-        markMangaBtn.style.display = 'block';
+        markCollectionBtn.style.display = 'block';
     } catch (err) {
         alert("Error in showContextMenu: " + err.message);
     }
@@ -1708,18 +1755,18 @@ window.addEventListener('mousedown', e => {
     }
 });
 
-// --- Manga Translation Features ---
+// --- Collection Translation Features ---
 const mediaContainer = document.getElementById('media-container');
 const selectionBox = document.getElementById('selection-box');
 const transContainer = document.getElementById('translations-container');
-const loadingOverlay = document.getElementById('manga-loading');
+const loadingOverlay = document.getElementById('collection-loading');
 
 let isDrawing = false;
 let startX = 0, startY = 0;
 
 mediaContainer.addEventListener('mousedown', e => {
     if (imageViewer.style.display === 'none') return;
-    if (e.target.closest('.manga-translation-box')) return; // Don't draw if clicking on existing box
+    if (e.target.closest('.collection-translation-box')) return; // Don't draw if clicking on existing box
 
     isDrawing = true;
     const rect = mediaContainer.getBoundingClientRect();
@@ -1782,15 +1829,15 @@ mediaContainer.addEventListener('mouseup', e => {
         loadingOverlay.style.display = 'none';
         if (res.status === 'success') {
             const filename = currentPath.split('\\').pop().split('/').pop();
-            if (!mangaTranslations[filename]) mangaTranslations[filename] = [];
+            if (!collectionTranslations[filename]) collectionTranslations[filename] = [];
 
-            mangaTranslations[filename].push({
+            collectionTranslations[filename].push({
                 rect: res.rect,
                 text: res.text,
                 orig: res.orig
             });
 
-            pywebview.api.save_manga_info(currentPath, mangaTranslations);
+            pywebview.api.save_collection_info(currentPath, collectionTranslations);
             renderTranslations(currentPath);
         } else {
             alert("Translation failed: " + res.msg);
@@ -1801,7 +1848,7 @@ mediaContainer.addEventListener('mouseup', e => {
 function renderTranslations(path) {
     transContainer.innerHTML = '';
     const filename = path.split('\\').pop().split('/').pop();
-    const transList = mangaTranslations[filename] || [];
+    const transList = collectionTranslations[filename] || [];
 
     const imgRect = imageViewer.getBoundingClientRect();
     const containerRect = mediaContainer.getBoundingClientRect();
@@ -1820,7 +1867,7 @@ function renderTranslations(path) {
 
     transList.forEach((t, i) => {
         const box = document.createElement('div');
-        box.className = 'manga-translation-box';
+        box.className = 'collection-translation-box';
 
         // t.rect is [orig_x, orig_y, orig_w, orig_h]
         const dispX = t.rect[0] * ratioW;
@@ -1853,7 +1900,7 @@ function renderTranslations(path) {
         textArea.style.outline = 'none';
         textArea.onchange = () => {
             t.text = textArea.value;
-            pywebview.api.save_manga_info(path, mangaTranslations);
+            pywebview.api.save_collection_info(path, collectionTranslations);
         };
 
         const delBtn = document.createElement('button');
@@ -1869,8 +1916,8 @@ function renderTranslations(path) {
         delBtn.style.height = '20px';
         delBtn.style.cursor = 'pointer';
         delBtn.onclick = () => {
-            mangaTranslations[filename].splice(i, 1);
-            pywebview.api.save_manga_info(path, mangaTranslations);
+            collectionTranslations[filename].splice(i, 1);
+            pywebview.api.save_collection_info(path, collectionTranslations);
             renderTranslations(path);
         };
 
@@ -1891,29 +1938,23 @@ window.addEventListener('resize', () => {
     }
 });
 
-// --- Online Manga Logic ---
-const onlineMangaModal = document.getElementById('online-manga-modal');
+// --- Online Media Logic ---
+const onlineCollectionModal = document.getElementById('online-media-modal');
 const nhentaiTagsList = document.getElementById('nhentai-tags-list');
 const nhentaiResultsArea = document.getElementById('nhentai-results-area');
 const nhentaiSearchInput = document.getElementById('nhentai-search-input');
-const onlineMangaStatus = document.getElementById('online-manga-status');
+const onlineCollectionStatus = document.getElementById('online-media-status');
 
-function renderOnlineMangaSources() {
-    const select = document.getElementById('manga-source-select');
+function renderOnlineCollectionSources() {
+    const select = document.getElementById('collection-source-select');
     if (!select) return;
 
-    select.innerHTML = `
-        <option value="nhentai">NHentai (Built-in Search)</option>
-        <option value="danbooru">Danbooru (Built-in Search)</option>
-        <option value="hentaiyoga">Hentai.yoga (Built-in Search)</option>
-        <option value="rule34art">Rule34.art (Built-in Search)</option>
-        <option value="ehentai">E-Hentai (Built-in Search)</option>
-    `;
-
-    const customSites = appState.manga_sites || [];
-    customSites.forEach((site, index) => {
+    select.innerHTML = '';
+    
+    const sites = appState.collection_sites || [];
+    sites.forEach(site => {
         const opt = document.createElement('option');
-        opt.value = `custom-${index}`;
+        opt.value = site.id;
         opt.textContent = site.name;
         select.appendChild(opt);
     });
@@ -1921,16 +1962,16 @@ function renderOnlineMangaSources() {
 
 let cachedPopularTags = { nhentai: [], danbooru: [], hentaiyoga: [], rule34art: [], ehentai: [] };
 
-function onMangaSourceChanged() {
-    const select = document.getElementById('manga-source-select');
+function onCollectionSourceChanged() {
+    const select = document.getElementById('collection-source-select');
     if (!select) return;
 
-    const searchInput = document.getElementById('manga-tag-search');
+    const searchInput = document.getElementById('collection-tag-search');
     if (searchInput) searchInput.value = '';
 
     const val = select.value;
     const browseBtn = document.getElementById('browse-source-btn');
-    const directDownloadContainer = document.getElementById('manga-direct-download-container');
+    const directDownloadContainer = document.getElementById('collection-direct-download-container');
     const searchContainer = document.getElementById('nhentai-search-container');
     const sidebar = nhentaiTagsList.parentNode;
     const resultsArea = document.getElementById('nhentai-results-area');
@@ -1940,7 +1981,8 @@ function onMangaSourceChanged() {
         hentaiYogaMediaType.style.display = (val === 'hentaiyoga') ? 'inline-block' : 'none';
     }
 
-    if (val === 'nhentai' || val === 'danbooru' || val === 'hentaiyoga' || val === 'rule34art' || val === 'ehentai') {
+    const isBuiltIn = ['nhentai', 'danbooru', 'hentaiyoga', 'rule34art', 'ehentai'].includes(val);
+    if (isBuiltIn) {
         if (browseBtn) browseBtn.style.display = 'none';
         if (directDownloadContainer) directDownloadContainer.style.display = 'none';
         if (searchContainer) searchContainer.style.display = 'flex';
@@ -1949,7 +1991,7 @@ function onMangaSourceChanged() {
             resultsArea.innerHTML = '<div style="grid-column: 1 / -1; text-align: center; color: #666; margin-top: 20px;">Enter a search term or click a popular tag to begin.</div>';
         }
 
-        renderFavoriteMangaTags();
+        renderFavoriteCollectionTags();
         if (val === 'nhentai') {
             loadNhentaiTags();
         } else if (val === 'danbooru') {
@@ -1962,8 +2004,7 @@ function onMangaSourceChanged() {
             loadEhentaiTags();
         }
     } else {
-        const index = parseInt(val.replace('custom-', ''), 10);
-        const site = (appState.manga_sites || [])[index];
+        const site = (appState.collection_sites || []).find(s => s.id === val);
 
         if (browseBtn) browseBtn.style.display = 'inline-block';
         if (directDownloadContainer) directDownloadContainer.style.display = 'block';
@@ -1971,6 +2012,7 @@ function onMangaSourceChanged() {
         if (sidebar) sidebar.style.display = 'none';
 
         if (resultsArea && site) {
+            const displayUrl = site.domain || '';
             resultsArea.innerHTML = `<div style="grid-column: 1 / -1; text-align: center; color: #bbb; margin-top: 20px; font-size: 14px; line-height: 1.8;">
                 <strong>${site.name}</strong> selected.<br><br>
                 Search is not supported for custom sources.<br>
@@ -1982,31 +2024,35 @@ function onMangaSourceChanged() {
     }
 }
 
-function browseSelectedMangaSource() {
-    const select = document.getElementById('manga-source-select');
+function browseSelectedCollectionSource() {
+    const select = document.getElementById('collection-source-select');
     if (!select) return;
 
     const val = select.value;
-    if (val.startsWith('custom-')) {
-        const index = parseInt(val.replace('custom-', ''), 10);
-        const site = (appState.manga_sites || [])[index];
-        if (site && site.url) {
-            pywebview.api.open_external_url(site.url);
+    const isBuiltIn = ['nhentai', 'danbooru', 'hentaiyoga', 'rule34art', 'ehentai'].includes(val);
+    if (!isBuiltIn) {
+        const site = (appState.collection_sites || []).find(s => s.id === val);
+        if (site && site.domain) {
+            let targetUrl = site.domain;
+            if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+                targetUrl = 'https://' + targetUrl;
+            }
+            pywebview.api.open_external_url(targetUrl);
         }
     }
 }
 
-function downloadDirectMangaUrl() {
-    const urlInput = document.getElementById('manga-direct-url');
+function downloadDirectCollectionUrl() {
+    const urlInput = document.getElementById('collection-direct-url');
     if (!urlInput) return;
 
     const url = urlInput.value.trim();
     if (!url) {
-        alert('Please paste a valid manga URL to download.');
+        alert('Please paste a valid collection URL to download.');
         return;
     }
 
-    let title = 'Downloaded_Manga';
+    let title = 'Downloaded_Collection';
     try {
         const urlObj = new URL(url);
         const pathParts = urlObj.pathname.split('/').filter(p => p);
@@ -2021,27 +2067,27 @@ function downloadDirectMangaUrl() {
         mediaType = mediaTypeSelect.value;
     }
 
-    onlineMangaStatus.innerText = 'Starting direct download...';
+    onlineCollectionStatus.innerText = 'Starting direct download...';
     pywebview.api.download_nhentai(url, title, mediaType);
     urlInput.value = '';
 }
 
-function openOnlineManga() {
-    onlineMangaModal.style.display = 'flex';
-    renderOnlineMangaSources();
-    document.getElementById('manga-source-select').value = 'nhentai';
-    onMangaSourceChanged();
+function openOnlineMedia() {
+    onlineCollectionModal.style.display = 'flex';
+    renderOnlineCollectionSources();
+    document.getElementById('collection-source-select').value = 'nhentai';
+    onCollectionSourceChanged();
     loadNhentaiTags();
-    renderFavoriteMangaTags();
-    pywebview.api.get_manga_download_dir().then(res => {
-        document.getElementById('manga-dl-dir-display').innerText = res.dir;
+    renderFavoriteCollectionTags();
+    pywebview.api.get_collection_download_dir().then(res => {
+        document.getElementById('collection-dl-dir-display').innerText = res.dir;
     });
 }
 
-function closeOnlineManga() {
-    onlineMangaModal.style.display = 'none';
-    const modalContent = document.querySelector('#online-manga-modal .modal-content');
-    const icon = document.getElementById('manga-max-icon');
+function closeOnlineMedia() {
+    onlineCollectionModal.style.display = 'none';
+    const modalContent = document.querySelector('#online-media-modal .modal-content');
+    const icon = document.getElementById('collection-max-icon');
     if (modalContent && modalContent.classList.contains('maximized')) {
         modalContent.classList.remove('maximized');
     }
@@ -2051,9 +2097,9 @@ function closeOnlineManga() {
     }
 }
 
-function toggleMaximizeMangaBrowser() {
-    const modalContent = document.querySelector('#online-manga-modal .modal-content');
-    const icon = document.getElementById('manga-max-icon');
+function toggleMaximizeCollectionBrowser() {
+    const modalContent = document.querySelector('#online-media-modal .modal-content');
+    const icon = document.getElementById('collection-max-icon');
     if (!modalContent || !icon) return;
 
     if (modalContent.classList.contains('maximized')) {
@@ -2067,22 +2113,22 @@ function toggleMaximizeMangaBrowser() {
     }
 }
 
-function changeMangaDownloadDir() {
-    pywebview.api.choose_manga_download_dir().then(res => {
+function changeCollectionDownloadDir() {
+    pywebview.api.choose_collection_download_dir().then(res => {
         if (res.status === 'success') {
-            document.getElementById('manga-dl-dir-display').innerText = res.dir;
+            document.getElementById('collection-dl-dir-display').innerText = res.dir;
         }
     });
 }
 
 let tagSearchTimeout = null;
 
-function onMangaTagSearchChanged() {
-    const input = document.getElementById('manga-tag-search');
+function onCollectionTagSearchChanged() {
+    const input = document.getElementById('collection-tag-search');
     if (!input) return;
     const query = input.value.trim().toLowerCase();
 
-    const select = document.getElementById('manga-source-select');
+    const select = document.getElementById('collection-source-select');
     const source = select ? select.value : 'nhentai';
 
     if (source === 'nhentai') {
@@ -2133,7 +2179,7 @@ function renderNhentaiPopularTagsFiltered(query = "") {
     if (query) {
         tags = tags.filter(t => t.toLowerCase().includes(query));
     }
-    const favTags = (appState.favorite_manga_tags && appState.favorite_manga_tags.nhentai) || [];
+    const favTags = (appState.favorite_collection_tags && appState.favorite_collection_tags.nhentai) || [];
 
     if (tags.length === 0) {
         nhentaiTagsList.innerHTML = '<div style="color: #666; font-size: 12px; padding: 5px;">No tags found.</div>';
@@ -2142,7 +2188,7 @@ function renderNhentaiPopularTagsFiltered(query = "") {
 
     tags.forEach(tag => {
         const isFav = favTags.includes(tag);
-        const row = createMangaTagRow(tag, 'nhentai', '#ff477e', isFav);
+        const row = createCollectionTagRow(tag, 'nhentai', '#ff477e', isFav);
         nhentaiTagsList.appendChild(row);
     });
 }
@@ -2172,7 +2218,7 @@ function loadDanbooruTags(query = "") {
 
 function renderDanbooruPopularTagsList(tags) {
     nhentaiTagsList.innerHTML = '';
-    const favTags = (appState.favorite_manga_tags && appState.favorite_manga_tags.danbooru) || [];
+    const favTags = (appState.favorite_collection_tags && appState.favorite_collection_tags.danbooru) || [];
 
     if (tags.length === 0) {
         nhentaiTagsList.innerHTML = '<div style="color: #666; font-size: 12px; padding: 5px;">No tags found.</div>';
@@ -2181,7 +2227,7 @@ function renderDanbooruPopularTagsList(tags) {
 
     tags.forEach(tag => {
         const isFav = favTags.includes(tag);
-        const row = createMangaTagRow(tag, 'danbooru', '#cba6f7', isFav);
+        const row = createCollectionTagRow(tag, 'danbooru', '#cba6f7', isFav);
         nhentaiTagsList.appendChild(row);
     });
 }
@@ -2211,7 +2257,7 @@ function loadHentaiYogaTags(query = "") {
 
 function renderHentaiYogaPopularTagsList(tags) {
     nhentaiTagsList.innerHTML = '';
-    const favTags = (appState.favorite_manga_tags && appState.favorite_manga_tags.hentaiyoga) || [];
+    const favTags = (appState.favorite_collection_tags && appState.favorite_collection_tags.hentaiyoga) || [];
 
     if (tags.length === 0) {
         nhentaiTagsList.innerHTML = '<div style="color: #666; font-size: 12px; padding: 5px;">No tags found.</div>';
@@ -2220,7 +2266,7 @@ function renderHentaiYogaPopularTagsList(tags) {
 
     tags.forEach(tag => {
         const isFav = favTags.includes(tag);
-        const row = createMangaTagRow(tag, 'hentaiyoga', '#89dceb', isFav);
+        const row = createCollectionTagRow(tag, 'hentaiyoga', '#89dceb', isFav);
         nhentaiTagsList.appendChild(row);
     });
 }
@@ -2250,14 +2296,14 @@ function loadRule34ArtTags(query = "") {
 
 function renderRule34ArtPopularTagsList(tags) {
     nhentaiTagsList.innerHTML = '';
-    const favTags = (appState.favorite_manga_tags && appState.favorite_manga_tags.rule34art) || [];
+    const favTags = (appState.favorite_collection_tags && appState.favorite_collection_tags.rule34art) || [];
     if (tags.length === 0) {
         nhentaiTagsList.innerHTML = '<div style="color: #666; font-size: 12px; padding: 5px;">No categories found.</div>';
         return;
     }
     tags.forEach(tag => {
         const isFav = favTags.includes(tag);
-        const row = createMangaTagRow(tag, 'rule34art', '#f38ba8', isFav);
+        const row = createCollectionTagRow(tag, 'rule34art', '#f38ba8', isFav);
         nhentaiTagsList.appendChild(row);
     });
 }
@@ -2287,14 +2333,14 @@ function loadEhentaiTags(query = "") {
 
 function renderEhentaiPopularTagsList(tags) {
     nhentaiTagsList.innerHTML = '';
-    const favTags = (appState.favorite_manga_tags && appState.favorite_manga_tags.ehentai) || [];
+    const favTags = (appState.favorite_collection_tags && appState.favorite_collection_tags.ehentai) || [];
     if (tags.length === 0) {
         nhentaiTagsList.innerHTML = '<div style="color: #666; font-size: 12px; padding: 5px;">No tags found.</div>';
         return;
     }
     tags.forEach(tag => {
         const isFav = favTags.includes(tag);
-        const row = createMangaTagRow(tag, 'ehentai', '#fab387', isFav);
+        const row = createCollectionTagRow(tag, 'ehentai', '#fab387', isFav);
         nhentaiTagsList.appendChild(row);
     });
 }
@@ -2303,15 +2349,15 @@ function renderEhentaiPopularTags() {
     renderEhentaiPopularTagsList(cachedPopularTags.ehentai || []);
 }
 
-function renderFavoriteMangaTags() {
+function renderFavoriteCollectionTags() {
     const container = document.getElementById('favorite-tags-list');
     if (!container) return;
     container.innerHTML = '';
 
-    const select = document.getElementById('manga-source-select');
+    const select = document.getElementById('collection-source-select');
     const source = select ? select.value : 'nhentai';
 
-    const favTags = (appState.favorite_manga_tags && appState.favorite_manga_tags[source]) || [];
+    const favTags = (appState.favorite_collection_tags && appState.favorite_collection_tags[source]) || [];
     const sourceColor = source === 'nhentai' ? '#ff477e' : (source === 'danbooru' ? '#cba6f7' : (source === 'rule34art' ? '#f38ba8' : (source === 'ehentai' ? '#fab387' : '#89dceb')));
 
     if (favTags.length === 0) {
@@ -2320,12 +2366,12 @@ function renderFavoriteMangaTags() {
     }
 
     favTags.forEach(tag => {
-        const row = createMangaTagRow(tag, source, sourceColor, true);
+        const row = createCollectionTagRow(tag, source, sourceColor, true);
         container.appendChild(row);
     });
 }
 
-function createMangaTagRow(tag, source, color, isFav) {
+function createCollectionTagRow(tag, source, color, isFav) {
     const row = document.createElement('div');
     row.className = 'tag-row-item';
     row.style.display = 'flex';
@@ -2350,7 +2396,7 @@ function createMangaTagRow(tag, source, color, isFav) {
     btn.innerText = tag;
     btn.onclick = () => {
         nhentaiSearchInput.value = tag;
-        searchOnlineManga();
+        searchOnlineMedia();
     };
 
     const favBtn = document.createElement('button');
@@ -2363,7 +2409,7 @@ function createMangaTagRow(tag, source, color, isFav) {
     favBtn.innerHTML = isFav ? '<i class="fa-solid fa-star"></i>' : '<i class="fa-regular fa-star"></i>';
     favBtn.onclick = (e) => {
         e.stopPropagation();
-        toggleFavoriteMangaTag(tag, source);
+        toggleFavoriteCollectionTag(tag, source);
     };
 
     row.appendChild(btn);
@@ -2371,15 +2417,15 @@ function createMangaTagRow(tag, source, color, isFav) {
     return row;
 }
 
-function toggleFavoriteMangaTag(tag, source) {
-    if (!appState.favorite_manga_tags) {
-        appState.favorite_manga_tags = { nhentai: [], danbooru: [], hentaiyoga: [] };
+function toggleFavoriteCollectionTag(tag, source) {
+    if (!appState.favorite_collection_tags) {
+        appState.favorite_collection_tags = { nhentai: [], danbooru: [], hentaiyoga: [] };
     }
-    if (!appState.favorite_manga_tags[source]) {
-        appState.favorite_manga_tags[source] = [];
+    if (!appState.favorite_collection_tags[source]) {
+        appState.favorite_collection_tags[source] = [];
     }
 
-    const favs = appState.favorite_manga_tags[source];
+    const favs = appState.favorite_collection_tags[source];
     const index = favs.indexOf(tag);
     if (index >= 0) {
         favs.splice(index, 1);
@@ -2387,9 +2433,9 @@ function toggleFavoriteMangaTag(tag, source) {
         favs.push(tag);
     }
 
-    pywebview.api.save_favorite_manga_tags(appState.favorite_manga_tags).then(state => {
+    pywebview.api.save_favorite_collection_tags(appState.favorite_collection_tags).then(state => {
         appState = state;
-        renderFavoriteMangaTags();
+        renderFavoriteCollectionTags();
         if (source === 'nhentai') {
             renderNhentaiPopularTags();
         } else if (source === 'danbooru') {
@@ -2404,14 +2450,14 @@ function toggleFavoriteMangaTag(tag, source) {
     });
 }
 
-function searchOnlineManga() {
+function searchOnlineMedia() {
     const query = nhentaiSearchInput.value.trim();
     if (!query) return;
 
-    onlineMangaStatus.innerText = `Searching for "${query}"...`;
+    onlineCollectionStatus.innerText = `Searching for "${query}"...`;
     nhentaiResultsArea.innerHTML = '';
 
-    const select = document.getElementById('manga-source-select');
+    const select = document.getElementById('collection-source-select');
     const source = select ? select.value : 'nhentai';
 
     let searchPromise;
@@ -2429,7 +2475,7 @@ function searchOnlineManga() {
 
     searchPromise.then(res => {
         if (res.status === 'success') {
-            onlineMangaStatus.innerText = `Found ${res.results.length} results for "${query}"`;
+            onlineCollectionStatus.innerText = `Found ${res.results.length} results for "${query}"`;
             res.results.forEach(item => {
                 const card = document.createElement('div');
                 card.style.background = '#333';
@@ -2492,26 +2538,26 @@ function searchOnlineManga() {
 
                     document.getElementById('om-cm-tags').onclick = () => {
                         omCm.style.display = 'none';
-                        onlineMangaStatus.innerText = 'Fetching tags...';
-                        pywebview.api.get_manga_details(item.url, source).then(res => {
+                        onlineCollectionStatus.innerText = 'Fetching tags...';
+                        pywebview.api.get_collection_details(item.url, source).then(res => {
                             if (res.status === 'success') {
-                                onlineMangaStatus.innerText = '';
+                                onlineCollectionStatus.innerText = '';
                                 alert(`Tags for ${item.title}:\n\n` + (res.tags.length > 0 ? res.tags.join(', ') : 'No tags found.'));
                             } else {
-                                onlineMangaStatus.innerText = `Failed to fetch tags: ${res.msg}`;
+                                onlineCollectionStatus.innerText = `Failed to fetch tags: ${res.msg}`;
                             }
                         });
                     };
 
                     document.getElementById('om-cm-count').onclick = () => {
                         omCm.style.display = 'none';
-                        onlineMangaStatus.innerText = 'Fetching image count...';
-                        pywebview.api.get_manga_details(item.url, source).then(res => {
+                        onlineCollectionStatus.innerText = 'Fetching image count...';
+                        pywebview.api.get_collection_details(item.url, source).then(res => {
                             if (res.status === 'success') {
-                                onlineMangaStatus.innerText = '';
+                                onlineCollectionStatus.innerText = '';
                                 alert(`Image Count for ${item.title}:\n\n${res.image_count}`);
                             } else {
-                                onlineMangaStatus.innerText = `Failed to fetch image count: ${res.msg}`;
+                                onlineCollectionStatus.innerText = `Failed to fetch image count: ${res.msg}`;
                             }
                         });
                     };
@@ -2528,13 +2574,13 @@ function searchOnlineManga() {
                 nhentaiResultsArea.appendChild(card);
             });
         } else {
-            onlineMangaStatus.innerText = `Search failed: ${res.msg}`;
+            onlineCollectionStatus.innerText = `Search failed: ${res.msg}`;
         }
     });
 }
 
-function onMangaColumnsChanged() {
-    const sel = document.getElementById('manga-columns-select');
+function onCollectionColumnsChanged() {
+    const sel = document.getElementById('collection-columns-select');
     const cols = sel ? parseInt(sel.value) : 6;
     const area = document.getElementById('nhentai-results-area');
     if (area) {
@@ -2646,7 +2692,7 @@ function updateGlobalDownloadUI(title, progressText, percent, isComplete = false
 }
 
 function updateDownloadProgress(current, total, title) {
-    const statusEl = document.getElementById('online-manga-status');
+    const statusEl = document.getElementById('online-media-status');
     let percent = 0;
     let progressText = "";
     let isBytes = total > 10000 || current > 10000;
@@ -2678,9 +2724,9 @@ function updateDownloadProgress(current, total, title) {
 }
 
 function downloadComplete(dir_path, title) {
-    onlineMangaStatus.innerText = `Download complete! Loaded into playlist.`;
-    onlineMangaStatus.style.color = '#4CAF50';
-    setTimeout(() => { onlineMangaStatus.style.color = '#aaa'; }, 3000);
+    onlineCollectionStatus.innerText = `Download complete! Loaded into playlist.`;
+    onlineCollectionStatus.style.color = '#4CAF50';
+    setTimeout(() => { onlineCollectionStatus.style.color = '#aaa'; }, 3000);
 
     if (title) {
         updateGlobalDownloadUI(title, "", 100, true, false);
@@ -2688,8 +2734,8 @@ function downloadComplete(dir_path, title) {
 }
 
 function downloadFailed(err, title) {
-    onlineMangaStatus.innerText = `Download failed: ${err}`;
-    onlineMangaStatus.style.color = 'red';
+    onlineCollectionStatus.innerText = `Download failed: ${err}`;
+    onlineCollectionStatus.style.color = 'red';
 
     if (title) {
         updateGlobalDownloadUI(title, err, 0, false, true);
@@ -2815,38 +2861,38 @@ videoPlayer.addEventListener('play', () => {
     }
 });
 
-// --- Manga Library Logic ---
-let currentMangaLibrary = [];
-const mangaLibraryModal = document.getElementById('manga-library-modal');
-const mangaLibraryGrid = document.getElementById('manga-library-grid');
-const mangaLibraryStatus = document.getElementById('manga-library-status');
+// --- Collection Library Logic ---
+let currentCollectionLibrary = [];
+const collectionLibraryModal = document.getElementById('collection-library-modal');
+const collectionLibraryGrid = document.getElementById('collection-library-grid');
+const collectionLibraryStatus = document.getElementById('collection-library-status');
 
-function openMangaLibrary() {
-    mangaLibraryModal.style.display = 'flex';
-    mangaLibraryStatus.innerText = 'Loading manga library...';
-    mangaLibraryGrid.innerHTML = '';
+function openCollectionLibrary() {
+    collectionLibraryModal.style.display = 'flex';
+    collectionLibraryStatus.innerText = 'Loading collection...';
+    collectionLibraryGrid.innerHTML = '';
 
-    pywebview.api.get_manga_library().then(res => {
+    pywebview.api.get_collection_library().then(res => {
         if (res.status === 'success') {
-            currentMangaLibrary = res.library;
-            mangaLibraryStatus.innerText = `Found ${currentMangaLibrary.length} manga.`;
-            renderMangaLibrary();
+            currentCollectionLibrary = res.library;
+            collectionLibraryStatus.innerText = `Found ${currentCollectionLibrary.length} collection.`;
+            renderCollectionLibrary();
         } else {
-            mangaLibraryStatus.innerText = `Error loading library: ${res.msg}`;
+            collectionLibraryStatus.innerText = `Error loading library: ${res.msg}`;
         }
     });
 }
 
-function renderMangaLibrary() {
-    mangaLibraryGrid.innerHTML = '';
+function renderCollectionLibrary() {
+    collectionLibraryGrid.innerHTML = '';
 
-    if (currentMangaLibrary.length === 0) {
-        mangaLibraryGrid.innerHTML = '<div style="grid-column: 1 / -1; text-align: center; color: #666; margin-top: 20px;">No manga found. Mark a folder as manga or download some to see them here!</div>';
+    if (currentCollectionLibrary.length === 0) {
+        collectionLibraryGrid.innerHTML = '<div style="grid-column: 1 / -1; text-align: center; color: #666; margin-top: 20px;">No collection found. Mark a folder as collection or download some to see them here!</div>';
         return;
     }
 
-    const sortMode = document.getElementById('manga-sort') ? document.getElementById('manga-sort').value : 'recent';
-    let sortedLibrary = [...currentMangaLibrary];
+    const sortMode = document.getElementById('collection-sort') ? document.getElementById('collection-sort').value : 'recent';
+    let sortedLibrary = [...currentCollectionLibrary];
 
     if (sortMode === 'recent') {
         sortedLibrary.sort((a, b) => b.mtime - a.mtime);
@@ -2856,7 +2902,7 @@ function renderMangaLibrary() {
         sortedLibrary.sort((a, b) => b.name.localeCompare(a.name));
     }
 
-    sortedLibrary.forEach(manga => {
+    sortedLibrary.forEach(collection => {
         const card = document.createElement('div');
         card.style.background = '#333';
         card.style.borderRadius = '5px';
@@ -2867,8 +2913,8 @@ function renderMangaLibrary() {
         card.style.cursor = 'pointer';
         card.title = 'Double-click to read | Right-click for options';
         card.ondblclick = () => {
-            closeMangaLibrary();
-            pywebview.api.open_manga_viewer(manga.path);
+            closeCollectionLibrary();
+            pywebview.api.open_collection_viewer(collection.path);
         };
         card.oncontextmenu = (e) => {
             e.preventDefault();
@@ -2885,10 +2931,10 @@ function renderMangaLibrary() {
 
                 document.getElementById('ml-cm-rename').onclick = () => {
                     mlCm.style.display = 'none';
-                    const newName = prompt(`Rename manga "${manga.name}" to:`, manga.name);
-                    if (newName && newName !== manga.name) {
-                        pywebview.api.rename_manga(manga.path, newName).then(res => {
-                            if (res.status === 'success') openMangaLibrary();
+                    const newName = prompt(`Rename collection "${collection.name}" to:`, collection.name);
+                    if (newName && newName !== collection.name) {
+                        pywebview.api.rename_collection(collection.path, newName).then(res => {
+                            if (res.status === 'success') openCollectionLibrary();
                             else alert("Failed to rename: " + res.msg);
                         });
                     }
@@ -2896,9 +2942,9 @@ function renderMangaLibrary() {
 
                 document.getElementById('ml-cm-unmark').onclick = () => {
                     mlCm.style.display = 'none';
-                    pywebview.api.unmark_folder_as_manga(manga.path).then(res => {
+                    pywebview.api.unmark_folder_as_collection(collection.path).then(res => {
                         if (res.status === 'success') {
-                            openMangaLibrary();
+                            openCollectionLibrary();
                             updateState();
                         } else alert("Failed to unmark: " + res.msg);
                     });
@@ -2906,9 +2952,9 @@ function renderMangaLibrary() {
 
                 document.getElementById('ml-cm-delete').onclick = () => {
                     mlCm.style.display = 'none';
-                    if (confirm(`Are you sure you want to delete the manga "${manga.name}" and its folder from your disk?`)) {
-                        pywebview.api.delete_manga_folder(manga.path).then(res => {
-                            if (res.status === 'success') openMangaLibrary();
+                    if (confirm(`Are you sure you want to delete the collection "${collection.name}" and its folder from your disk?`)) {
+                        pywebview.api.delete_collection_folder(collection.path).then(res => {
+                            if (res.status === 'success') openCollectionLibrary();
                             else alert("Failed to delete: " + res.msg);
                         });
                     }
@@ -2920,8 +2966,8 @@ function renderMangaLibrary() {
         imgContainer.style.position = 'relative';
 
         const img = document.createElement('img');
-        if (manga.thumb) {
-            img.src = `http://localhost:5050/thumbnail?path=${encodeURIComponent(manga.thumb)}`;
+        if (collection.thumb) {
+            img.src = `http://localhost:5050/thumbnail?path=${encodeURIComponent(collection.thumb)}`;
         } else {
             img.src = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='; // Transparent pixel
             img.style.background = '#111';
@@ -2934,9 +2980,9 @@ function renderMangaLibrary() {
 
         imgContainer.appendChild(img);
 
-        if (manga.page_count !== undefined) {
+        if (collection.page_count !== undefined) {
             const pageBadge = document.createElement('div');
-            pageBadge.innerHTML = `<i class="fa-regular fa-images"></i> ${manga.page_count}`;
+            pageBadge.innerHTML = `<i class="fa-regular fa-images"></i> ${collection.page_count}`;
             pageBadge.style.position = 'absolute';
             pageBadge.style.bottom = '5px';
             pageBadge.style.right = '5px';
@@ -2949,7 +2995,7 @@ function renderMangaLibrary() {
         }
 
         const title = document.createElement('div');
-        title.innerText = manga.name;
+        title.innerText = collection.name;
         title.style.fontSize = '12px';
         title.style.color = 'white';
         title.style.textAlign = 'center';
@@ -2958,12 +3004,12 @@ function renderMangaLibrary() {
 
         card.appendChild(imgContainer);
         card.appendChild(title);
-        mangaLibraryGrid.appendChild(card);
+        collectionLibraryGrid.appendChild(card);
     });
 }
 
-function closeMangaLibrary() {
-    mangaLibraryModal.style.display = 'none';
+function closeCollectionLibrary() {
+    collectionLibraryModal.style.display = 'none';
 }
 
 function checkForUpdates() {
@@ -3089,7 +3135,18 @@ function renderOnlineAudioList() {
         if (!container) return;
         container.innerHTML = '';
 
-        const sites = appState.audio_sites || [];
+        const rawSites = appState.audio_sites || [];
+        const sites = rawSites.map(s => {
+            if (!s) return null;
+            // Map tags from notes
+            const tags = s.notes ? s.notes.split(',').map(t => t.trim().toLowerCase()).filter(t => t.length > 0) : [];
+            return {
+                id: s.id,
+                name: s.name,
+                url: s.domain,
+                tags: tags
+            };
+        }).filter(s => s !== null);
 
         // Extract all unique tags
         const allTags = new Set();
@@ -4036,8 +4093,8 @@ function loadRightMedia(path) {
     const fullDisplayName = folderName ? (folderName + " / " + fileName) : fileName;
     document.getElementById('right-pane-file-name').textContent = fullDisplayName;
     
-    pywebview.api.get_manga_info(path).then(info => {
-        mangaTranslations = info || {};
+    pywebview.api.get_collection_info(path).then(info => {
+        collectionTranslations = info || {};
         renderTranslations(path);
     });
     
@@ -4352,4 +4409,327 @@ function renderFolderTree(listToRender, currentSubdirs) {
         return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
     });
     tree.children.forEach(child => renderFolderNode(child, 0));
+}
+
+
+const onlineSourcesModal = document.getElementById('online-sources-modal');
+
+function openOnlineSourcesModal() {
+    tempCollectionSites = [...(appState.collection_sites || [])];
+    tempAudioSites = [...(appState.audio_sites || [])];
+    tempStorySites = [...(appState.story_sites || [])];
+
+    onlineSourcesModal.style.display = 'block';
+    renderCollectionSitesEditorList();
+    renderAudioSitesEditorList();
+    renderStorySitesEditorList();
+}
+
+function closeOnlineSourcesModal() {
+    onlineSourcesModal.style.display = 'none';
+}
+
+function renderGridEditorList(containerId, list, addCallback) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    container.innerHTML = '';
+
+    if (list.length === 0) {
+        container.innerHTML = '<div style="color:#888;font-size:11px;padding:5px;">No sites defined.</div>';
+        return;
+    }
+
+    // Header row
+    const header = document.createElement('div');
+    header.style.cssText = 'display:grid;grid-template-columns:1fr 150px 1fr 28px;gap:5px;padding:3px 6px;background:#1e1e2e;border-radius:3px;margin-bottom:3px;font-size:10px;font-weight:bold;color:#888;';
+    header.innerHTML = '<span>Display Name</span><span>Domain / URL</span><span>Notes</span><span></span>';
+    container.appendChild(header);
+
+    list.forEach((site, index) => {
+        const div = document.createElement('div');
+        div.style.cssText = 'display:grid;grid-template-columns:1fr 150px 1fr 28px;gap:5px;align-items:center;padding:4px 6px;border-bottom:1px solid #2a2a3e;font-size:11px;';
+
+        const makeInput = (val, placeholder, onchange) => {
+            const inp = document.createElement('input');
+            inp.type = 'text';
+            inp.value = val || '';
+            inp.placeholder = placeholder;
+            inp.style.cssText = 'width:100%;min-width:0;font-size:11px;background:#1a1a2e;border:1px solid #444;color:#cdd6f4;border-radius:3px;padding:2px 5px;box-sizing:border-box;';
+            inp.oninput = onchange;
+            return inp;
+        };
+
+        const nameInp = makeInput(site.name,   'Display name',  () => { list[index].name = nameInp.value; });
+        const domInp  = makeInput(site.domain, 'Domain or URL', () => { list[index].domain = domInp.value; });
+        const noteInp = makeInput(site.notes,  'Notes / Tags',  () => { list[index].notes = noteInp.value; });
+
+        const delBtn = document.createElement('button');
+        delBtn.textContent = '\u2715';
+        delBtn.title = 'Remove';
+        delBtn.style.cssText = 'background:#e06c75;color:white;border:none;border-radius:3px;cursor:pointer;padding:2px 5px;font-size:11px;width:26px;';
+        delBtn.onclick = () => {
+            list.splice(index, 1);
+            addCallback();
+        };
+
+        div.appendChild(nameInp);
+        div.appendChild(domInp);
+        div.appendChild(noteInp);
+        div.appendChild(delBtn);
+        container.appendChild(div);
+    });
+}
+
+function renderCollectionSitesEditorList() {
+    renderGridEditorList('collection-sites-list', tempCollectionSites, renderCollectionSitesEditorList);
+}
+
+function renderAudioSitesEditorList() {
+    renderGridEditorList('audio-sites-list', tempAudioSites, renderAudioSitesEditorList);
+}
+
+function renderStorySitesEditorList() {
+    renderGridEditorList('story-sites-list', tempStorySites, renderStorySitesEditorList);
+}
+
+function slugify(str) {
+    return str.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || ('site_' + Date.now());
+}
+
+function addGridSite(nameEl, domEl, notesEl, list, renderCallback) {
+    const nameInput = document.getElementById(nameEl);
+    const domInput  = document.getElementById(domEl);
+    const noteInput = document.getElementById(notesEl);
+    if (!nameInput) return;
+    const name = nameInput.value.trim();
+    if (name) {
+        const id = slugify(name);
+        list.push({
+            id,
+            name,
+            domain: domInput ? domInput.value.trim() : '',
+            notes:  noteInput ? noteInput.value.trim() : ''
+        });
+        nameInput.value = '';
+        if (domInput)  domInput.value = '';
+        if (noteInput) noteInput.value = '';
+        renderCallback();
+    } else {
+        alert('Please enter a display name.');
+    }
+}
+
+function addCollectionSiteSource() {
+    addGridSite('new-collection-name', 'new-collection-domain', 'new-collection-notes', tempCollectionSites, renderCollectionSitesEditorList);
+}
+
+function addAudioSiteSource() {
+    addGridSite('new-audio-name', 'new-audio-domain', 'new-audio-notes', tempAudioSites, renderAudioSitesEditorList);
+}
+
+function addStorySiteSource() {
+    addGridSite('new-story-name', 'new-story-domain', 'new-story-notes', tempStorySites, renderStorySitesEditorList);
+}
+
+function guessStorySiteConfig() {
+    const urlInput = document.getElementById('story-config-guesser-url');
+    const url = urlInput.value.trim();
+    if (!url) {
+        alert('Please paste a URL to guess from.');
+        return;
+    }
+
+    const guessBtn = urlInput.nextElementSibling;
+    guessBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Guessing...';
+    guessBtn.disabled = true;
+
+    pywebview.api.guess_story_site_selectors(url).then(res => {
+        guessBtn.innerHTML = 'Guess Config';
+        guessBtn.disabled = false;
+
+        if (res.status === 'success') {
+            const config = res.config;
+            
+            try {
+                const urlObj = new URL(url);
+                let name = urlObj.hostname.replace(/^www\./, '').split('.')[0];
+                name = name.charAt(0).toUpperCase() + name.slice(1);
+                document.getElementById('new-story-name').value = name;
+                document.getElementById('new-story-domain').value = urlObj.origin;
+            } catch(e) { /* ignore if URL is invalid */ }
+
+            document.getElementById('new-story-notes').value = JSON.stringify(config);
+            
+            alert('Successfully guessed configuration! The fields below have been pre-filled. Review and click "Add".');
+        } else {
+            alert('Failed to guess configuration:\n' + res.msg);
+        }
+    });
+}
+
+function saveOnlineSourcesModal() {
+    appState.collection_sites = tempCollectionSites;
+    appState.audio_sites = tempAudioSites;
+    appState.story_sites = tempStorySites;
+
+    pywebview.api.save_online_sources(tempCollectionSites, tempAudioSites, tempStorySites).then(state => {
+        appState = state;
+        closeModals();
+    });
+}
+
+function exportOnlineSourcesFile() {
+    pywebview.api.export_online_sources(tempCollectionSites, tempAudioSites, tempStorySites).then(result => {
+        if (result && result.status === 'ok') {
+            alert('Sources exported to:\n' + result.path);
+        }
+    });
+}
+
+function importOnlineSourcesFile() {
+    pywebview.api.import_online_sources().then(result => {
+        if (result && result.status === 'ok') {
+            tempCollectionSites = result.collection_sites || [];
+            tempAudioSites = result.audio_sites || [];
+            tempStorySites = result.story_sites || [];
+            renderCollectionSitesEditorList();
+            renderAudioSitesEditorList();
+            renderStorySitesEditorList();
+        }
+    });
+}
+const onlineStoriesModal = document.getElementById('online-stories-modal');
+
+function openOnlineStories() {
+    if (onlineStoriesModal) {
+        pywebview.api.get_state().then(state => {
+            appState = state;
+            onlineStoriesModal.style.display = 'flex';
+            renderOnlineStorySources();
+            onStorySourceChanged();
+        });
+    }
+}
+
+function closeOnlineStories() {
+    if (onlineStoriesModal) {
+        onlineStoriesModal.style.display = 'none';
+    }
+}
+
+function renderOnlineStorySources() {
+    const select = document.getElementById('story-source-select');
+    if (!select) return;
+
+    select.innerHTML = '';
+    
+    const sites = appState.story_sites || [];
+    if (sites.length === 0) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = 'No story sites configured';
+        opt.disabled = true;
+        select.appendChild(opt);
+        return;
+    }
+
+    sites.forEach(site => {
+        const opt = document.createElement('option');
+        opt.value = site.id;
+        opt.textContent = site.name;
+        select.appendChild(opt);
+    });
+}
+
+function onStorySourceChanged() {
+    const resultsArea = document.getElementById('online-stories-results-area');
+    if (resultsArea) {
+        resultsArea.innerHTML = `<div style="grid-column: 1 / -1; text-align: center; color: #666; margin-top: 20px;">
+            Enter a search term to begin.
+        </div>`;
+    }
+    const searchInput = document.getElementById('story-search-input');
+    if (searchInput) searchInput.value = '';
+    const status = document.getElementById('online-stories-status');
+    if (status) status.innerText = '';
+}
+
+function searchOnlineStories() {
+    const sourceSelect = document.getElementById('story-source-select');
+    const searchInput = document.getElementById('story-search-input');
+    const resultsArea = document.getElementById('online-stories-results-area');
+    const status = document.getElementById('online-stories-status');
+
+    if (!sourceSelect || !searchInput || !resultsArea || !status) return;
+
+    const sourceId = sourceSelect.value;
+    const query = searchInput.value.trim();
+
+    if (!sourceId) {
+        alert("Please select a site to search.");
+        return;
+    }
+    if (!query) {
+        alert("Please enter a search query.");
+        return;
+    }
+
+    status.innerText = `Searching for "${query}"...`;
+    resultsArea.innerHTML = '';
+
+    pywebview.api.search_online_stories(sourceId, query).then(res => {
+        if (res.status === 'success') {
+            status.innerText = `Found ${res.results.length} results for "${query}"`;
+            renderStoryResults(res.results);
+        } else {
+            status.innerText = `Search failed: ${res.msg}`;
+            resultsArea.innerHTML = `<div style="grid-column: 1 / -1; text-align: center; color: #f38ba8; margin-top: 20px;">
+                Error: ${res.msg}
+            </div>`;
+        }
+    });
+}
+
+function renderStoryResults(results) {
+    const resultsArea = document.getElementById('online-stories-results-area');
+    if (!resultsArea) return;
+    resultsArea.innerHTML = '';
+
+    if (!results || results.length === 0) {
+        resultsArea.innerHTML = `<div style="grid-column: 1 / -1; text-align: center; color: #888; margin-top: 20px;">
+            No stories found matching your search.
+        </div>`;
+        return;
+    }
+
+    results.forEach(item => {
+        const card = document.createElement('div');
+        card.className = 'audio-site-card'; // Re-using this class for similar styling
+        card.style.cursor = 'pointer';
+        card.style.borderColor = 'rgba(250, 179, 135, 0.2)';
+        card.onclick = () => {
+            if (item.url) {
+                pywebview.api.open_external_url(item.url);
+            }
+        };
+
+        const title = document.createElement('div');
+        title.className = 'audio-site-card-title';
+        title.style.color = '#fab387';
+        title.textContent = item.title || 'Untitled Story';
+
+        const author = document.createElement('div');
+        author.className = 'audio-site-card-url'; // Re-using for style
+        author.textContent = item.author ? `by ${item.author}` : '';
+        author.style.color = '#ccc';
+
+        const summary = document.createElement('p');
+        summary.textContent = item.summary || '';
+        summary.style.cssText = 'font-size: 11px; color: #999; margin-top: 8px; text-align: left; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;';
+
+        card.appendChild(title);
+        card.appendChild(author);
+        card.appendChild(summary);
+        resultsArea.appendChild(card);
+    });
 }

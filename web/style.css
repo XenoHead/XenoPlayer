@@ -160,12 +160,12 @@ body, html {
 
 #media-container.align-center,
 #media-container.align-center .pane-content {
-    justify-content: center !important;
+    justify-content: safe center !important;
 }
 
 #media-container.align-right,
 #media-container.align-right .pane-content {
-    justify-content: flex-end !important;
+    justify-content: safe flex-end !important;
 }
 
 #media-container.splash-view,

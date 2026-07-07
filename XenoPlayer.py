@@ -50,7 +50,7 @@ def load_settings():
             with open(SETTINGS_FILE, "r") as f:
                 return json.load(f)
         except: pass
-    return {"favorites": [], "last_video": None, "max_volume": 100, "move_targets": {}, "saved_folders": ["", "", "", "", ""], "external_apps": ["", "", "", "", ""], "default_folder": -1, "hotkeys": {"next": ["ArrowRight", "Space", "", "", ""], "prev": ["ArrowLeft", "", "", "", ""]}, "saved_volumes": {}, "favs_mode": "folder", "manga_sites": [], "audio_sites": [], "online_playlists": {}}
+    return {"favorites": [], "last_video": None, "max_volume": 100, "move_targets": {}, "saved_folders": ["", "", "", "", ""], "external_apps": ["", "", "", "", ""], "default_folder": -1, "hotkeys": {"next": ["ArrowRight", "Space", "", "", ""], "prev": ["ArrowLeft", "", "", "", ""]}, "saved_volumes": {}, "favs_mode": "folder", "collection_sites": [], "audio_sites": [], "online_playlists": {}}
 
 def save_settings(s):
     with open(SETTINGS_FILE, "w") as f:
@@ -261,9 +261,16 @@ class Api:
                 name = p.split('/')[-1]
                 if hasattr(self, 'online_names') and p in self.online_names:
                     name = self.online_names[p]
-                playlist_items.append({"path": p, "name": name})
+                playlist_items.append({"path": p, "name": name, "date": 0, "size": 0})
             else:
-                playlist_items.append({"path": p, "name": os.path.basename(p)})
+                try:
+                    stat = os.stat(p)
+                    date = stat.st_mtime
+                    size = stat.st_size
+                except:
+                    date = 0
+                    size = 0
+                playlist_items.append({"path": p, "name": os.path.basename(p), "date": date, "size": size})
         return playlist_items
 
     def play_current(self):
@@ -290,12 +297,12 @@ class Api:
 
     def get_state(self):
         current_path = self.playlist[self.current_index] if (0 <= self.current_index < len(self.playlist)) else None
-        is_manga = False
+        is_collection = False
         dir_path = ""
         if current_path:
             dir_path = os.path.dirname(current_path)
-            if os.path.exists(os.path.join(dir_path, '.manga')):
-                is_manga = True
+            if os.path.exists(os.path.join(dir_path, '.collection')):
+                is_collection = True
         
         favs_mode = self.settings.get("favs_mode", "folder")
         if favs_mode == "folder":
@@ -303,7 +310,7 @@ class Api:
         else:
             filtered_favs = self.settings.get("favorites", [])
             
-        return {
+        state = {
             "favorites": filtered_favs,
             "move_targets": self.settings.get("move_targets", {}),
             "saved_volumes": self.settings.get("saved_volumes", {}),
@@ -313,14 +320,85 @@ class Api:
             "hotkeys": self.settings.get("hotkeys", {"next": ["ArrowRight", "Space", "", "", ""], "prev": ["ArrowLeft", "", "", "", ""]}),
             "current_path": current_path,
             "is_favorite": current_path in self.settings.get("favorites", []) if current_path else False,
-            "is_manga_folder": is_manga,
+            "is_collection_folder": is_collection,
             "favs_mode": favs_mode,
-            "manga_sites": self.settings.get("manga_sites", []),
+            "collection_sites": self.settings.get("collection_sites", []),
             "audio_sites": self.settings.get("audio_sites", []),
             "online_playlists": self.settings.get("online_playlists", {}),
-            "favorite_manga_tags": self.settings.get("favorite_manga_tags", {"nhentai": [], "danbooru": [], "hentaiyoga": [], "rule34art": [], "ehentai": []}),
+            "favorite_collection_tags": self.settings.get("favorite_collection_tags", {"nhentai": [], "danbooru": [], "hentaiyoga": [], "rule34art": [], "ehentai": []}),
             "recursive_load": self.settings.get("recursive_load", False)
         }
+
+        # Load online sources
+        try:
+            with open('online_sources.json', 'r', encoding='utf-8') as f:
+                import json
+                sources = json.load(f)
+                state["collection_sites"] = sources.get("collection_sites", [])
+                state["audio_sites"] = sources.get("audio_sites", [])
+                state["story_sites"] = sources.get("story_sites", [])
+        except Exception as e:
+            state["collection_sites"] = []
+            state["audio_sites"] = []
+            state["story_sites"] = []
+
+        return state
+
+
+    def save_online_sources(self, collection_sites, audio_sites, story_sites):
+        try:
+            src_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'online_sources.json')
+            with open(src_path, 'w', encoding='utf-8') as f:
+                json.dump({
+                    "collection_sites": collection_sites,
+                    "audio_sites": audio_sites,
+                    "story_sites": story_sites
+                }, f, indent=4)
+        except Exception as e:
+            print(f"Warning: could not save online_sources.json: {e}")
+        return self.get_state()
+
+    def export_online_sources(self, collection_sites, audio_sites, story_sites):
+        try:
+            result = self._window.create_file_dialog(
+                webview.FileDialog.SAVE,
+                directory=os.path.expanduser('~'),
+                save_filename='online_sources.json',
+                file_types=('JSON Files (*.json)', 'All files (*.*)')
+            )
+            if result:
+                path = result[0] if isinstance(result, (list, tuple)) else result
+                with open(path, 'w', encoding='utf-8') as f:
+                    json.dump({
+                        "collection_sites": collection_sites,
+                        "audio_sites": audio_sites,
+                        "story_sites": story_sites
+                    }, f, indent=4)
+                return {"status": "ok", "path": path}
+        except Exception as e:
+            print(f"Export error: {e}")
+        return {"status": "cancelled"}
+
+    def import_online_sources(self):
+        try:
+            result = self._window.create_file_dialog(
+                webview.FileDialog.OPEN,
+                directory=os.path.expanduser('~'),
+                allow_multiple=False,
+                file_types=('JSON Files (*.json)', 'All files (*.*)')
+            )
+            if result and len(result) > 0:
+                with open(result[0], 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                return {
+                    "status": "ok",
+                    "collection_sites": data.get("collection_sites", []),
+                    "audio_sites": data.get("audio_sites", []),
+                    "story_sites": data.get("story_sites", [])
+                }
+        except Exception as e:
+            print(f"Import error: {e}")
+        return {"status": "cancelled"}
 
     def get_dir_tree(self):
         if not self.full_playlist:
@@ -348,7 +426,7 @@ class Api:
         except:
             pass
             
-        return {
+        state = {
             "root": common_root,
             "subdirs": subdirs
         }
@@ -391,12 +469,12 @@ class Api:
             
         return self.get_state()
 
-    def save_options(self, folders, default_index, external_apps=None, favs_mode="folder", manga_sites=None, audio_sites=None, recursive_load=None):
+    def save_options(self, folders, default_index, external_apps=None, favs_mode="folder", collection_sites=None, audio_sites=None, recursive_load=None):
         self.settings["saved_folders"] = folders
         self.settings["default_folder"] = default_index
         if external_apps is not None: self.settings["external_apps"] = external_apps
         self.settings["favs_mode"] = favs_mode
-        if manga_sites is not None: self.settings["manga_sites"] = manga_sites
+        if collection_sites is not None: self.settings["collection_sites"] = collection_sites
         if audio_sites is not None: self.settings["audio_sites"] = audio_sites
         if recursive_load is not None: self.settings["recursive_load"] = recursive_load
         save_settings(self.settings)
@@ -417,42 +495,42 @@ class Api:
         save_settings(self.settings)
         return self.get_state()
 
-    def mark_as_manga(self):
+    def mark_as_collection(self):
         if not self.playlist: return {"status": "error"}
         dir_path = os.path.dirname(self.playlist[0])
-        open(os.path.join(dir_path, ".manga"), 'w').close()
-        known = self.settings.get("known_manga_folders", [])
+        open(os.path.join(dir_path, ".collection"), 'w').close()
+        known = self.settings.get("known_collection_folders", [])
         if dir_path not in known:
             known.append(dir_path)
-            self.settings["known_manga_folders"] = known
+            self.settings["known_collection_folders"] = known
             save_settings(self.settings)
         return self.get_state()
 
-    def unmark_as_manga(self):
+    def unmark_as_collection(self):
         if not self.playlist: return {"status": "error"}
         dir_path = os.path.dirname(self.playlist[0])
-        try: os.remove(os.path.join(dir_path, ".manga"))
+        try: os.remove(os.path.join(dir_path, ".collection"))
         except: pass
-        known = self.settings.get("known_manga_folders", [])
+        known = self.settings.get("known_collection_folders", [])
         if dir_path in known:
             known.remove(dir_path)
-            self.settings["known_manga_folders"] = known
+            self.settings["known_collection_folders"] = known
             save_settings(self.settings)
         return self.get_state()
 
-    def get_manga_info(self, current_path):
+    def get_collection_info(self, current_path):
         if not current_path or not os.path.isfile(current_path): return {}
-        json_path = os.path.join(os.path.dirname(current_path), "manga_info.json")
+        json_path = os.path.join(os.path.dirname(current_path), "collection_info.json")
         if os.path.exists(json_path):
             try:
                 with open(json_path, "r", encoding="utf-8") as f: return json.load(f).get("translations", {})
             except: pass
         return {}
 
-    def save_manga_info(self, current_path, translations):
+    def save_collection_info(self, current_path, translations):
         if not current_path or not os.path.isfile(current_path): return {"status": "error"}
         dir_path = os.path.dirname(current_path)
-        json_path = os.path.join(dir_path, "manga_info.json")
+        json_path = os.path.join(dir_path, "collection_info.json")
         data = {}
         if os.path.exists(json_path):
             try:
@@ -461,11 +539,11 @@ class Api:
         data["translations"] = translations
         try:
             with open(json_path, "w", encoding="utf-8") as f: json.dump(data, f, indent=4)
-            open(os.path.join(dir_path, ".manga"), 'w').close()
-            known = self.settings.get("known_manga_folders", [])
+            open(os.path.join(dir_path, ".collection"), 'w').close()
+            known = self.settings.get("known_collection_folders", [])
             if dir_path not in known:
                 known.append(dir_path)
-                self.settings["known_manga_folders"] = known
+                self.settings["known_collection_folders"] = known
                 save_settings(self.settings)
             return {"status": "success"}
         except Exception as e: return {"status": "error", "msg": str(e)}
@@ -480,7 +558,10 @@ class Api:
     def open_with(self, filepath, app_path):
         import subprocess
         try:
-            subprocess.Popen([app_path, os.path.normpath(filepath)])
+            app_dir = os.path.dirname(app_path)
+            # If the directory is valid and exists, set it as the working directory
+            cwd = app_dir if app_dir and os.path.exists(app_dir) else None
+            subprocess.Popen([app_path, os.path.normpath(filepath)], cwd=cwd)
             return {"status": "ok"}
         except Exception as e: return {"status": "error", "msg": str(e)}
 
@@ -661,20 +742,217 @@ class Api:
         except Exception as e:
             return {"status": "error", "msg": str(e)}
 
-    def rename_manga(self, path, newName):
+    def search_online_stories(self, source_id, query):
+        # Find the site config from settings
+        try:
+            src_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'online_sources.json')
+            with open(src_path, 'r', encoding='utf-8') as f:
+                sources = json.load(f)
+                all_sites = sources.get("story_sites", [])
+        except Exception:
+            all_sites = []
+ 
+        site_config = next((s for s in all_sites if s.get('id') == source_id), None)
+ 
+        if not site_config:
+            return {"status": "error", "msg": f"Could not find configuration for site ID: {source_id}"}
+        
+        notes = site_config.get('notes', '')
+        search_config = {}
+        try:
+            if notes.strip().startswith('{') and notes.strip().endswith('}'):
+                search_config = json.loads(notes)
+        except json.JSONDecodeError:
+            pass # Not a JSON config, just a note.
+
+        parser_type = search_config.get('parser')
+
+        if parser_type == 'ao3':
+            return self._search_ao3(query)
+        elif parser_type == 'generic_html':
+            return self._search_generic_html(query, search_config)
+        
+        return {"status": "error", "msg": "Search not configured for this source. Edit its 'notes' in online_sources.json."}
+
+    def _search_generic_html(self, query, config):
+        try:
+            import requests
+            from bs4 import BeautifulSoup
+            import urllib.parse
+
+            search_url_template = config.get('search_url')
+            if not search_url_template:
+                return {"status": "error", "msg": "search_url not defined in site configuration."}
+            
+            search_url = search_url_template.replace('{query}', urllib.parse.quote(query))
+            
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+            
+            response = requests.get(search_url, headers=headers, timeout=15)
+            if response.status_code != 200:
+                return {"status": "error", "msg": f"Site returned HTTP {response.status_code}"}
+
+            soup = BeautifulSoup(response.text, 'html.parser')
+            results = []
+            
+            results_selector = config.get('results_selector')
+            if not results_selector:
+                return {"status": "error", "msg": "results_selector not defined in site configuration."}
+
+            for item in soup.select(results_selector):
+                title = item.select_one(config['title_selector']).text.strip() if config.get('title_selector') and item.select_one(config['title_selector']) else ""
+                author = item.select_one(config['author_selector']).text.strip() if config.get('author_selector') and item.select_one(config['author_selector']) else ""
+                summary = item.select_one(config['summary_selector']).text.strip() if config.get('summary_selector') and item.select_one(config['summary_selector']) else ""
+                
+                url_el = item.select_one(config['url_selector']) if config.get('url_selector') else item
+                url = url_el['href'] if url_el and url_el.has_attr('href') else ""
+                
+                if not title and url_el: title = url_el.text.strip()
+
+                if not title or not url:
+                    continue
+
+                base_url = config.get('base_url', '')
+                full_url = urllib.parse.urljoin(base_url if base_url else search_url, url)
+
+                results.append({"title": title, "author": author, "summary": summary, "url": full_url})
+            
+            return {"status": "success", "results": results}
+        except Exception as e:
+            return {"status": "error", "msg": str(e)}
+
+    def _search_ao3(self, query):
+        try:
+            import requests
+            from bs4 import BeautifulSoup
+            import urllib.parse
+
+            search_url = f"https://archiveofourown.org/works/search?work_search[query]={urllib.parse.quote(query)}"
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+            
+            response = requests.get(search_url, headers=headers, timeout=15)
+            if response.status_code != 200:
+                return {"status": "error", "msg": f"AO3 returned HTTP {response.status_code}"}
+
+            soup = BeautifulSoup(response.text, 'html.parser')
+            results = []
+            for work in soup.select('li.work'):
+                title_el = work.select_one('h4.heading a:not([rel="author"])') or work.select_one('h4.heading a')
+                author_el = work.select_one('a[rel="author"]')
+                summary_el = work.select_one('blockquote.userstuff.summary')
+                
+                if not title_el: continue
+                
+                results.append({
+                    "title": title_el.text.strip(),
+                    "author": author_el.text.strip() if author_el else "Anonymous",
+                    "summary": summary_el.text.strip() if summary_el else "",
+                    "url": urllib.parse.urljoin("https://archiveofourown.org/", title_el['href'])
+                })
+            
+            return {"status": "success", "results": results}
+        except Exception as e:
+            return {"status": "error", "msg": str(e)}
+
+    def guess_story_site_selectors(self, url):
+        try:
+            import requests
+            from bs4 import BeautifulSoup
+            from collections import Counter
+            import urllib.parse
+            import re
+
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+            response = requests.get(url, headers=headers, timeout=15)
+            soup = BeautifulSoup(response.text, 'html.parser')
+
+            parsed_url = urllib.parse.urlparse(url)
+            query_params = urllib.parse.parse_qs(parsed_url.query)
+            search_term, search_key = "", ""
+            for key, values in query_params.items():
+                if len(values) == 1 and len(values[0]) > 2 and re.search(r'[a-zA-Z]{3,}', values[0]):
+                    search_term, search_key = values[0], key
+                    break
+            
+            search_url = url.replace(search_term, '{query}') if search_term else url
+            base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+
+            # --- New logic to find repeating container elements ---
+            signatures = {}
+            # We look for elements that could be containers. Good containers have several children.
+            for el in soup.find_all(True):
+                children = el.find_all(recursive=False)
+                if len(children) < 2: continue # Skip elements with 0 or 1 child
+
+                # Create a structural signature from the children's tags
+                sig = tuple(sorted([child.name for child in children]))
+
+                if sig not in signatures:
+                    signatures[sig] = []
+                
+                selector = el.name
+                if el.has_attr('class'):
+                    selector += '.' + el['class'][0] # Use only the first class to keep selector general
+                signatures[sig].append(selector)
+
+            best_sig_selectors = []
+            for sig, selectors in signatures.items():
+                if len(selectors) > len(best_sig_selectors) and len(selectors) > 2: # Must repeat at least 3 times
+                    best_sig_selectors = selectors
+            
+            if not best_sig_selectors:
+                return {"status": "error", "msg": "Could not find any repeating element structures on the page. This site may be too complex to auto-configure."}
+
+            results_selector = Counter(best_sig_selectors).most_common(1)[0][0]
+            first_result_item = soup.select_one(results_selector)
+            if not first_result_item:
+                return {"status": "error", "msg": f"Guessed selector '{results_selector}' found no items. The site might use dynamic JS loading."}
+
+            def get_selector(element):
+                if not element: return ""
+                selector = element.name
+                if element.has_attr('class'):
+                    selector += '.' + '.'.join(element['class'])
+                return selector
+
+            title_el = first_result_item.select_one('h1 a, h2 a, h3 a, h4 a')
+            title_selector = get_selector(title_el) if title_el else ""
+            
+            author_selector = ""
+            author_el = first_result_item.select_one('[class*="author"], [id*="author"], a[rel="author"]')
+            if author_el:
+                author_selector = get_selector(author_el)
+
+            summary_selector = ""
+            summary_el = first_result_item.select_one('p, div[class*="summary"], div[class*="description"], div[class*="synopsis"], blockquote')
+            if summary_el:
+                summary_selector = get_selector(summary_el)
+
+            config = {
+                "parser": "generic_html", "search_url": search_url, "base_url": base_url,
+                "results_selector": results_selector, "title_selector": title_selector,
+                "url_selector": title_selector, "author_selector": author_selector,
+                "summary_selector": summary_selector
+            }
+
+            return {"status": "success", "config": config}
+        except Exception as e:
+            return {"status": "error", "msg": str(e)}
+
+    def rename_collection(self, path, newName):
         if not path: return {"status": "error"}
         parent = os.path.dirname(path)
         new_path = os.path.join(parent, newName)
         try:
             os.rename(path, new_path)
-            known = self.settings.get("known_manga_folders", [])
+            known = self.settings.get("known_collection_folders", [])
             if path in known:
                 known[known.index(path)] = new_path
             else:
                 known.append(new_path)
-            self.settings["known_manga_folders"] = known
+            self.settings["known_collection_folders"] = known
             
-            json_path = os.path.join(new_path, "manga_info.json")
+            json_path = os.path.join(new_path, "collection_info.json")
             if os.path.exists(json_path):
                 try:
                     with open(json_path, "r", encoding="utf-8") as f:
@@ -688,29 +966,29 @@ class Api:
         except Exception as e:
             return {"status": "error", "msg": str(e)}
 
-    def unmark_folder_as_manga(self, path):
+    def unmark_folder_as_collection(self, path):
         if not path: return {"status": "error"}
         try:
-            manga_file = os.path.join(path, ".manga")
-            if os.path.exists(manga_file):
-                os.remove(manga_file)
+            collection_file = os.path.join(path, ".collection")
+            if os.path.exists(collection_file):
+                os.remove(collection_file)
         except: pass
-        known = self.settings.get("known_manga_folders", [])
+        known = self.settings.get("known_collection_folders", [])
         if path in known:
             known.remove(path)
-            self.settings["known_manga_folders"] = known
+            self.settings["known_collection_folders"] = known
             save_settings(self.settings)
         return {"status": "success"}
 
-    def open_manga_viewer(self, path):
+    def open_collection_viewer(self, path):
         if not path: return
         directory = os.path.dirname(path) if os.path.isfile(path) else path
         import subprocess
         env = os.environ.copy()
         if getattr(sys, 'frozen', False):
-            subprocess.Popen([sys.executable, "MangaViewer", directory], env=env)
+            subprocess.Popen([sys.executable, "CollectionViewer", directory], env=env)
         else:
-            script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "MangaViewer.py")
+            script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "CollectionViewer.py")
             subprocess.Popen([sys.executable, script, directory], env=env)
         return {"status": "success"}
 
@@ -998,7 +1276,7 @@ class Api:
             "anal", "big breasts", "small breasts", "ponytail", "maid",
             "vanilla", "rape", "mind break", "mosaic censorship", "uncensored",
             "sister", "oppai loli", "flat chest", "twintails", "catgirl",
-            "doujinshi", "manga", "artist cg", "western", "game cg",
+            "doujinshi", "collection", "artist cg", "western", "game cg",
             "swimsuit", "exhibitionism", "public use", "impregnation",
             "harem", "netorare", "femdom", "futanari", "yaoi", "yuri"
         ]
@@ -1007,12 +1285,12 @@ class Api:
             return {"status": "success", "tags": filtered}
         return {"status": "success", "tags": popular_tags}
 
-    def save_favorite_manga_tags(self, tags):
-        self.settings["favorite_manga_tags"] = tags
+    def save_favorite_collection_tags(self, tags):
+        self.settings["favorite_collection_tags"] = tags
         save_settings(self.settings)
         return self.get_state()
 
-    def get_manga_details(self, url, source):
+    def get_collection_details(self, url, source):
         try:
             import requests
             from bs4 import BeautifulSoup
@@ -1061,7 +1339,7 @@ class Api:
             elif source == "hentaiyoga" or "hentai.yoga" in url:
                 for pill in soup.select('.tag-pill .tag-name, .video-tags a, .footer-tag-link'):
                     tags.append(pill.text.strip())
-                img_els = soup.select('img[src*="/manga/"]')
+                img_els = soup.select('img[src*="/collection/"]')
                 if img_els:
                     image_count = str(len(img_els))
                 else:
@@ -1099,22 +1377,22 @@ class Api:
         except Exception as e:
             return {"status": "error", "msg": str(e)}
 
-    def choose_manga_download_dir(self):
+    def choose_collection_download_dir(self):
         result = self._window.create_file_dialog(webview.FileDialog.FOLDER)
         if result and len(result) > 0:
-            self.settings["manga_download_dir"] = result[0]
+            self.settings["collection_download_dir"] = result[0]
             save_settings(self.settings)
             return {"status": "success", "dir": result[0]}
         return {"status": "canceled"}
 
-    def get_manga_download_dir(self):
-        d = self.settings.get("manga_download_dir", "")
+    def get_collection_download_dir(self):
+        d = self.settings.get("collection_download_dir", "")
         if not d:
             base = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
             d = os.path.join(base, "Downloads", "nhentai")
         return {"dir": d}
 
-    def _log_download(self, title, path, media_type="manga", status="success"):
+    def _log_download(self, title, path, media_type="collection", status="success"):
         import time
         history = self.settings.get("download_history", [])
         history.insert(0, {
@@ -1147,14 +1425,14 @@ class Api:
         import string
         valid_chars = "-_.() %s%s" % (string.ascii_letters, string.digits)
         folder_name = ''.join(c for c in title if c in valid_chars)[:50].strip()
-        download_dir = os.path.join(self.get_manga_download_dir()["dir"], folder_name)
+        download_dir = os.path.join(self.get_collection_download_dir()["dir"], folder_name)
         
         def run_download():
             self.cancel_flags[title] = False
             safe_title = title.replace('\\', '\\\\').replace('"', '\\"')
             try:
                 os.makedirs(download_dir, exist_ok=True)
-                open(os.path.join(download_dir, ".manga"), 'w').close()
+                open(os.path.join(download_dir, ".collection"), 'w').close()
                 import subprocess, time
                 cmd = [sys.executable, "gallery_dl_module", "-d", download_dir, url] if getattr(sys, 'frozen', False) else [sys.executable, "-m", "gallery_dl", "-d", download_dir, url]
                 process = subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
@@ -1178,7 +1456,7 @@ class Api:
                             os.rmdir(root)
                         except: pass
                 
-                self._log_download(title, download_dir, "manga")
+                self._log_download(title, download_dir, "collection")
                 self._window.evaluate_js(f'downloadComplete("{download_dir.replace("\\", "\\\\")}", "{safe_title}")')
             except Exception as e:
                 self._window.evaluate_js(f'downloadFailed("{str(e).replace("\\", "\\\\")}", "{safe_title}")')
@@ -1196,7 +1474,7 @@ class Api:
         if not folder_name:
             folder_name = "Danbooru_Post"
             
-        download_dir = os.path.join(self.get_manga_download_dir()["dir"], folder_name)
+        download_dir = os.path.join(self.get_collection_download_dir()["dir"], folder_name)
         
         def run_download():
             self.cancel_flags[title] = False
@@ -1206,7 +1484,7 @@ class Api:
                 headers = {'User-Agent': 'XenoPlayer/1.0 (contact@xenohead.com)'}
                 
                 os.makedirs(download_dir, exist_ok=True)
-                open(os.path.join(download_dir, ".manga"), 'w').close()
+                open(os.path.join(download_dir, ".collection"), 'w').close()
                 
                 api_url = url + ".json" if not url.endswith(".json") else url
                 r = requests.get(api_url, headers=headers, timeout=15)
@@ -1243,7 +1521,7 @@ class Api:
                                     last_reported = downloaded_size
                                     self._window.evaluate_js(f'updateDownloadProgress({downloaded_size}, {total_size}, "{safe_title}")')
                     
-                    self._log_download(title, download_dir, "manga")
+                    self._log_download(title, download_dir, "collection")
                     self._window.evaluate_js(f'downloadComplete("{download_dir.replace("\\", "\\\\")}", "{safe_title}")')
                 else:
                     raise Exception(f"Failed to fetch image: HTTP {img_r.status_code}")
@@ -1259,7 +1537,7 @@ class Api:
         import os
         valid_chars = "-_.() %s%s" % (string.ascii_letters, string.digits)
         folder_name = ''.join(c for c in title if c in valid_chars)[:50].strip()
-        download_dir = os.path.join(self.get_manga_download_dir()["dir"], folder_name)
+        download_dir = os.path.join(self.get_collection_download_dir()["dir"], folder_name)
         
         def run_download():
             self.cancel_flags[title] = False
@@ -1277,7 +1555,7 @@ class Api:
                 headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
                 
                 os.makedirs(download_dir, exist_ok=True)
-                open(os.path.join(download_dir, ".manga"), 'w').close()
+                open(os.path.join(download_dir, ".collection"), 'w').close()
 
                 try:
                     import cloudscraper
@@ -1382,10 +1660,10 @@ class Api:
                                 chap_soup = BeautifulSoup(chap_r.text, 'html.parser')
                                 chap_title = f"{title} - Ch {idx+1}"
                                 self.cancel_flags[chap_title] = False
-                                found = self._download_manga_soup_images(chap_soup, chap_url, download_dir, headers, prefix=f"c{idx+1}_", title=chap_title, scraper=scraper)
+                                found = self._download_collection_soup_images(chap_soup, chap_url, download_dir, headers, prefix=f"c{idx+1}_", title=chap_title, scraper=scraper)
                                 if found: img_downloaded = True
                     else:
-                        found = self._download_manga_soup_images(soup, url, download_dir, headers, title=title, scraper=scraper)
+                        found = self._download_collection_soup_images(soup, url, download_dir, headers, title=title, scraper=scraper)
                         if found: img_downloaded = True
                         
                     if media_type == "img" and not img_downloaded:
@@ -1394,7 +1672,7 @@ class Api:
                 if not vid_downloaded and not img_downloaded:
                     raise Exception("No matching media found for the selected type.")
                     
-                self._log_download(title, download_dir, "manga")
+                self._log_download(title, download_dir, "collection")
                 self._window.evaluate_js(f'downloadComplete("{download_dir.replace("\\", "\\\\")}", "{safe_title}")')
             except Exception as e:
                 self._window.evaluate_js(f'downloadFailed("{str(e).replace("\\", "\\\\")}", "{safe_title}")')
@@ -1402,7 +1680,7 @@ class Api:
         threading.Thread(target=run_download, daemon=True).start()
         return {"status": "started"}
 
-    def _download_manga_soup_images(self, soup, page_url, download_dir, headers, prefix="", title="", scraper=None):
+    def _download_collection_soup_images(self, soup, page_url, download_dir, headers, prefix="", title="", scraper=None):
         self.cancel_flags[title] = False
         if not scraper:
             try:
@@ -1421,12 +1699,12 @@ class Api:
             src = img.get('src') or img.get('data-src') or img.get('data-lazy-src')
             if src:
                 full_src = urllib.parse.urljoin(page_url, src)
-                if "cdn.hentai.yoga/manga/" in full_src or "cdn2.hentai.yoga/manga/" in full_src or re.search(r'chapter-\d+-\d+\.(jpg|jpeg|png|webp)', full_src):
+                if "cdn.hentai.yoga/collection/" in full_src or "cdn2.hentai.yoga/collection/" in full_src or re.search(r'chapter-\d+-\d+\.(jpg|jpeg|png|webp)', full_src):
                     if full_src not in images:
                         images.append(full_src)
                         
         if not images:
-            found_imgs = re.findall(r'https?://cdn\d*\.hentai\.yoga/manga/[^\s"\']+\.(?:jpg|jpeg|png|webp)', str(soup))
+            found_imgs = re.findall(r'https?://cdn\d*\.hentai\.yoga/collection/[^\s"\']+\.(?:jpg|jpeg|png|webp)', str(soup))
             for img in found_imgs:
                 if img not in images:
                     images.append(img)
@@ -1464,7 +1742,7 @@ class Api:
         if not folder_name:
             folder_name = "Rule34Art_Comic"
             
-        download_dir = os.path.join(self.get_manga_download_dir()["dir"], folder_name)
+        download_dir = os.path.join(self.get_collection_download_dir()["dir"], folder_name)
         
         def run_download():
             self.cancel_flags[title] = False
@@ -1484,7 +1762,7 @@ class Api:
                     
                 headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
                 os.makedirs(download_dir, exist_ok=True)
-                open(os.path.join(download_dir, ".manga"), 'w').close()
+                open(os.path.join(download_dir, ".collection"), 'w').close()
                 
                 current_url = url
                 images = []
@@ -1619,7 +1897,7 @@ class Api:
                 if successful_downloads == 0:
                     raise Exception("Failed to fetch images. Access denied by server/Cloudflare.")
                     
-                self._log_download(title, download_dir, "manga")
+                self._log_download(title, download_dir, "collection")
                 self._window.evaluate_js(f'downloadComplete("{download_dir.replace("\\", "\\\\")}", "{safe_title}")')
             except Exception as e:
                 self._window.evaluate_js(f'downloadFailed("{str(e).replace("\\", "\\\\")}", "{safe_title}")')
@@ -1628,10 +1906,10 @@ class Api:
         return {"status": "started"}
 
 
-    def get_manga_library(self):
-        known = self.settings.get("known_manga_folders", [])
+    def get_collection_library(self):
+        known = self.settings.get("known_collection_folders", [])
         library = []
-        dl_dir = self.get_manga_download_dir()["dir"]
+        dl_dir = self.get_collection_download_dir()["dir"]
         
         # Auto-scan Download Locations Safely
         for parent in [dl_dir] + self.settings.get("saved_folders", []):
@@ -1640,7 +1918,7 @@ class Api:
                     for sub in os.listdir(parent):
                         fp = os.path.join(parent, sub)
                         if os.path.isdir(fp) and fp not in known:
-                            if os.path.exists(os.path.join(fp, ".manga")) or os.path.exists(os.path.join(fp, "manga_info.json")):
+                            if os.path.exists(os.path.join(fp, ".collection")) or os.path.exists(os.path.join(fp, "collection_info.json")):
                                 known.append(fp)
                 except: pass
 
@@ -1649,7 +1927,7 @@ class Api:
             if os.path.exists(d) and os.path.isdir(d):
                 valid_known.append(d)
                 name = os.path.basename(d)
-                json_path = os.path.join(d, "manga_info.json")
+                json_path = os.path.join(d, "collection_info.json")
                 if os.path.exists(json_path):
                     try:
                         with open(json_path, "r", encoding="utf-8") as f:
@@ -1671,15 +1949,15 @@ class Api:
                 
                 library.append({"path": d, "name": name, "thumb": first_image, "mtime": mtime, "page_count": page_count})
                 
-        self.settings["known_manga_folders"] = valid_known
+        self.settings["known_collection_folders"] = valid_known
         save_settings(self.settings)
         return {"status": "success", "library": library}
 
-    def delete_manga_folder(self, path):
+    def delete_collection_folder(self, path):
         if not path: return {"status": "error"}
-        known = self.settings.get("known_manga_folders", [])
+        known = self.settings.get("known_collection_folders", [])
         if path in known: known.remove(path)
-        self.settings["known_manga_folders"] = known
+        self.settings["known_collection_folders"] = known
         save_settings(self.settings)
         if os.path.exists(path) and os.path.isdir(path):
             try:
@@ -1815,7 +2093,7 @@ class Api:
             if self.playlist: self.play_current()
         return {"status": "success", "msg": f"Deleted {deleted} duplicates."}
 
-    def clean_manga_directory(self):
+    def clean_collection_directory(self):
         result = self._window.create_file_dialog(webview.FileDialog.FOLDER)
         if not result or len(result) == 0:
             return {"status": "canceled"}
@@ -1852,16 +2130,16 @@ class Api:
             for root, dirs, files in os.walk(target_dir, topdown=False):
                 if root != target_dir:
                     contents = os.listdir(root)
-                    if not contents or (len(contents) == 1 and contents[0] == ".manga"):
+                    if not contents or (len(contents) == 1 and contents[0] == ".collection"):
                         try:
-                            if contents and contents[0] == ".manga":
-                                os.remove(os.path.join(root, ".manga"))
+                            if contents and contents[0] == ".collection":
+                                os.remove(os.path.join(root, ".collection"))
                             os.rmdir(root)
                             deleted_folders_count += 1
                         except:
                             pass
                             
-            return {
+            state = {
                 "status": "success", 
                 "msg": f"Cleaned successfully!\n\nMoved {flattened_count} files up and deleted {deleted_folders_count} empty folders."
             }
@@ -1988,4 +2266,4 @@ if __name__ == '__main__':
     html_path = resource_path(os.path.join('web', 'index.html'))
     window = webview.create_window('XenoPlayer', html_path, js_api=api, width=1000, height=700, maximized=True)
     api._window = window
-    webview.start(debug=True)
+    webview.start(debug=False)
