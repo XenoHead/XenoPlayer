@@ -1,10 +1,15 @@
-const videoPlayer = document.getElementById('video-player');
-videoPlayer.crossOrigin = "anonymous";
-const imageViewer = document.getElementById('image-viewer');
-const playlistContainer = document.getElementById('playlist');
-const fileNameDisplay = document.getElementById('current-file-name');
-fileNameDisplay.style.fontWeight = 'bold';
-fileNameDisplay.style.color = 'lightblue';
+let videoPlayer, imageViewer, playlistContainer, fileNameDisplay, playBtn, prevBtn, nextBtn, cm, mlCm, omCm, mediaContainer, selectionBox, transContainer, loadingOverlay, observer;
+let normBtn, thresholdSlider, gainSlider, normContainer;
+
+videoPlayer = document.getElementById('video-player');
+if (videoPlayer) videoPlayer.crossOrigin = "anonymous";
+imageViewer = document.getElementById('image-viewer');
+playlistContainer = document.getElementById('playlist');
+fileNameDisplay = document.getElementById('current-file-name');
+if (fileNameDisplay) {
+    fileNameDisplay.style.fontWeight = 'bold';
+    fileNameDisplay.style.color = 'lightblue';
+}
 
 // --- Style Injection for Correct Alignment ---
 // This corrects layout issues by injecting a style block directly,
@@ -80,10 +85,10 @@ const alignmentStyles = `
     }
 `;
 
-const playBtn = document.getElementById('play-btn');
+playBtn = document.getElementById('play-btn');
 
 // Dynamically create Previous and Next buttons for the media controls
-const prevBtn = document.createElement('button');
+prevBtn = document.createElement('button');
 prevBtn.className = playBtn.className;
 prevBtn.innerHTML = '<i class="fa-solid fa-backward-step"></i>';
 prevBtn.style.marginRight = '10px';
@@ -92,7 +97,7 @@ prevBtn.title = "Previous Media";
 prevBtn.onclick = () => handlePrevMedia();
 playBtn.parentNode.insertBefore(prevBtn, playBtn);
 
-const nextBtn = document.createElement('button');
+nextBtn = document.createElement('button');
 nextBtn.className = playBtn.className;
 nextBtn.innerHTML = '<i class="fa-solid fa-forward-step"></i>';
 nextBtn.style.marginLeft = '10px';
@@ -150,9 +155,9 @@ function handleNextMedia() {
     }
 }
 
-const cm = document.getElementById('context-menu');
-const mlCm = document.getElementById('collection-library-context-menu');
-const omCm = document.getElementById('online-media-context-menu');
+cm = document.getElementById('context-menu');
+mlCm = document.getElementById('collection-library-context-menu');
+omCm = document.getElementById('online-media-context-menu');
 
 window.addEventListener('click', () => {
     if (cm) cm.style.display = 'none';
@@ -164,6 +169,121 @@ window.addEventListener('contextmenu', e => e.preventDefault());
 let appState = {};
 
 window.addEventListener('pywebviewready', function () {
+    // --- DOM Element Assignments ---
+    videoPlayer = document.getElementById('video-player');
+    imageViewer = document.getElementById('image-viewer');
+    playlistContainer = document.getElementById('playlist');
+    fileNameDisplay = document.getElementById('current-file-name');
+    playBtn = document.getElementById('play-btn');
+    cm = document.getElementById('context-menu');
+    mlCm = document.getElementById('collection-library-context-menu');
+    omCm = document.getElementById('online-media-context-menu');
+    mediaContainer = document.getElementById('media-container');
+    selectionBox = document.getElementById('selection-box');
+    transContainer = document.getElementById('translations-container');
+    loadingOverlay = document.getElementById('collection-loading');
+    normContainer = document.getElementById('norm-controls-container');
+
+    // --- Initial Element Setup ---
+    videoPlayer.crossOrigin = "anonymous";
+    fileNameDisplay.style.fontWeight = 'bold';
+    fileNameDisplay.style.color = 'lightblue';
+
+    // --- Dynamic Element Creation ---
+    prevBtn = document.createElement('button');
+    prevBtn.className = playBtn.className;
+    prevBtn.innerHTML = '<i class="fa-solid fa-backward-step"></i>';
+    prevBtn.style.marginRight = '10px';
+    prevBtn.style.cursor = 'pointer';
+    prevBtn.title = "Previous Media";
+    prevBtn.onclick = () => handlePrevMedia();
+    playBtn.parentNode.insertBefore(prevBtn, playBtn);
+
+    nextBtn = document.createElement('button');
+    nextBtn.className = playBtn.className;
+    nextBtn.innerHTML = '<i class="fa-solid fa-forward-step"></i>';
+    nextBtn.style.marginLeft = '10px';
+    nextBtn.style.cursor = 'pointer';
+    nextBtn.title = "Next Media";
+    nextBtn.onclick = () => handleNextMedia();
+    playBtn.parentNode.insertBefore(nextBtn, playBtn.nextSibling);
+
+    // Setup Audio Normalization controls inside floating window
+    const ncc = document.getElementById('norm-controls-container');
+    if (ncc && normContainer) {
+        ncc.innerHTML = '';
+        
+        normContainer.style.display = 'flex';
+        normContainer.style.flexDirection = 'column';
+        normContainer.style.gap = '10px';
+        normContainer.style.marginLeft = '0px';
+        normContainer.style.color = 'white';
+        
+        normBtn.style.padding = '6px 10px';
+        normBtn.style.borderRadius = '3px';
+        normBtn.style.border = 'none';
+        normBtn.style.background = '#4CAF50';
+        normBtn.style.color = 'white';
+        normBtn.style.cursor = 'pointer';
+        normBtn.style.width = '100%';
+        normBtn.style.fontWeight = 'bold';
+        normBtn.style.marginLeft = '0px';
+        
+        const row1 = document.createElement('div');
+        row1.style.display = 'flex';
+        row1.style.justifyContent = 'space-between';
+        row1.style.alignItems = 'center';
+        thresholdSlider.style.width = '120px';
+        thresholdSlider.style.cursor = 'pointer';
+        
+        // Find existing label or create if needed
+        const threshLabel = normContainer.querySelector('span') || document.createElement('span');
+        threshLabel.innerText = 'Loud:';
+        threshLabel.style.fontSize = '12px';
+        
+        row1.appendChild(threshLabel);
+        row1.appendChild(thresholdSlider);
+        
+        const row2 = document.createElement('div');
+        row2.style.display = 'flex';
+        row2.style.justifyContent = 'space-between';
+        row2.style.alignItems = 'center';
+        gainSlider.style.width = '120px';
+        gainSlider.style.cursor = 'pointer';
+        
+        const gainLabel = document.createElement('span');
+        gainLabel.innerText = 'Quiet:';
+        gainLabel.style.fontSize = '12px';
+        
+        row2.appendChild(gainLabel);
+        row2.appendChild(gainSlider);
+        
+        normContainer.innerHTML = '';
+        normContainer.appendChild(normBtn);
+        normContainer.appendChild(row1);
+        normContainer.appendChild(row2);
+        
+        ncc.appendChild(normContainer);
+    }
+
+    // --- Initialize IntersectionObserver for lazy loading ---
+    observer = new IntersectionObserver((entries, observer) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                const img = entry.target;
+                if (img.dataset.src) {
+                    img.src = img.dataset.src;
+                    img.removeAttribute('data-src');
+                }
+                observer.unobserve(img);
+            }
+        });
+    }, { root: playlistContainer, rootMargin: '50px' });
+
+    // --- Attach Event Listeners ---
+    attachEventListeners();
+
+    // --- App Initialization ---
     pywebview.api.get_startup_info().then(info => {
         if (info && info.art_path) {
             // Display the startup image
@@ -198,6 +318,79 @@ window.addEventListener('pywebviewready', function () {
     styleSheet.innerText = alignmentStyles;
     document.head.appendChild(styleSheet);
     updateViewMenuCheckmarks();
+
+    // Create extra viewers for split screen mode
+    leftImage = imageViewer.cloneNode(true);
+    leftImage.id = 'left-image-viewer';
+    document.getElementById('left-split-pane').appendChild(leftImage);
+
+    rightVideo = videoPlayer.cloneNode(true);
+    rightVideo.id = 'right-video-player';
+    document.getElementById('right-split-pane').appendChild(rightVideo);
+    
+    rightVideo.addEventListener('loadedmetadata', updateMediaDimensions);
+    rightVideo.addEventListener('timeupdate', () => {});
+    rightVideo.addEventListener('ended', handleNextMedia);
+
+    leftTextViewer = document.createElement('div');
+    leftTextViewer.id = 'left-text-viewer';
+    leftTextViewer.className = 'text-viewer-content';
+    document.getElementById('left-split-pane').appendChild(leftTextViewer);
+
+    rightTextViewer = document.createElement('div');
+    rightTextViewer.id = 'right-text-viewer';
+    rightTextViewer.className = 'text-viewer-content';
+    document.getElementById('right-split-pane').appendChild(rightTextViewer);
+
+    // Create and add pane type selectors
+    const leftHeader = document.getElementById('left-pane-header');
+    if (leftHeader) leftHeader.appendChild(createPaneTypeSelector('left'));
+    const rightHeader = document.getElementById('right-pane-header');
+    if (rightHeader) rightHeader.appendChild(createPaneTypeSelector('right'));
+
+    // Add prominent close buttons to online modals
+    addStandardCloseButton('online-media-modal', closeOnlineMedia);
+    addStandardCloseButton('online-audio-modal', closeOnlineAudio);
+    addStandardCloseButton('online-stories-modal', closeOnlineStories);
+    addStandardCloseButton('online-sources-modal', closeOnlineSourcesModal);
+    addStandardCloseButton('collection-library-modal', closeCollectionLibrary);
+
+    // Setup Draggables
+    const sidebar = document.getElementById('sidebar');
+    const sidebarHeader = document.getElementById('sidebar-header');
+    if (sidebarHeader && sidebar) {
+        sidebarHeader.addEventListener('mousedown', (e) => {
+            if (!sidebar.classList.contains('floating')) return;
+            if (e.target.closest('button, input, select, a')) return;
+            if (e.button !== 0) return;
+            let isDraggingSidebar = true;
+            let dragStartX = e.clientX;
+            let dragStartY = e.clientY;
+            const rect = sidebar.getBoundingClientRect();
+            let sidebarStartX = rect.left;
+            let sidebarStartY = rect.top;
+            e.preventDefault();
+            
+            const onMouseMove = (moveE) => {
+                if (!isDraggingSidebar) return;
+                const dx = moveE.clientX - dragStartX;
+                const dy = moveE.clientY - dragStartY;
+                sidebar.style.left = (sidebarStartX + dx) + 'px';
+                sidebar.style.top = (sidebarStartY + dy) + 'px';
+                sidebar.style.bottom = 'auto';
+            };
+            const onMouseUp = () => {
+                isDraggingSidebar = false;
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+            };
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+        });
+    }
+
+    makeDraggable(document.getElementById('audio-norm-window'), document.getElementById('audio-norm-header'));
+    makeDraggable(document.getElementById('translate-settings-window'), document.getElementById('translate-settings-header'));
 });
 
 function loadMedia(path, index) {
@@ -1249,7 +1442,7 @@ function updatePlaylist() {
     });
 }
 
-const observer = new IntersectionObserver((entries, observer) => {
+observer = new IntersectionObserver((entries, observer) => {
     entries.forEach(entry => {
         if (entry.isIntersecting) {
             const img = entry.target;
@@ -1756,16 +1949,18 @@ window.addEventListener('mousedown', e => {
 });
 
 // --- Collection Translation Features ---
-const mediaContainer = document.getElementById('media-container');
-const selectionBox = document.getElementById('selection-box');
-const transContainer = document.getElementById('translations-container');
-const loadingOverlay = document.getElementById('collection-loading');
+mediaContainer = document.getElementById('media-container');
+selectionBox = document.getElementById('selection-box');
+transContainer = document.getElementById('translations-container');
+loadingOverlay = document.getElementById('collection-loading');
 
 let isDrawing = false;
 let startX = 0, startY = 0;
 
 mediaContainer.addEventListener('mousedown', e => {
-    if (imageViewer.style.display === 'none') return;
+    const isLeftImgVisible = leftImage && leftImage.style.display !== 'none' && leftImage.offsetParent;
+    const isRightImgVisible = imageViewer && imageViewer.style.display !== 'none' && imageViewer.offsetParent;
+    if (!isLeftImgVisible && !isRightImgVisible) return;
     if (e.target.closest('.collection-translation-box')) return; // Don't draw if clicking on existing box
 
     isDrawing = true;
@@ -1808,14 +2003,34 @@ mediaContainer.addEventListener('mouseup', e => {
 
     if (selWidth < 10 || selHeight < 10) return; // Too small
 
-    const imgRect = imageViewer.getBoundingClientRect();
+    // Determine which image viewer the selection was made on
+    let activeImg = null;
+    const selCenterX = selLeft + selWidth / 2 + rect.left;
+    const selCenterY = selTop + selHeight / 2 + rect.top;
+    if (leftImage && leftImage.style.display !== 'none' && leftImage.offsetParent) {
+        const imgRect = leftImage.getBoundingClientRect();
+        if (selCenterX >= imgRect.left && selCenterX <= imgRect.right && selCenterY >= imgRect.top && selCenterY <= imgRect.bottom) {
+            activeImg = leftImage;
+        }
+    }
+    if (!activeImg && imageViewer && imageViewer.style.display !== 'none' && imageViewer.offsetParent) {
+        const imgRect = imageViewer.getBoundingClientRect();
+        if (selCenterX >= imgRect.left && selCenterX <= imgRect.right && selCenterY >= imgRect.top && selCenterY <= imgRect.bottom) {
+            activeImg = imageViewer;
+        }
+    }
+    if (!activeImg) return;
+
+    const imgRect = activeImg.getBoundingClientRect();
     // Calculate relative to the image element
     const relX = (selLeft + rect.left) - imgRect.left;
     const relY = (selTop + rect.top) - imgRect.top;
 
     if (relX < 0 || relY < 0 || relX > imgRect.width || relY > imgRect.height) return; // Outside image
 
-    const ocrMode = document.getElementById('ocr-mode').value;
+    const ocrMode = document.getElementById('ocr-mode')?.value || 'Japanese (Manga OCR)';
+    const targetLang = document.getElementById('target-lang')?.value || 'English (en)';
+    const ocrSourceLang = document.getElementById('ocr-source-lang')?.value || 'auto';
     const currentPath = appState.current_path || playlist[currentIndex].path;
 
     loadingOverlay.style.display = 'block';
@@ -1824,7 +2039,9 @@ mediaContainer.addEventListener('mouseup', e => {
         currentPath,
         relX, relY, selWidth, selHeight,
         ocrMode,
-        imgRect.width, imgRect.height
+        imgRect.width, imgRect.height,
+        targetLang,
+        ocrSourceLang
     ).then(res => {
         loadingOverlay.style.display = 'none';
         if (res.status === 'success') {
@@ -1838,32 +2055,35 @@ mediaContainer.addEventListener('mouseup', e => {
             });
 
             pywebview.api.save_collection_info(currentPath, collectionTranslations);
-            renderTranslations(currentPath);
+            renderTranslations(currentPath, activeImg);
         } else {
             alert("Translation failed: " + res.msg);
         }
     });
 });
 
-function renderTranslations(path) {
+function renderTranslations(path, targetViewer) {
     transContainer.innerHTML = '';
     const filename = path.split('\\').pop().split('/').pop();
     const transList = collectionTranslations[filename] || [];
 
-    const imgRect = imageViewer.getBoundingClientRect();
+    const activeImageViewer = targetViewer || ((imageViewer.style.display !== 'none') ? imageViewer : leftImage);
+    if (!activeImageViewer) return;
+
+    const imgRect = activeImageViewer.getBoundingClientRect();
     const containerRect = mediaContainer.getBoundingClientRect();
 
     if (imgRect.width === 0) {
         // Image not loaded yet, retry shortly
-        setTimeout(() => renderTranslations(path), 100);
+        setTimeout(() => renderTranslations(path, targetViewer), 100);
         return;
     }
 
     // The actual image size
-    const natW = imageViewer.naturalWidth;
-    const natH = imageViewer.naturalHeight;
-    const ratioW = imgRect.width / natW;
-    const ratioH = imgRect.height / natH;
+    const natW = activeImageViewer.naturalWidth;
+    const natH = activeImageViewer.naturalHeight;
+    const ratioW = natW > 0 ? imgRect.width / natW : 0;
+    const ratioH = natH > 0 ? imgRect.height / natH : 0;
 
     transList.forEach((t, i) => {
         const box = document.createElement('div');
@@ -1877,8 +2097,11 @@ function renderTranslations(path) {
 
         // Position relative to mediaContainer
         box.style.position = 'absolute';
-        box.style.left = (imageViewer.offsetLeft + dispX) + 'px';
-        box.style.top = (imageViewer.offsetTop + dispY) + 'px';
+        const boxX = imgRect.left - containerRect.left + dispX + mediaContainer.scrollLeft;
+        const boxY = imgRect.top - containerRect.top + dispY + mediaContainer.scrollTop;
+
+        box.style.left = boxX + 'px';
+        box.style.top = boxY + 'px';
         box.style.minWidth = dispW + 'px';
 
         box.style.background = 'rgba(0, 0, 0, 0.8)';
@@ -1918,7 +2141,7 @@ function renderTranslations(path) {
         delBtn.onclick = () => {
             collectionTranslations[filename].splice(i, 1);
             pywebview.api.save_collection_info(path, collectionTranslations);
-            renderTranslations(path);
+            renderTranslations(path, targetViewer);
         };
 
         box.appendChild(delBtn);
@@ -1933,8 +2156,16 @@ function renderTranslations(path) {
 
 // Update translations position when window resizes
 window.addEventListener('resize', () => {
-    if (imageViewer.style.display !== 'none' && playlist[currentIndex]) {
-        renderTranslations(playlist[currentIndex].path);
+    // Re-render for any visible image viewers
+    if (splitScreenActive) {
+        if (leftImage.style.display !== 'none' && leftPlaylist[leftCurrentIndex]) {
+            renderTranslations(leftPlaylist[leftCurrentIndex].path, leftImage);
+        }
+        if (imageViewer.style.display !== 'none' && rightPlaylist[rightCurrentIndex]) {
+            renderTranslations(rightPlaylist[rightCurrentIndex].path, imageViewer);
+        }
+    } else if (imageViewer.style.display !== 'none' && playlist[currentIndex]) {
+        renderTranslations(playlist[currentIndex].path, imageViewer);
     }
 });
 
@@ -2750,7 +2981,8 @@ let makeupGainNode = null;
 let isNormalized = true;
 
 // Create the toggle button dynamically and place it next to the play button
-const normBtn = document.createElement('button');
+// Create the toggle button dynamically
+normBtn = document.createElement('button');
 normBtn.innerHTML = 'Norm: ON';
 normBtn.style.padding = '5px 10px';
 normBtn.style.marginLeft = '10px';
@@ -2760,7 +2992,7 @@ normBtn.style.background = '#4CAF50';
 normBtn.style.color = 'white';
 normBtn.style.cursor = 'pointer';
 
-const normContainer = document.createElement('div');
+normContainer = document.createElement('div');
 normContainer.style.display = 'inline-flex';
 normContainer.style.alignItems = 'center';
 normContainer.style.marginLeft = '10px';
@@ -2771,7 +3003,7 @@ const threshLabel = document.createElement('span');
 threshLabel.innerText = 'Loud:';
 threshLabel.style.fontSize = '12px';
 
-const thresholdSlider = document.createElement('input');
+thresholdSlider = document.createElement('input');
 thresholdSlider.type = 'range';
 thresholdSlider.min = '-60';
 thresholdSlider.max = '0';
@@ -2783,7 +3015,7 @@ const gainLabel = document.createElement('span');
 gainLabel.innerText = 'Quiet:';
 gainLabel.style.fontSize = '12px';
 
-const gainSlider = document.createElement('input');
+gainSlider = document.createElement('input');
 gainSlider.type = 'range';
 gainSlider.min = '0.5';
 gainSlider.max = '4.0';
@@ -2797,8 +3029,6 @@ normContainer.appendChild(threshLabel);
 normContainer.appendChild(thresholdSlider);
 normContainer.appendChild(gainLabel);
 normContainer.appendChild(gainSlider);
-
-playBtn.parentNode.insertBefore(normContainer, nextBtn.nextSibling);
 
 normBtn.addEventListener('click', () => {
     isNormalized = !isNormalized;
@@ -4732,4 +4962,191 @@ function renderStoryResults(results) {
         card.appendChild(summary);
         resultsArea.appendChild(card);
     });
+}
+
+// --- Added Helper/UI Functions ---
+
+function toggleSidebarControls() {
+    const controls = document.getElementById('sidebar-controls');
+    if (!controls) return;
+    if (controls.style.display === 'none') {
+        controls.style.display = '';
+    } else {
+        controls.style.display = 'none';
+    }
+}
+
+function toggleSidebarCollapse() {
+    const sidebar = document.getElementById('sidebar');
+    if (!sidebar) return;
+    sidebar.classList.toggle('collapsed');
+    
+    const btn = document.getElementById('sidebar-collapse-btn');
+    if (btn) {
+        const icon = btn.querySelector('i');
+        if (sidebar.classList.contains('collapsed')) {
+            icon.className = 'fa-solid fa-chevron-down';
+        } else {
+            icon.className = 'fa-solid fa-chevron-up';
+        }
+    }
+}
+
+function toggleAudioNormWindow() {
+    const win = document.getElementById('audio-norm-window');
+    if (!win) return;
+    if (win.style.display === 'none') {
+        win.style.display = 'block';
+    } else {
+        win.style.display = 'none';
+    }
+}
+
+let languagesLoaded = false;
+function loadAvailableLanguages() {
+    if (languagesLoaded) return;
+    pywebview.api.get_available_languages().then(res => {
+        if (res && res.status === 'success') {
+            const fromSelect = document.getElementById('model-from');
+            const toSelect = document.getElementById('model-to');
+            if (fromSelect && toSelect) {
+                fromSelect.innerHTML = '';
+                toSelect.innerHTML = '';
+                res.languages.forEach(lang => {
+                    const optFrom = document.createElement('option');
+                    optFrom.value = lang.code;
+                    optFrom.textContent = lang.name;
+                    if (lang.code === 'ja') optFrom.selected = true;
+                    fromSelect.appendChild(optFrom);
+
+                    const optTo = document.createElement('option');
+                    optTo.value = lang.code;
+                    optTo.textContent = lang.name;
+                    if (lang.code === 'en') optTo.selected = true;
+                    toSelect.appendChild(optTo);
+                });
+                languagesLoaded = true;
+            }
+        }
+    });
+}
+
+let tesseractLangsLoaded = false;
+function loadTesseractLanguages() {
+    if (tesseractLangsLoaded) return;
+    pywebview.api.get_tesseract_languages().then(res => {
+        if (res && res.status === 'success') {
+            const sourceSelect = document.getElementById('ocr-source-lang');
+            if (sourceSelect) {
+                sourceSelect.innerHTML = '<option value="auto" selected>Auto Detect</option>';
+                res.languages.forEach(lang => {
+                    const opt = document.createElement('option');
+                    opt.value = lang.code;
+                    opt.textContent = lang.name;
+                    sourceSelect.appendChild(opt);
+                });
+                tesseractLangsLoaded = true;
+            }
+        }
+    });
+}
+
+function toggleTranslateWindow() {
+    const win = document.getElementById('translate-settings-window');
+    if (!win) return;
+    if (win.style.display === 'none') {
+        win.style.display = 'block';
+        loadAvailableLanguages();
+        loadTesseractLanguages();
+    } else {
+        win.style.display = 'none';
+    }
+}
+
+function downloadModelAction() {
+    const fromCode = document.getElementById('model-from').value.trim().toLowerCase();
+    const toCode = document.getElementById('model-to').value.trim().toLowerCase();
+    if (!fromCode || !toCode) {
+        alert("Please enter both 'From' and 'To' language codes.");
+        return;
+    }
+    
+    const btn = document.getElementById('btn-download-model');
+    const status = document.getElementById('download-model-status');
+    btn.disabled = true;
+    status.style.display = 'block';
+    status.innerText = "Downloading model assets...";
+    
+    pywebview.api.download_translation_model(fromCode, toCode).then(res => {
+        btn.disabled = false;
+        if (res && res.status === 'success') {
+            status.innerText = "Successfully downloaded!";
+            setTimeout(() => { status.style.display = 'none'; }, 3000);
+        } else {
+            status.innerText = "Failed: " + (res ? res.msg : "");
+        }
+    });
+}
+
+function addStandardCloseButton(modalId, closeFunction) {
+    const modal = document.getElementById(modalId);
+    if (!modal) return;
+
+    const header = modal.querySelector('.modal-header');
+    if (!header) {
+        console.warn(`Modal header not found for #${modalId}`);
+        return;
+    }
+    
+    // Make header a flex container to position the button correctly
+    header.style.display = 'flex';
+    header.style.alignItems = 'center';
+
+    // Hide existing small 'x' if it exists.
+    const existingClose = header.querySelector('span.close, span.close-btn, .close-button, [onclick*="close"]');
+    if (existingClose && existingClose.tagName.toLowerCase() === 'span') {
+        existingClose.style.display = 'none';
+    }
+
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = 'Close';
+    closeBtn.style.cssText = `
+        background: #555; color: white; border: 1px solid #666; padding: 5px 15px;
+        border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 13px;
+        margin-left: auto; order: 10;
+    `;
+    closeBtn.onmouseover = () => { closeBtn.style.background = '#666'; };
+    closeBtn.onmouseout = () => { closeBtn.style.background = '#555'; };
+    closeBtn.onclick = closeFunction;
+    
+    header.appendChild(closeBtn);
+}
+
+function makeDraggable(win, header) {
+    if (!win || !header) return;
+    let isDragging = false, startX = 0, startY = 0, startLeft = 0, startTop = 0;
+    header.addEventListener('mousedown', (e) => {
+        if (e.target.closest('button, input, select, a, span.close')) return;
+        if (e.button !== 0) return;
+        
+        isDragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        const rect = win.getBoundingClientRect();
+        startLeft = rect.left;
+        startTop = rect.top;
+        e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+        win.style.left = (startLeft + dx) + 'px';
+        win.style.top = (startTop + dy) + 'px';
+        win.style.right = 'auto';
+        win.style.bottom = 'auto';
+    });
+
+    document.addEventListener('mouseup', () => { isDragging = false; });
 }

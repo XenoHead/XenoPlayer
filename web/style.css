@@ -127,6 +127,8 @@ body, html {
     display: flex;
     flex-direction: column;
     position: relative;
+    min-width: 0;
+    overflow: hidden;
 }
 
 #top-bar {
@@ -244,6 +246,9 @@ video.zoom-double, img.zoom-double {
 /* Top Nav / Dropdown */
 #menu-bar {
     display: flex;
+    align-items: center;
+    height: 38px;
+    box-sizing: border-box;
     background-color: var(--bg-panel);
     border-bottom: 1px solid #333;
 }
@@ -796,4 +801,88 @@ video.zoom-double, img.zoom-double {
 .go-up-btn:hover {
     color: #a6e3a1 !important;
     text-shadow: 0 0 5px rgba(166, 227, 161, 0.4);
+}
+
+/* Sidebar View Modes */
+#playlist.view-list .playlist-thumbnail {
+    display: none;
+}
+#playlist.view-list .playlist-item {
+    padding: 6px 10px;
+    gap: 0;
+}
+
+#playlist.view-small .playlist-thumbnail {
+    width: 40px;
+    height: 26px;
+}
+#playlist.view-small .playlist-item {
+    padding: 6px 10px;
+    gap: 8px;
+}
+
+#playlist.view-large .playlist-thumbnail {
+    width: 90px;
+    height: 60px;
+}
+#playlist.view-large .playlist-item {
+    padding: 12px;
+    gap: 12px;
+}
+
+/* Floating Sidebar */
+#sidebar.floating {
+    position: absolute;
+    left: 0;
+    top: 50px;
+    bottom: 60px;
+    z-index: 1000;
+    box-shadow: 5px 0 15px rgba(0,0,0,0.6);
+    height: calc(100% - 110px);
+}
+#sidebar.floating #sidebar-header {
+    cursor: move;
+}
+
+#sidebar.floating ~ #main-content #media-container {
+    margin-left: 300px;
+    width: calc(100% - 300px);
+}
+
+/* Sidebar Collapse Styles */
+#sidebar.collapsed {
+    position: absolute;
+    left: 0;
+    top: 0;
+    height: auto !important;
+    z-index: 1000;
+    box-shadow: 5px 0 15px rgba(0,0,0,0.4);
+}
+
+#sidebar.collapsed ~ #main-content #media-container {
+    margin-left: 0 !important;
+    width: 100% !important;
+}
+
+#sidebar.collapsed #sidebar-controls,
+#sidebar.collapsed #split-tabs-container,
+#sidebar.collapsed #folder-tree-container,
+#sidebar.collapsed #playlist-filter,
+#sidebar.collapsed #playlist {
+    display: none !important;
+}
+
+#sidebar.floating.collapsed {
+    height: auto !important;
+}
+
+#top-bar {
+    height: 38px !important;
+}
+
+#view-controls-bar {
+    height: 38px;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
 }

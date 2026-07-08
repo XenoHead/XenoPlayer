@@ -1,3 +1,5 @@
+pipwin
+pyaudio
 PyQt6
 opencv-python
 numpy
@@ -7,9 +9,10 @@ Pillow
 deep-translator
 pywebview
 flask
-manga-ocr
 SpeechRecognition
 PyAudio
 cloudscraper
 tensorboard
 transformers
+argostranslate
+manga-ocr

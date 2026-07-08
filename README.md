@@ -48,6 +48,6 @@ Beyond standard playback, XenoPlayer is packed with advanced features including 
 * **Right-Click / Forward/Back Mouse Buttons:** Navigate pages or clear selection boxes
 * **Left-Click & Drag:** Draw translation box
 * **Right-Click (on translation box):** Delete saved translation
-* **Shift + Right-Click (on translation box):** Edit saved translation text
-* **Shift + Left-Click & Drag (on translation box):** Move or resize saved translation
+* **Ctrl + Right-Click (on translation box):** Edit saved translation text
+* **Ctrl + Left-Click & Drag (on translation box):** Move or resize saved translation
 * **Escape:** Close Manga Viewer

@@ -95,7 +95,7 @@ class Api:
             def_folder = folders[default_index]
             if def_folder and os.path.isdir(def_folder):
                 try:
-                    supported = {'.mp4', '.webm', '.ogg', '.mp3', '.wav', '.wave', '.jpg', '.jpeg', '.png', '.webp', '.gif'}
+                    supported = {'.mp4', '.webm', '.ogg', '.mp3', '.wav', '.wave', '.jpg', '.jpeg', '.png', '.webp', '.gif', '.txt', '.md', '.json', '.csv'}
                     if self.settings.get("recursive_load", False):
                         first_file = None
                         for root, dirs, files in os.walk(def_folder):
@@ -175,7 +175,7 @@ class Api:
         if not os.path.isfile(filepath): return
         directory = os.path.dirname(filepath)
         
-        supported = {'.mp4', '.webm', '.ogg', '.mp3', '.wav', '.wave', '.jpg', '.jpeg', '.png', '.webp', '.gif'}
+        supported = {'.mp4', '.webm', '.ogg', '.mp3', '.wav', '.wave', '.jpg', '.jpeg', '.png', '.webp', '.gif', '.txt', '.md', '.json', '.csv'}
         
         if self.settings.get("recursive_load", False):
             full_playlist = []
@@ -205,7 +205,7 @@ class Api:
         directory_path = os.path.abspath(directory_path)
         if not os.path.isdir(directory_path): return
         
-        supported = {'.mp4', '.webm', '.ogg', '.mp3', '.wav', '.wave', '.jpg', '.jpeg', '.png', '.webp', '.gif'}
+        supported = {'.mp4', '.webm', '.ogg', '.mp3', '.wav', '.wave', '.jpg', '.jpeg', '.png', '.webp', '.gif', '.txt', '.md', '.json', '.csv'}
         
         if self.settings.get("recursive_load", False):
             full_playlist = []
@@ -233,6 +233,33 @@ class Api:
         self._window.evaluate_js('updatePlaylist()')
         if filepath:
             self.play_current()
+
+    def refresh_current_directory(self):
+        current_path = self.playlist[self.current_index] if (0 <= self.current_index < len(self.playlist)) else None
+        if not current_path and self.full_playlist:
+            current_path = self.full_playlist[0]
+            
+        if not current_path:
+            default_index = self.settings.get("default_folder", -1)
+            folders = self.settings.get("saved_folders", ["", "", "", "", ""])
+            if 0 <= default_index < len(folders):
+                dir_path = folders[default_index]
+            else:
+                return {"status": "error", "msg": "No active folder to refresh"}
+        else:
+            dir_path = os.path.dirname(current_path) if os.path.isfile(current_path) else current_path
+            
+        if dir_path and os.path.isdir(dir_path):
+            self.load_selected_directory(dir_path)
+            if current_path in self.playlist:
+                self.current_index = self.playlist.index(current_path)
+            elif self.playlist:
+                self.current_index = 0
+            else:
+                self.current_index = -1
+            self._window.evaluate_js('updatePlaylist()')
+            return {"status": "success"}
+        return {"status": "error", "msg": "Directory not found"}
 
     def play_favorites(self):
         self.filter_mode = "favorites"
@@ -326,7 +353,11 @@ class Api:
             "audio_sites": self.settings.get("audio_sites", []),
             "online_playlists": self.settings.get("online_playlists", {}),
             "favorite_collection_tags": self.settings.get("favorite_collection_tags", {"nhentai": [], "danbooru": [], "hentaiyoga": [], "rule34art": [], "ehentai": []}),
-            "recursive_load": self.settings.get("recursive_load", False)
+            "recursive_load": self.settings.get("recursive_load", False),
+            "type_filter": self.settings.get("type_filter", "all"),
+            "playlist_sort": self.settings.get("playlist_sort", "name"),
+            "sort_asc": self.settings.get("sort_asc", True),
+            "view_mode": self.settings.get("view_mode", "medium")
         }
 
         # Load online sources
@@ -344,6 +375,13 @@ class Api:
 
         return state
 
+    def save_playlist_settings(self, type_filter, playlist_sort, sort_asc, view_mode):
+        self.settings["type_filter"] = type_filter
+        self.settings["playlist_sort"] = playlist_sort
+        self.settings["sort_asc"] = sort_asc
+        self.settings["view_mode"] = view_mode
+        save_settings(self.settings)
+        return {"status": "success"}
 
     def save_online_sources(self, collection_sites, audio_sites, story_sites):
         try:
@@ -627,14 +665,18 @@ class Api:
                                     if downloaded_size - last_reported > 1024 * 250:
                                         last_reported = downloaded_size
                                         self._window.evaluate_js(f'updateAudioDownloadProgress({downloaded_size}, {total_size}, "{safe_title}")')
+                                        self._window.evaluate_js(f'updateAudioDownloadProgress({downloaded_size}, {total_size}, {json.dumps(name)})')
                         self.load_directory(dest_path)
                         self._log_download(name, dest_path, "audio")
                         self._window.evaluate_js(f'downloadCompleteNotify("{safe_title}")')
+                        self._window.evaluate_js(f'downloadCompleteNotify({json.dumps(name)})')
                     else:
                         self._window.evaluate_js(f'downloadFailedNotify("{safe_title}", "HTTP {r.status_code}")')
+                        self._window.evaluate_js(f'downloadFailedNotify({json.dumps(name)}, "HTTP {r.status_code}")')
                 except Exception as ex:
                     safe_ex = str(ex).replace('\\', '\\\\').replace('"', '\\"')
                     self._window.evaluate_js(f'downloadFailedNotify("{safe_title}", "{safe_ex}")')
+                    self._window.evaluate_js(f'downloadFailedNotify({json.dumps(name)}, {json.dumps(str(ex))})')
                     
             threading.Thread(target=run_download, daemon=True).start()
             return {"status": "started"}
@@ -1458,8 +1500,10 @@ class Api:
                 
                 self._log_download(title, download_dir, "collection")
                 self._window.evaluate_js(f'downloadComplete("{download_dir.replace("\\", "\\\\")}", "{safe_title}")')
+                self._window.evaluate_js(f'downloadComplete({json.dumps(download_dir)}, {json.dumps(title)})')
             except Exception as e:
                 self._window.evaluate_js(f'downloadFailed("{str(e).replace("\\", "\\\\")}", "{safe_title}")')
+                self._window.evaluate_js(f'downloadFailed({json.dumps(str(e))}, {json.dumps(title)})')
                 
         threading.Thread(target=run_download, daemon=True).start()
         return {"status": "started"}
@@ -1520,13 +1564,16 @@ class Api:
                                 if downloaded_size - last_reported > 1024 * 500:
                                     last_reported = downloaded_size
                                     self._window.evaluate_js(f'updateDownloadProgress({downloaded_size}, {total_size}, "{safe_title}")')
+                                    self._window.evaluate_js(f'updateDownloadProgress({downloaded_size}, {total_size}, {json.dumps(title)})')
                     
                     self._log_download(title, download_dir, "collection")
                     self._window.evaluate_js(f'downloadComplete("{download_dir.replace("\\", "\\\\")}", "{safe_title}")')
+                    self._window.evaluate_js(f'downloadComplete({json.dumps(download_dir)}, {json.dumps(title)})')
                 else:
                     raise Exception(f"Failed to fetch image: HTTP {img_r.status_code}")
             except Exception as e:
                 self._window.evaluate_js(f'downloadFailed("{str(e).replace("\\", "\\\\")}", "{safe_title}")')
+                self._window.evaluate_js(f'downloadFailed({json.dumps(str(e))}, {json.dumps(title)})')
                 
         threading.Thread(target=run_download, daemon=True).start()
         return {"status": "started"}
@@ -1626,6 +1673,7 @@ class Api:
                                         if downloaded_size - last_reported > 1024 * 500:
                                             last_reported = downloaded_size
                                             self._window.evaluate_js(f'updateDownloadProgress({downloaded_size}, {total_size}, "{safe_video_title}")')
+                                            self._window.evaluate_js(f'updateDownloadProgress({downloaded_size}, {total_size}, {json.dumps(video_title)})')
                             vid_downloaded = True
                         else:
                             raise Exception(f"Failed to download video stream: HTTP {resp.status_code} - Content-Type: {ctype}")
@@ -1674,8 +1722,10 @@ class Api:
                     
                 self._log_download(title, download_dir, "collection")
                 self._window.evaluate_js(f'downloadComplete("{download_dir.replace("\\", "\\\\")}", "{safe_title}")')
+                self._window.evaluate_js(f'downloadComplete({json.dumps(download_dir)}, {json.dumps(title)})')
             except Exception as e:
                 self._window.evaluate_js(f'downloadFailed("{str(e).replace("\\", "\\\\")}", "{safe_title}")')
+                self._window.evaluate_js(f'downloadFailed({json.dumps(str(e))}, {json.dumps(title)})')
                 
         threading.Thread(target=run_download, daemon=True).start()
         return {"status": "started"}
@@ -1731,6 +1781,7 @@ class Api:
             finally:
                 safe_title = title.replace('\\', '\\\\').replace('"', '\\"')
                 self._window.evaluate_js(f'updateDownloadProgress({idx+1}, {total_images}, "{safe_title}")')
+                self._window.evaluate_js(f'updateDownloadProgress({idx+1}, {total_images}, {json.dumps(title)})')
         return successful_downloads > 0
 
     def download_rule34art_comic(self, url, title):
@@ -1887,6 +1938,7 @@ class Api:
                             downloaded_count += 1
                             current = downloaded_count
                         self._window.evaluate_js(f'updateDownloadProgress({current}, {total_images}, "{safe_title}")')
+                        self._window.evaluate_js(f'updateDownloadProgress({current}, {total_images}, {json.dumps(title)})')
                         
                 with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
                     executor.map(download_image, enumerate(images))
@@ -1899,8 +1951,10 @@ class Api:
                     
                 self._log_download(title, download_dir, "collection")
                 self._window.evaluate_js(f'downloadComplete("{download_dir.replace("\\", "\\\\")}", "{safe_title}")')
+                self._window.evaluate_js(f'downloadComplete({json.dumps(download_dir)}, {json.dumps(title)})')
             except Exception as e:
                 self._window.evaluate_js(f'downloadFailed("{str(e).replace("\\", "\\\\")}", "{safe_title}")')
+                self._window.evaluate_js(f'downloadFailed({json.dumps(str(e))}, {json.dumps(title)})')
                 
         threading.Thread(target=run_download, daemon=True).start()
         return {"status": "started"}
@@ -1968,15 +2022,22 @@ class Api:
 
     # --- SUBPROCESS SEGREGATED TRANSLATE PIPELINE ---
 
-    def translate_rect(self, path, x, y, w, h, ocr_mode, disp_w, disp_h):
+    def translate_rect(self, path, x, y, w, h, ocr_mode, disp_w, disp_h, target_lang='English (en)', ocr_source_lang='auto'):
         if not path or not os.path.isfile(path): return {"status": "error"}
         from PIL import Image
+        import pytesseract
+        if os.name == 'nt' and not shutil.which('tesseract'):
+            for p_path in [r'C:\Program Files\Tesseract-OCR\tesseract.exe', r'D:\Programs\Tesseract-OCR\tesseract.exe']:
+                if os.path.exists(p_path):
+                    pytesseract.pytesseract.tesseract_cmd = p_path
+                    break
         try:
             img = Image.open(path)
             ratio_w, ratio_h = img.width / disp_w, img.height / disp_h
             orig_x, orig_y, orig_w, orig_h = int(x * ratio_w), int(y * ratio_h), int(w * ratio_w), int(h * ratio_h)
             cropped = img.crop((orig_x, orig_y, orig_x + orig_w, orig_y + orig_h))
             
+            detected_lang = None
             if ocr_mode == "Japanese (Manga OCR)":
                 import subprocess
                 temp_img_path = os.path.join(tempfile.gettempdir(), "player_ocr_crop.png")
@@ -2014,15 +2075,181 @@ class Api:
                 except: pass
                 extracted_text = result.stdout.strip()
                 if result.returncode != 0 or extracted_text.startswith("ERROR:"): return {"status": "error", "msg": extracted_text}
+                detected_lang = 'ja'
             else:
-                import pytesseract
-                lang_map = {"Russian": "rus", "Chinese (Simplified)": "chi_sim", "Chinese (Traditional)": "chi_tra", "English": "eng", "Japanese (Tesseract)": "jpn"}
-                extracted_text = pytesseract.image_to_string(cropped, lang=lang_map.get(ocr_mode, "eng")).strip()
+                if ocr_source_lang == 'auto':
+                    try:
+                        installed = pytesseract.get_languages(config='')
+                        tess_lang = "+".join(installed) if installed else "eng"
+                    except:
+                        tess_lang = "eng"
+                else:
+                    tess_lang = ocr_source_lang
+                
+                extracted_text = pytesseract.image_to_string(cropped, lang=tess_lang).strip()
             
-            if not extracted_text: return {"status": "error", "msg": "No text found."}
-            from deep_translator import GoogleTranslator
-            return {"status": "success", "orig": extracted_text, "text": GoogleTranslator(source='auto', target='en').translate(extracted_text), "rect": [orig_x, orig_y, orig_w, orig_h]}
+            # Clean up noise characters from OCR
+            cleaned_extracted = re.sub(r'[@#$*%&]+', '', extracted_text).strip()
+            if not cleaned_extracted or not any(c.isalnum() or '\u3040' <= c <= '\u9fff' or '\u0400' <= c <= '\u04ff' for c in cleaned_extracted):
+                return {"status": "error", "msg": "No valid text found."}
+            
+            # Auto-detect language code if needed
+            if not detected_lang:
+                if ocr_source_lang == 'auto':
+                    # Heuristic detection
+                    if any('\u3040' <= c <= '\u30ff' for c in cleaned_extracted):
+                        detected_lang = 'ja'
+                    elif any('\u0400' <= c <= '\u04ff' for c in cleaned_extracted):
+                        detected_lang = 'ru'
+                    elif any('\u4e00' <= c <= '\u9fff' for c in cleaned_extracted):
+                        detected_lang = 'zh'
+                    else:
+                        # Latin-script heuristic for Spanish and French
+                        text_lower = cleaned_extracted.lower()
+                        spa_indicators = ['ñ', '¿', '¡', 'á', 'é', 'í', 'ó', 'ú', 'ü']
+                        spa_words = {'el', 'la', 'los', 'las', 'un', 'una', 'y', 'en', 'de', 'que', 'es', 'con', 'para', 'como', 'hola'}
+                        fra_indicators = ['ç', 'à', 'è', 'ù', 'â', 'ê', 'î', 'ô', 'û', 'ë', 'ï']
+                        fra_words = {'le', 'la', 'les', 'un', 'une', 'et', 'en', 'dans', 'pour', 'est', 'avec', 'mais'}
+                        
+                        words = set(re.findall(r'\b\w+\b', text_lower))
+                        spa_score = sum(1 for char in spa_indicators if char in text_lower) + sum(3 for w in words if w in spa_words)
+                        fra_score = sum(1 for char in fra_indicators if char in text_lower) + sum(3 for w in words if w in fra_words)
+                        
+                        if spa_score > fra_score and spa_score > 0:
+                            detected_lang = 'es'
+                        elif fra_score > spa_score and fra_score > 0:
+                            detected_lang = 'fr'
+                        else:
+                            detected_lang = 'en'
+                else:
+                    # Map standard Tesseract 3-letter codes to standard 2-letter codes for Argos
+                    lang_map_argos = {
+                        "rus": "ru", "chi_sim": "zh", "chi_tra": "zh", 
+                        "eng": "en", "jpn": "ja", "spa": "es", "fra": "fr",
+                        "deu": "de", "ita": "it", "por": "pt", "kor": "ko"
+                    }
+                    detected_lang = lang_map_argos.get(ocr_source_lang, "en")
+            
+            # Dynamic destination fallback
+            lang_code = target_lang.split("(")[-1].replace(")", "").strip()
+            if "-" in lang_code: 
+                lang_code = lang_code.split("-")[0] # Normalize 'zh-CN' to 'zh' style for Argos
+            
+            if detected_lang == lang_code:
+                translated_text = cleaned_extracted
+            else:
+                translated_text = None
+                try:
+                    import argostranslate.translate
+                    translated_text = argostranslate.translate.translate(cleaned_extracted, detected_lang, lang_code)
+                    
+                    # Check for repetition loops in argostranslate output
+                    is_loop = False
+                    if translated_text:
+                        for length in range(4, 15):
+                            for i in range(len(translated_text) - length * 3):
+                                sub = translated_text[i:i+length]
+                                if translated_text.count(sub) > 5:
+                                    is_loop = True
+                                    break
+                            if is_loop:
+                                break
+                    
+                    if is_loop or not translated_text:
+                        raise Exception("Local model repetition loop or empty result")
+                except Exception as e:
+                    # Fallback to deep-translator (GoogleTranslator)
+                    try:
+                        from deep_translator import GoogleTranslator
+                        translated_text = GoogleTranslator(source=detected_lang, target=lang_code).translate(cleaned_extracted)
+                    except Exception as ex:
+                        if translated_text:
+                            # If offline and we had a loop, return sanitized loop text
+                            # Sanitize word repetition loops
+                            words = translated_text.split()
+                            if len(words) > 10:
+                                from collections import Counter
+                                most_common, count = Counter(words).most_common(1)[0]
+                                if count / len(words) > 0.4:
+                                    translated_text = f"{most_common} ..."
+                            
+                            # Sanitize character-level repetition loops
+                            cleaned_loop = False
+                            for length in range(4, 15):
+                                if cleaned_loop:
+                                    break
+                                for i in range(len(translated_text) - length * 3):
+                                    sub = translated_text[i:i+length]
+                                    if translated_text.count(sub) > 5:
+                                        translated_text = sub + " ..."
+                                        cleaned_loop = True
+                                        break
+                        else:
+                            translated_text = f"{cleaned_extracted} (Translation model {detected_lang}->{lang_code} not installed)"
+            
+            return {"status": "success", "orig": cleaned_extracted, "text": translated_text, "rect": [orig_x, orig_y, orig_w, orig_h]}
         except Exception as e: return {"status": "error", "msg": str(e)}
+
+    def download_translation_model(self, from_code, to_code):
+        try:
+            import argostranslate.package
+            argostranslate.package.update_package_index()
+            available = argostranslate.package.get_available_packages()
+            pack = next(filter(lambda x: x.from_code == from_code and x.to_code == to_code, available), None)
+            if pack:
+                argostranslate.package.install_from_path(pack.download())
+                return {"status": "success"}
+            return {"status": "error", "msg": f"No package found for {from_code} -> {to_code}"}
+        except Exception as e:
+            return {"status": "error", "msg": str(e)}
+
+    def get_available_languages(self):
+        try:
+            import argostranslate.package
+            try:
+                argostranslate.package.update_package_index()
+            except:
+                pass
+            available = argostranslate.package.get_available_packages()
+            langs = {}
+            for p in available:
+                langs[p.from_code] = p.from_name
+                langs[p.to_code] = p.to_name
+            sorted_langs = [{"code": k, "name": v} for k, v in sorted(langs.items(), key=lambda item: item[1])]
+            return {"status": "success", "languages": sorted_langs}
+        except Exception as e:
+            fallback = [
+                {"code": "ja", "name": "Japanese"},
+                {"code": "en", "name": "English"},
+                {"code": "zh", "name": "Chinese"},
+                {"code": "es", "name": "Spanish"},
+                {"code": "fr", "name": "French"},
+                {"code": "de", "name": "German"},
+                {"code": "ru", "name": "Russian"}
+            ]
+            return {"status": "success", "languages": fallback, "error": str(e)}
+
+    def get_tesseract_languages(self):
+        try:
+            import pytesseract
+            if os.name == 'nt' and not shutil.which('tesseract'):
+                for p_path in [r'C:\Program Files\Tesseract-OCR\tesseract.exe', r'D:\Programs\Tesseract-OCR\tesseract.exe']:
+                    if os.path.exists(p_path):
+                        pytesseract.pytesseract.tesseract_cmd = p_path
+                        break
+            langs = pytesseract.get_languages(config='')
+            mapping = {
+                "eng": "English", "jpn": "Japanese", "chi_sim": "Chinese (Simplified)", 
+                "chi_tra": "Chinese (Traditional)", "rus": "Russian", "spa": "Spanish", 
+                "fra": "French", "deu": "German", "ita": "Italian", "por": "Portuguese", 
+                "kor": "Korean"
+            }
+            res = []
+            for l in langs:
+                res.append({"code": l, "name": mapping.get(l, l.upper())})
+            return {"status": "success", "languages": res}
+        except Exception as e:
+            return {"status": "error", "msg": str(e)}
 
     def move_file_to(self, target_name):
         if not (0 <= self.current_index < len(self.playlist)): return {"status": "error"}
@@ -2153,7 +2380,7 @@ class Api:
         else:
             directory = os.path.dirname(filepath)
             
-        supported = {'.mp4', '.webm', '.ogg', '.mp3', '.wav', '.wave', '.jpg', '.jpeg', '.png', '.webp', '.gif'}
+        supported = {'.mp4', '.webm', '.ogg', '.mp3', '.wav', '.wave', '.jpg', '.jpeg', '.png', '.webp', '.gif', '.txt', '.md', '.json', '.csv'}
         
         if self.settings.get("recursive_load", False):
             full_paths = []
@@ -2171,7 +2398,21 @@ class Api:
         full_paths.sort(key=natural_sort_key)
         return [{"path": p, "name": os.path.basename(p)} for p in full_paths]
 
-    def exit_app(self): self._window.destroy()
+    def save_window_state(self):
+        try:
+            settings = load_settings()
+            if self._window and self._window.width > 100 and self._window.height > 100:
+                settings["window_x"] = int(self._window.x)
+                settings["window_y"] = int(self._window.y)
+                settings["window_width"] = int(self._window.width)
+                settings["window_height"] = int(self._window.height)
+                save_settings(settings)
+        except:
+            pass
+
+    def exit_app(self):
+        self.save_window_state()
+        self._window.destroy()
 
 api = Api()
 
@@ -2264,6 +2505,18 @@ def run_server():
 if __name__ == '__main__':
     threading.Thread(target=run_server, daemon=True).start()
     html_path = resource_path(os.path.join('web', 'index.html'))
-    window = webview.create_window('XenoPlayer', html_path, js_api=api, width=1000, height=700, maximized=True)
+    
+    settings = load_settings()
+    w_x = settings.get("window_x", None)
+    w_y = settings.get("window_y", None)
+    w_width = settings.get("window_width", 1000)
+    w_height = settings.get("window_height", 700)
+    
+    if w_x is not None and w_y is not None:
+        window = webview.create_window('XenoPlayer', html_path, js_api=api, x=w_x, y=w_y, width=w_width, height=w_height)
+    else:
+        window = webview.create_window('XenoPlayer', html_path, js_api=api, width=w_width, height=w_height)
+        
     api._window = window
+    window.events.closing += api.save_window_state
     webview.start(debug=False)

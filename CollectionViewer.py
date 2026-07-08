@@ -58,7 +58,8 @@ manga_ocr_model = None
 
 try:
     from PIL import Image, ImageDraw, ImageFont
-    from deep_translator import GoogleTranslator
+    import argostranslate.package
+    import argostranslate.translate
     import pytesseract
     
     # On Windows, automatically point to the default Tesseract install path if not in system PATH
@@ -72,6 +73,24 @@ try:
     TRANSLATION_AVAILABLE = True
 except ImportError:
     TRANSLATION_AVAILABLE = False
+
+def ensure_japanese_offline_model():
+    """Guarantees the Japanese-to-English neural translation engine is ready on the CPU."""
+    if not TRANSLATION_AVAILABLE:
+        return
+    try:
+        # Sync index catalog without requiring API tokens
+        argostranslate.package.update_package_index()
+        
+        # Verify if local cache already has the package
+        installed = argostranslate.package.get_installed_packages()
+        if not any(p.from_code == "ja" and p.to_code == "en" for p in installed):
+            available = argostranslate.package.get_available_packages()
+            ja_en_pack = next(filter(lambda x: x.from_code == "ja" and x.to_code == "en", available), None)
+            if ja_en_pack:
+                argostranslate.package.install_from_path(ja_en_pack.download())
+    except Exception as e:
+        print(f"Offline model sync skipped/failed: {e}")
 
 class SelectableImageLabel(QLabel):
     selection_made = pyqtSignal(QRect)
@@ -132,7 +151,7 @@ class TranslationWorker(QThread):
         import io
         import subprocess
         from PIL import Image
-        from deep_translator import GoogleTranslator
+        import argostranslate.translate
         
         try:
             pil_img = Image.open(io.BytesIO(self.img_bytes))
@@ -140,19 +159,15 @@ class TranslationWorker(QThread):
             if self.ocr_mode == "Japanese (Manga OCR)":
                 self.status_update.emit("Spawning OCR Worker Process...")
                 
-                # 1. Write the cropped selection to a temp file on disk
                 temp_dir = tempfile.gettempdir()
                 temp_img_path = os.path.join(temp_dir, "manga_ocr_crop.png")
                 pil_img.save(temp_img_path)
                 
-                # 2. Strict absolute lookup path mapping for local model config folder
                 if getattr(sys, 'frozen', False):
-                    # In a COLLECT/onedir build, ocr_worker.exe sits in ocr_worker/ or next to the main exe
                     exe_dir = os.path.dirname(sys.executable)
                     worker_exe = os.path.join(exe_dir, "ocr_worker", "ocr_worker.exe")
                     if not os.path.exists(worker_exe):
                         worker_exe = os.path.join(exe_dir, "ocr_worker.exe")
-                    # manga_ocr_model is bundled inside _MEIPASS
                     base_dir = sys._MEIPASS
                 else:
                     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -165,16 +180,13 @@ class TranslationWorker(QThread):
                     worker_script = os.path.join(base_dir, "ocr_worker.py")
                     cmd = [worker_exe, worker_script, temp_img_path, model_path]
                 
-                # Set PYTHONIOENCODING as belt-and-suspenders for the child process
                 env = os.environ.copy()
                 env["PYTHONIOENCODING"] = "utf-8"
                 
-                # Execute process silently 
                 creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
                 result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8',
                                         env=env, creationflags=creationflags)
                 
-                # Clean up temp image file safely
                 try: os.remove(temp_img_path)
                 except: pass
                 
@@ -183,16 +195,17 @@ class TranslationWorker(QThread):
                 if result.returncode != 0 or extracted_text.startswith("ERROR:"):
                     self.error_occurred.emit(f"OCR Worker Failed:\n{extracted_text}\n{result.stderr}")
                     return
-                    
+                
+                # Sanitize the string before processing
+                extracted_text = extracted_text.replace(" ", "").replace("\n", "")
                 source_lang = 'ja'
-
             else:
                 import pytesseract
                 self.status_update.emit(f"Reading text with Tesseract ({self.ocr_mode})...")
                 lang_map = {
                     "Russian": ("rus", "ru"),
-                    "Chinese (Simplified)": ("chi_sim", "zh-CN"),
-                    "Chinese (Traditional)": ("chi_tra", "zh-TW"),
+                    "Chinese (Simplified)": ("chi_sim", "zh"),
+                    "Chinese (Traditional)": ("chi_tra", "zh"),
                     "English": ("eng", "en"),
                     "Japanese (Tesseract)": ("jpn", "ja")
                 }
@@ -203,10 +216,17 @@ class TranslationWorker(QThread):
                 self.error_occurred.emit("No text recognized. Try selecting a tighter box around the text.")
                 return
 
-            self.status_update.emit("Translating text...")
+            self.status_update.emit("Processing local neural translation...")
+            
+            # Dynamic destination fallback
             lang_code = self.target_lang.split("(")[-1].replace(")", "").strip()
-            translated_text = GoogleTranslator(source=source_lang, target=lang_code).translate(extracted_text)
+            if "-" in lang_code: 
+                lang_code = lang_code.split("-")[0] # Normalize 'zh-CN' to 'zh' style for Argos
+                
+            # Compute directly inside system RAM on CPU thread
+            translated_text = argostranslate.translate.translate(extracted_text, source_lang, lang_code)
             self.result_ready.emit(extracted_text, translated_text)
+            
         except Exception as e:
             import traceback
             self.error_occurred.emit(f"{str(e)}\n\n{traceback.format_exc()}")
@@ -246,12 +266,12 @@ class SavedTranslationLabel(QLabel):
         
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.RightButton:
-            if QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier:
+            if QApplication.keyboardModifiers() & Qt.KeyboardModifier.ControlModifier:
                 self.edit_requested.emit(self)
             else:
                 self.deleted.emit(self)
         elif event.button() == Qt.MouseButton.LeftButton:
-            if QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier:
+            if QApplication.keyboardModifiers() & Qt.KeyboardModifier.ControlModifier:
                 if event.pos().x() > self.width() - 15 and event.pos().y() > self.height() - 15:
                     self.resizing = True
                 else:
@@ -263,7 +283,7 @@ class SavedTranslationLabel(QLabel):
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        if QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier:
+        if QApplication.keyboardModifiers() & Qt.KeyboardModifier.ControlModifier:
             if event.pos().x() > self.width() - 15 and event.pos().y() > self.height() - 15:
                 self.setCursor(Qt.CursorShape.SizeFDiagCursor)
             else:
@@ -296,6 +316,8 @@ class SavedTranslationLabel(QLabel):
 class CollectionViewerWindow(QDialog):
     def __init__(self, directory, image_paths, parent=None):
         super().__init__(parent)
+        # Force-load local language assets on window launch
+        ensure_japanese_offline_model()
         self.directory = directory
         self.image_paths = image_paths
         self.current_index = 0
@@ -715,7 +737,9 @@ class CollectionViewerWindow(QDialog):
             h = int(rect[3] * ratio_h)
             
             lbl = SavedTranslationLabel(t_data, self.image_label)
-            lbl.setGeometry(x, y, w, h)
+            lbl.move(x, y)
+            lbl.setFixedWidth(w)
+            lbl.adjustSize()
             lbl.deleted.connect(self.delete_saved_translation)
             lbl.updated.connect(self.update_saved_translation)
             lbl.edit_requested.connect(self.edit_saved_translation)
