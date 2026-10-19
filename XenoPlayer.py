@@ -8,6 +8,8 @@ os.environ["TRANSFORMERS_OFFLINE"] = "1"
 import threading
 import json
 import re
+import socket
+import time
 import cv2
 import webview
 import tempfile
@@ -64,6 +66,49 @@ def clean_filename(name):
     valid_chars = "-_.() %s%s" % (string.ascii_letters, string.digits)
     cleaned = ''.join(c for c in name if c in valid_chars or c.isalnum())
     return cleaned.strip()
+
+# --- SHARING HUB ---
+
+SHARE_ALLOWED_DOMAIN = "xenohead.com"
+SHARE_EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
+SHARE_PORT = 5050
+
+def validate_share_email(email):
+    if not email or not isinstance(email, str):
+        return None, "Enter an email address."
+    normalized = email.strip().lower()
+    if not SHARE_EMAIL_RE.match(normalized):
+        return None, "That is not a valid email address."
+    domain = normalized.split("@", 1)[1]
+    if domain != SHARE_ALLOWED_DOMAIN:
+        return None, "Only @%s email addresses can connect." % SHARE_ALLOWED_DOMAIN
+    return normalized, None
+
+def get_local_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+        finally:
+            s.close()
+    except Exception:
+        return "127.0.0.1"
+
+def get_share_hub_url():
+    return "http://%s:%d/share" % (get_local_ip(), SHARE_PORT)
+
+def normalize_hub_address(address):
+    if not address or not isinstance(address, str):
+        return ""
+    addr = address.strip()
+    if not addr:
+        return ""
+    if not addr.startswith("http://") and not addr.startswith("https://"):
+        addr = "http://" + addr
+    if addr.endswith("/share"):
+        return addr
+    return addr + "/share"
 
 # --- CORE FRONTEND INTEGRATED API HANDLERS ---
 
@@ -2414,12 +2459,124 @@ class Api:
         self.save_window_state()
         self._window.destroy()
 
+    # --- Sharing Hub ---
+
+    def _share_peers(self):
+        peers = self.settings.get("share_peers", [])
+        if not isinstance(peers, list):
+            peers = []
+        return peers
+
+    def get_share_hub(self):
+        return {
+            "status": "success",
+            "identity": self.settings.get("share_identity", ""),
+            "peers": self._share_peers(),
+            "allowed_domain": SHARE_ALLOWED_DOMAIN,
+            "hub_url": get_share_hub_url(),
+            "shared_folders": self.settings.get("share_folders", [])
+        }
+
+    def set_share_identity(self, email):
+        normalized, err = validate_share_email(email)
+        if err:
+            return {"status": "error", "msg": err}
+        self.settings["share_identity"] = normalized
+        save_settings(self.settings)
+        return {"status": "success", "identity": normalized, "hub_url": get_share_hub_url()}
+
+    def share_add_peer(self, email, hub_address=""):
+        normalized, err = validate_share_email(email)
+        if err:
+            return {"status": "error", "msg": err}
+        identity = self.settings.get("share_identity", "")
+        if not identity:
+            return {"status": "error", "msg": "Set your hub identity before connecting."}
+        if normalized == identity:
+            return {"status": "error", "msg": "That is your own hub address."}
+        peers = self._share_peers()
+        existing = next((p for p in peers if p.get("email") == normalized), None)
+        if existing:
+            existing["hub"] = normalize_hub_address(hub_address) or existing.get("hub", "")
+            existing["status"] = "connected"
+        else:
+            peers.append({
+                "email": normalized,
+                "hub": normalize_hub_address(hub_address),
+                "status": "connected",
+                "added": time.time()
+            })
+        self.settings["share_peers"] = peers
+        save_settings(self.settings)
+        return {"status": "success", "peers": peers}
+
+    def share_remove_peer(self, email):
+        normalized, err = validate_share_email(email)
+        if err:
+            return {"status": "error", "msg": err}
+        peers = [p for p in self._share_peers() if p.get("email") != normalized]
+        self.settings["share_peers"] = peers
+        save_settings(self.settings)
+        return {"status": "success", "peers": peers}
+
+    def share_friend_library(self, email, hub_address):
+        normalized, err = validate_share_email(email)
+        if err:
+            return {"status": "error", "msg": err}
+        identity = self.settings.get("share_identity", "")
+        if not identity:
+            return {"status": "error", "msg": "Set your hub identity before connecting."}
+        target = normalize_hub_address(hub_address)
+        if not target:
+            return {"status": "error", "msg": "Enter your friend's hub address."}
+        try:
+            import requests
+            base = target[:-len("/share")] if target.endswith("/share") else target
+            r = requests.get(base + "/share/library", params={"email": identity}, timeout=10)
+            if r.status_code != 200:
+                msg = ""
+                try:
+                    msg = r.json().get("error", "")
+                except Exception:
+                    pass
+                return {"status": "error", "msg": msg or "Could not reach that hub (%s)." % r.status_code}
+            data = r.json()
+        except Exception as e:
+            return {"status": "error", "msg": "Could not reach that hub: %s" % e}
+        owner = (data.get("owner") or "").strip().lower()
+        if owner and owner != normalized:
+            return {"status": "error", "msg": "That hub belongs to %s, not %s." % (data.get("owner"), email)}
+        peers = self._share_peers()
+        existing = next((p for p in peers if p.get("email") == normalized), None)
+        if existing:
+            existing["hub"] = target
+            existing["status"] = "connected"
+        else:
+            peers.append({"email": normalized, "hub": target, "status": "connected", "added": time.time()})
+        self.settings["share_peers"] = peers
+        save_settings(self.settings)
+        return {"status": "success", "peers": peers, "owner": data.get("owner", ""), "library": data.get("library", [])}
+
+    def share_set_folders(self, paths):
+        if not isinstance(paths, list):
+            return {"status": "error", "msg": "Invalid folder list."}
+        valid = [p for p in paths if isinstance(p, str) and os.path.isdir(p)]
+        self.settings["share_folders"] = valid
+        save_settings(self.settings)
+        return {"status": "success", "shared_folders": valid}
+
 api = Api()
 
 # --- FLASK STREAMING INFRASTRUCTURE ---
 
+def is_local_request():
+    remote = request.remote_addr or ''
+    return remote in ('127.0.0.1', '::1', 'localhost')
+
 @app.route('/media')
 def stream_media():
+    if not is_local_request():
+        return "Forbidden", 403
     path = request.args.get('path')
     if not path or not os.path.exists(path): return "Not found", 404
     
@@ -2456,6 +2613,8 @@ def stream_media():
 
 @app.route('/thumbnail')
 def get_thumbnail():
+    if not is_local_request():
+        return "Forbidden", 403
     path = request.args.get('path')
     if not path or not os.path.exists(path): return "Not found", 404
     ext = os.path.splitext(path)[1].lower()
@@ -2473,6 +2632,8 @@ def get_thumbnail():
 
 @app.route('/imgproxy')
 def img_proxy():
+    if not is_local_request():
+        return "Forbidden", 403
     img_url = request.args.get('url', '')
     referer = request.args.get('ref', '')
     if not img_url or not img_url.startswith('http'):
@@ -2497,10 +2658,130 @@ def img_proxy():
     except Exception as e:
         return str(e), 500
 
+# --- SHARING HUB SERVER ---
+
+SHARE_MEDIA_EXT = {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.mpg', '.mpeg', '.ogg'}
+
+def share_folders():
+    folders = api.settings.get("share_folders", [])
+    if isinstance(folders, list) and folders:
+        return [f for f in folders if isinstance(f, str) and os.path.isdir(f)]
+    known = api.settings.get("known_collection_folders", [])
+    return [f for f in known if isinstance(f, str) and os.path.isdir(f)]
+
+def share_library_for(email):
+    base = request.host_url.rstrip('/')
+    library = []
+    for folder in share_folders():
+        try:
+            files = sorted([f for f in os.listdir(folder) if os.path.splitext(f)[1].lower() in SHARE_MEDIA_EXT], key=natural_sort_key)
+        except Exception:
+            files = []
+        library.append({
+            "name": os.path.basename(folder) or folder,
+            "path": folder,
+            "files": [{
+                "name": f,
+                "url": "%s/share/media?email=%s&path=%s" % (base, urllib.parse.quote(email), urllib.parse.quote(os.path.join(folder, f)))
+            } for f in files]
+        })
+    return library
+
+@app.route('/share')
+def share_page():
+    try:
+        return send_file(resource_path(os.path.join('web', 'share.html')))
+    except Exception:
+        return "Sharing hub page not found", 404
+
+@app.route('/share/owner')
+def share_owner():
+    return {"status": "success", "owner": api.settings.get("share_identity", ""), "allowed_domain": SHARE_ALLOWED_DOMAIN}
+
+@app.route('/share/connect', methods=['POST'])
+def share_connect():
+    try:
+        data = request.get_json(silent=True) or {}
+    except Exception:
+        data = {}
+    email = data.get('email', '') or request.form.get('email', '')
+    normalized, err = validate_share_email(email)
+    if err:
+        return {"status": "error", "error": err}, 403
+    owner = api.settings.get("share_identity", "")
+    if not owner:
+        return {"status": "error", "error": "This hub has no owner identity set yet."}, 403
+    peers = api._share_peers()
+    existing = next((p for p in peers if p.get("email") == normalized), None)
+    if existing:
+        existing["status"] = "connected"
+        existing["last_seen"] = time.time()
+    else:
+        peers.append({"email": normalized, "hub": "", "status": "connected", "added": time.time(), "last_seen": time.time()})
+    api.settings["share_peers"] = peers
+    save_settings(api.settings)
+    return {"status": "success", "owner": owner, "library": share_library_for(normalized)}
+
+@app.route('/share/library')
+def share_library():
+    email = request.args.get('email', '')
+    normalized, err = validate_share_email(email)
+    if err:
+        return {"status": "error", "error": err}, 403
+    return {"status": "success", "owner": api.settings.get("share_identity", ""), "library": share_library_for(normalized)}
+
+@app.route('/share/media')
+def share_media():
+    email = request.args.get('email', '')
+    path = request.args.get('path', '')
+    normalized, err = validate_share_email(email)
+    if err:
+        return {"status": "error", "error": err}, 403
+    if not path or not os.path.isfile(path):
+        return "Not found", 404
+    allowed = False
+    for folder in share_folders():
+        try:
+            if os.path.commonpath([os.path.abspath(folder), os.path.abspath(path)]) == os.path.abspath(folder):
+                allowed = True
+                break
+        except Exception:
+            continue
+    if not allowed:
+        return "Not shared", 403
+    import mimetypes
+    mime, _ = mimetypes.guess_type(path)
+    if not mime:
+        mime = 'application/octet-stream'
+    range_header = request.headers.get('Range', None)
+    if not range_header:
+        return send_file(path, mimetype=mime)
+    size = os.path.getsize(path)
+    byte1, byte2 = 0, size - 1
+    m = re.search(r'bytes=(\d+)-(\d*)', range_header)
+    if m:
+        g = m.groups()
+        if g[0]: byte1 = int(g[0])
+        if g[1]: byte2 = int(g[1])
+    length = byte2 - byte1 + 1
+    def generate():
+        with open(path, 'rb') as f:
+            f.seek(byte1)
+            remaining = length
+            while remaining > 0:
+                chunk = f.read(min(1024 * 1024, remaining))
+                if not chunk: break
+                remaining -= len(chunk)
+                yield chunk
+    rv = Response(generate(), 206, mimetype=mime)
+    rv.headers.add('Content-Range', f"bytes {byte1}-{byte2}/{size}")
+    rv.headers.add('Accept-Ranges', 'bytes')
+    return rv
+
 def run_server():
     import logging
     logging.getLogger('werkzeug').setLevel(logging.ERROR)
-    app.run(port=5050, debug=False, use_reloader=False)
+    app.run(host='0.0.0.0', port=5050, debug=False, use_reloader=False)
 
 if __name__ == '__main__':
     threading.Thread(target=run_server, daemon=True).start()

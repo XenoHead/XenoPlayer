@@ -5150,3 +5150,217 @@ function makeDraggable(win, header) {
 
     document.addEventListener('mouseup', () => { isDragging = false; });
 }
+
+// --- Sharing Hub ---
+
+const SHARE_ALLOWED_DOMAIN = 'xenohead.com';
+let shareHubFolders = [];
+let shareHubIdentity = '';
+
+function isAllowedShareEmail(email) {
+    if (!email) return false;
+    const e = String(email).trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) return false;
+    return e.split('@').pop() === SHARE_ALLOWED_DOMAIN;
+}
+
+function openShareHub() {
+    const modal = document.getElementById('share-hub-modal');
+    if (!modal) return;
+    modal.style.display = 'block';
+    pywebview.api.get_share_hub().then(res => {
+        if (!res || res.status !== 'success') return;
+        document.getElementById('share-identity-email').value = res.identity || '';
+        document.getElementById('share-hub-url').value = res.hub_url || '';
+        shareHubIdentity = res.identity || '';
+        const status = document.getElementById('share-identity-status');
+        status.textContent = res.identity
+            ? 'Connected as ' + res.identity
+            : 'No identity set. Save your @' + SHARE_ALLOWED_DOMAIN + ' address so friends can connect.';
+        renderSharePeers(res.peers || []);
+        renderShareFolders(res.shared_folders || []);
+    });
+}
+
+function closeShareHub() {
+    const modal = document.getElementById('share-hub-modal');
+    if (modal) modal.style.display = 'none';
+}
+
+function saveShareIdentity() {
+    const input = document.getElementById('share-identity-email');
+    const status = document.getElementById('share-identity-status');
+    const email = input.value.trim();
+
+    if (!isAllowedShareEmail(email)) {
+        status.textContent = 'Only @' + SHARE_ALLOWED_DOMAIN + ' email addresses can connect.';
+        status.style.color = '#f38ba8';
+        return;
+    }
+
+    pywebview.api.set_share_identity(email).then(res => {
+        if (res.status === 'success') {
+            input.value = res.identity;
+            shareHubIdentity = res.identity;
+            status.textContent = 'Connected as ' + res.identity;
+            status.style.color = '#a6e3a1';
+        } else {
+            status.textContent = res.msg || 'Could not save identity.';
+            status.style.color = '#f38ba8';
+        }
+    });
+}
+
+function copyShareHubUrl() {
+    const field = document.getElementById('share-hub-url');
+    if (!field) return;
+    field.select();
+    if (navigator.clipboard) {
+        navigator.clipboard.writeText(field.value);
+    } else {
+        document.execCommand('copy');
+    }
+    const btn = field.nextElementSibling;
+    if (btn) {
+        const original = btn.innerHTML;
+        btn.innerHTML = '<i class="fa-solid fa-check"></i>';
+        setTimeout(() => { btn.innerHTML = original; }, 1200);
+    }
+}
+
+function shareConnectPeer() {
+    const emailField = document.getElementById('share-peer-email');
+    const hubField = document.getElementById('share-peer-hub');
+    const status = document.getElementById('share-peer-status');
+    const email = emailField.value.trim();
+    const hub = hubField.value.trim();
+
+    if (!isAllowedShareEmail(email)) {
+        status.textContent = 'Only @' + SHARE_ALLOWED_DOMAIN + ' email addresses can connect.';
+        status.style.color = '#f38ba8';
+        return;
+    }
+
+    const finish = (res) => {
+        if (res.status === 'success') {
+            let text = 'Connected to ' + email + '.';
+            if (res.owner) text += ' Hub owner: ' + res.owner + '.';
+            if (res.library) text += ' ' + res.library.length + ' folder(s) shared.';
+            status.textContent = text;
+            status.style.color = '#a6e3a1';
+            emailField.value = '';
+            hubField.value = '';
+            renderSharePeers(res.peers || []);
+        } else {
+            status.textContent = res.msg || 'Could not connect.';
+            status.style.color = '#f38ba8';
+        }
+    };
+
+    if (hub) {
+        pywebview.api.share_friend_library(email, hub).then(finish);
+    } else {
+        pywebview.api.share_add_peer(email, '').then(finish);
+    }
+}
+
+function removeSharePeer(email) {
+    pywebview.api.share_remove_peer(email).then(res => {
+        if (res.status === 'success') renderSharePeers(res.peers || []);
+    });
+}
+
+function renderSharePeers(peers) {
+    const list = document.getElementById('share-peer-list');
+    if (!list) return;
+    list.innerHTML = '';
+
+    if (!peers.length) {
+        list.innerHTML = '<div style="font-size:12px; color:#6c7086;">No friends connected yet.</div>';
+        return;
+    }
+
+    peers.forEach(peer => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex; justify-content:space-between; align-items:center; gap:8px; padding:5px 0; border-bottom:1px solid #313244; font-size:12px;';
+
+        const info = document.createElement('div');
+        if (peer.hub) {
+            const link = document.createElement('a');
+            link.href = '#';
+            link.style.color = '#a6e3a1';
+            link.textContent = peer.email;
+            link.title = 'Open their hub';
+            link.onclick = () => {
+                const url = peer.hub + '?email=' + encodeURIComponent(shareHubIdentity);
+                pywebview.api.open_external_url(url);
+            };
+            info.appendChild(link);
+        } else {
+            const span = document.createElement('span');
+            span.style.color = '#a6e3a1';
+            span.textContent = peer.email;
+            info.appendChild(span);
+        }
+        const meta = document.createElement('span');
+        meta.style.color = '#6c7086';
+        meta.textContent = (peer.hub ? ' ' + peer.hub : '') + ' (' + (peer.status || 'connected') + ')';
+        info.appendChild(meta);
+
+        const btn = document.createElement('button');
+        btn.textContent = 'Remove';
+        btn.style.cssText = 'background:#d32f2f; color:#fff; border:none; border-radius:3px; padding:3px 10px; font-size:11px; cursor:pointer;';
+        btn.onclick = () => removeSharePeer(peer.email);
+
+        row.appendChild(info);
+        row.appendChild(btn);
+        list.appendChild(row);
+    });
+}
+
+function addShareFolder() {
+    pywebview.api.browse_folder().then(path => {
+        if (!path) return;
+        if (shareHubFolders.includes(path)) return;
+        shareHubFolders.push(path);
+        pywebview.api.share_set_folders(shareHubFolders).then(res => {
+            if (res.status === 'success') renderShareFolders(res.shared_folders || []);
+        });
+    });
+}
+
+function removeShareFolder(path) {
+    shareHubFolders = shareHubFolders.filter(p => p !== path);
+    pywebview.api.share_set_folders(shareHubFolders).then(res => {
+        if (res.status === 'success') renderShareFolders(res.shared_folders || []);
+    });
+}
+
+function renderShareFolders(folders) {
+    shareHubFolders = folders || [];
+    const list = document.getElementById('share-folder-list');
+    if (!list) return;
+    list.innerHTML = '';
+
+    if (!shareHubFolders.length) {
+        list.innerHTML = '<div style="font-size:12px; color:#6c7086;">No folders shared. Your collections are shared automatically.</div>';
+        return;
+    }
+
+    shareHubFolders.forEach(path => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex; justify-content:space-between; align-items:center; gap:8px; padding:4px 0; font-size:12px; word-break:break-all;';
+
+        const label = document.createElement('span');
+        label.textContent = path;
+
+        const btn = document.createElement('button');
+        btn.textContent = 'Remove';
+        btn.style.cssText = 'background:#45475a; color:#cdd6f4; border:none; border-radius:3px; padding:3px 10px; font-size:11px; cursor:pointer; flex-shrink:0;';
+        btn.onclick = () => removeShareFolder(path);
+
+        row.appendChild(label);
+        row.appendChild(btn);
+        list.appendChild(row);
+    });
+}

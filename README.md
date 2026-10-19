@@ -19,6 +19,7 @@ Beyond standard playback, XenoPlayer is packed with advanced features including 
 * **Audio Normalization:** Built-in dynamic range compression to automatically boost quiet dialogue and lower loud sounds in videos.
 * **Favorites System:** Keep track of your favorite files. Play exclusively your favorites or filter them out to watch only unfavorited content.
 * **Live Thumbnails:** The playlist dynamically generates previews for your videos and images on the fly.
+* **Sharing Hub:** Share your library with friends over your network. Friends connect with their own email address — only `@xenohead.com` addresses are accepted.
 
 ## 🎬 Supported Formats
 

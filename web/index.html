@@ -68,6 +68,9 @@
                     style="background-color: #fab387; color: #11111b; font-weight: bold; margin-top: 10px;"><i
                         class="fa-solid fa-book-open"></i>
                     Online Stories</button>
+                <button onclick="openShareHub()"
+                    style="background-color: #f9e2af; color: #11111b; font-weight: bold; margin-top: 10px;"><i
+                        class="fa-solid fa-share-nodes"></i> Sharing Hub</button>
             </div>
 
             <div id="split-tabs-container" style="display:none; margin: 10px; border-bottom: 2px solid #313244;">
@@ -887,6 +890,66 @@
                     style="background-color: #444; color: white; padding: 10px 20px; font-size: 14px; border: none; border-radius: 4px; cursor: pointer;">Close</button>
             </div>
         </div>
+    </div>
+
+    <!-- Sharing Hub Modal -->
+    <div id="share-hub-modal" class="modal"
+        style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:#1e1e2e; color:#cdd6f4; padding:20px; z-index:1000; width:640px; height:auto; max-height:85vh; overflow-y:auto; border-radius:8px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h2 style="margin:0; color:#f9e2af;"><i class="fa-solid fa-share-nodes"></i> Sharing Hub</h2>
+            <span class="close" onclick="closeShareHub()" style="color:#cdd6f4;">&times;</span>
+        </div>
+
+        <p style="font-size:12px; color:#a0a0b0; margin-top:0;">
+            <i class="fa-solid fa-lock"></i> Only <b style="color:#a6e3a1;">@xenohead.com</b> email addresses can
+            connect to your hub. Anything else is rejected.
+        </p>
+
+        <h3 style="margin: 0 0 5px 0; color:#89b4fa; font-size:14px;">Your Hub Identity</h3>
+        <div style="display:flex; gap:6px; margin-bottom:5px;">
+            <input type="email" id="share-identity-email" placeholder="you@xenohead.com"
+                style="flex:1; min-width:0; background:#11111b; color:#cdd6f4; border:1px solid #45475a; border-radius:4px; padding:7px 9px;">
+            <button onclick="saveShareIdentity()"
+                style="background:#89b4fa; color:#11111b; border:none; border-radius:4px; padding:7px 14px; font-weight:bold; cursor:pointer;">Save</button>
+        </div>
+        <div id="share-identity-status" style="font-size:11px; color:#a0a0b0; margin-bottom:14px;"></div>
+
+        <h3 style="margin: 0 0 5px 0; color:#89b4fa; font-size:14px;">Your Hub Address</h3>
+        <div style="display:flex; gap:6px; margin-bottom:5px;">
+            <input type="text" id="share-hub-url" readonly placeholder="Loading..."
+                style="flex:1; min-width:0; background:#11111b; color:#a6e3a1; border:1px solid #45475a; border-radius:4px; padding:7px 9px; font-family:monospace; font-size:12px;">
+            <button onclick="copyShareHubUrl()"
+                style="background:#45475a; color:#cdd6f4; border:none; border-radius:4px; padding:7px 14px; cursor:pointer;"><i
+                        class="fa-solid fa-copy"></i></button>
+        </div>
+        <div style="font-size:11px; color:#a0a0b0; margin-bottom:14px;">Friends open this address in a browser and
+            connect with their own @xenohead.com address.</div>
+
+        <h3 style="margin: 0 0 5px 0; color:#89b4fa; font-size:14px;">Connect to a Friend</h3>
+        <div style="display:flex; flex-direction:column; gap:6px; margin-bottom:5px;">
+            <input type="email" id="share-peer-email" placeholder="friend@xenohead.com"
+                style="width:100%; background:#11111b; color:#cdd6f4; border:1px solid #45475a; border-radius:4px; padding:7px 9px;">
+            <input type="text" id="share-peer-hub" placeholder="Friend hub address (optional, e.g. 192.168.1.20:5050/share)"
+                style="width:100%; background:#11111b; color:#cdd6f4; border:1px solid #45475a; border-radius:4px; padding:7px 9px; font-size:12px;">
+            <button onclick="shareConnectPeer()"
+                style="background:#a6e3a1; color:#11111b; border:none; border-radius:4px; padding:7px 14px; font-weight:bold; cursor:pointer;"><i
+                        class="fa-solid fa-link"></i> Connect</button>
+        </div>
+        <div id="share-peer-status" style="font-size:11px; color:#a0a0b0; margin-bottom:14px;"></div>
+
+        <h3 style="margin: 0 0 5px 0; color:#89b4fa; font-size:14px;">Connected Friends</h3>
+        <div id="share-peer-list" style="background:#181825; border:1px solid #313244; border-radius:5px; padding:10px; margin-bottom:14px; min-height:40px;">
+        </div>
+
+        <h3 style="margin: 0 0 5px 0; color:#89b4fa; font-size:14px;">Shared Folders</h3>
+        <div id="share-folder-list" style="background:#181825; border:1px solid #313244; border-radius:5px; padding:10px; margin-bottom:8px; min-height:40px;">
+        </div>
+        <button onclick="addShareFolder()"
+            style="width:100%; background:#45475a; color:#cdd6f4; border:none; border-radius:4px; padding:7px; cursor:pointer; margin-bottom:14px;"><i
+                    class="fa-solid fa-folder-plus"></i> Add Shared Folder</button>
+
+        <button onclick="closeShareHub()"
+            style="width:100%; background:#89b4fa; color:#11111b; font-weight:bold; padding:10px; border:none; border-radius:5px; cursor:pointer;">Close</button>
     </div>
 
     <!-- Collection Library Context Menu -->

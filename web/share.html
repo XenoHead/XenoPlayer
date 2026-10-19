@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XenoPlayer Sharing Hub</title>
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            background: #11111b;
+            color: #cdd6f4;
+            font-family: "Segoe UI", Roboto, sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .hub {
+            width: 100%;
+            max-width: 620px;
+            background: #1e1e2e;
+            border: 1px solid #313244;
+            border-radius: 10px;
+            padding: 25px;
+        }
+
+        .hub h1 {
+            margin: 0 0 4px 0;
+            font-size: 22px;
+            color: #89b4fa;
+        }
+
+        .hub .sub {
+            margin: 0 0 20px 0;
+            color: #a0a0b0;
+            font-size: 13px;
+        }
+
+        .owner {
+            background: #181825;
+            border: 1px solid #313244;
+            border-radius: 6px;
+            padding: 10px 12px;
+            margin-bottom: 18px;
+            font-size: 14px;
+        }
+
+        .owner b { color: #a6e3a1; }
+
+        label {
+            display: block;
+            font-size: 12px;
+            color: #a0a0b0;
+            margin-bottom: 5px;
+        }
+
+        .row {
+            display: flex;
+            gap: 8px;
+        }
+
+        input[type="email"] {
+            flex: 1;
+            min-width: 0;
+            background: #11111b;
+            color: #cdd6f4;
+            border: 1px solid #45475a;
+            border-radius: 5px;
+            padding: 10px 12px;
+            font-size: 15px;
+        }
+
+        input[type="email"]:focus {
+            outline: none;
+            border-color: #89b4fa;
+        }
+
+        button {
+            background: #89b4fa;
+            color: #11111b;
+            border: none;
+            border-radius: 5px;
+            padding: 10px 18px;
+            font-size: 15px;
+            font-weight: bold;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        button:hover { filter: brightness(1.08); }
+        button:disabled { opacity: .55; cursor: default; }
+
+        .msg {
+            margin-top: 12px;
+            padding: 9px 12px;
+            border-radius: 5px;
+            font-size: 13px;
+            display: none;
+        }
+
+        .msg.error { background: #3a1f24; color: #f38ba8; border: 1px solid #f38ba8; display: block; }
+        .msg.ok { background: #1f3326; color: #a6e3a1; border: 1px solid #a6e3a1; display: block; }
+
+        .note {
+            margin-top: 16px;
+            font-size: 11.5px;
+            color: #6c7086;
+            line-height: 1.6;
+        }
+
+        .folder {
+            background: #181825;
+            border: 1px solid #313244;
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 12px;
+        }
+
+        .folder h3 {
+            margin: 0 0 8px 0;
+            font-size: 15px;
+            color: #cba6f7;
+        }
+
+        .files {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 10px;
+        }
+
+        .file {
+            display: block;
+            background: #11111b;
+            border: 1px solid #313244;
+            border-radius: 6px;
+            overflow: hidden;
+            text-decoration: none;
+            color: #cdd6f4;
+        }
+
+        .file img {
+            width: 100%;
+            height: 110px;
+            object-fit: cover;
+            display: block;
+            background: #000;
+        }
+
+        .file .ph {
+            height: 110px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 30px;
+            color: #45475a;
+            background: #000;
+        }
+
+        .file .name {
+            padding: 6px 8px;
+            font-size: 11px;
+            word-break: break-all;
+            line-height: 1.4;
+        }
+
+        .hidden { display: none !important; }
+    </style>
+</head>
+
+<body>
+    <div class="hub">
+        <h1><i class="fa-solid fa-share-nodes"></i> XenoPlayer Sharing Hub</h1>
+        <p class="sub">Connect to this player's shared library.</p>
+
+        <div class="owner">Hub owner: <b id="owner-name">Loading...</b></div>
+
+        <form id="connect-form" autocomplete="off">
+            <label for="email">Your email address</label>
+            <div class="row">
+                <input type="email" id="email" placeholder="you@xenohead.com" required>
+                <button type="submit" id="connect-btn">Connect</button>
+            </div>
+        </form>
+
+        <div class="msg" id="msg"></div>
+
+        <div id="library" class="hidden"></div>
+
+        <p class="note">
+            <i class="fa-solid fa-lock"></i> Only <b>@xenohead.com</b> email addresses can connect to this hub.
+            Requests from any other domain are rejected by the hub.
+        </p>
+    </div>
+
+    <script>
+        const ownerName = document.getElementById('owner-name');
+        const form = document.getElementById('connect-form');
+        const emailInput = document.getElementById('email');
+        const connectBtn = document.getElementById('connect-btn');
+        const msg = document.getElementById('msg');
+        const libraryBox = document.getElementById('library');
+
+        fetch('/share/owner').then(r => r.json()).then(data => {
+            ownerName.textContent = data.owner || 'This player';
+        }).catch(() => { ownerName.textContent = 'This player'; });
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const email = emailInput.value.trim().toLowerCase();
+            msg.className = 'msg';
+            msg.textContent = '';
+
+            if (!email.endsWith('@xenohead.com')) {
+                msg.className = 'msg error';
+                msg.textContent = 'Only @xenohead.com email addresses can connect.';
+                return;
+            }
+
+            connectBtn.disabled = true;
+            connectBtn.textContent = 'Connecting...';
+
+            try {
+                const res = await fetch('/share/connect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email: email })
+                });
+                const data = await res.json();
+                if (!res.ok || data.status !== 'success') {
+                    msg.className = 'msg error';
+                    msg.textContent = data.error || 'Could not connect.';
+                    connectBtn.disabled = false;
+                    connectBtn.textContent = 'Connect';
+                    return;
+                }
+                msg.className = 'msg ok';
+                msg.textContent = 'Connected as ' + email + '.';
+                form.classList.add('hidden');
+                renderLibrary(data.library || []);
+            } catch (err) {
+                msg.className = 'msg error';
+                msg.textContent = 'Could not reach the hub: ' + err.message;
+                connectBtn.disabled = false;
+                connectBtn.textContent = 'Connect';
+            }
+        });
+
+        function renderLibrary(library) {
+            libraryBox.innerHTML = '';
+            libraryBox.classList.remove('hidden');
+
+            if (!library.length) {
+                libraryBox.innerHTML = '<div class="owner">Nothing has been shared yet.</div>';
+                return;
+            }
+
+            library.forEach(folder => {
+                const wrap = document.createElement('div');
+                wrap.className = 'folder';
+
+                const title = document.createElement('h3');
+                title.textContent = folder.name;
+                wrap.appendChild(title);
+
+                const grid = document.createElement('div');
+                grid.className = 'files';
+
+                (folder.files || []).forEach(file => {
+                    const link = document.createElement('a');
+                    link.className = 'file';
+                    link.href = file.url;
+                    link.target = '_blank';
+
+                    const isImage = /\.(jpg|jpeg|png|webp|gif)$/i.test(file.name);
+                    if (isImage) {
+                        const img = document.createElement('img');
+                        img.src = file.url;
+                        img.loading = 'lazy';
+                        link.appendChild(img);
+                    } else {
+                        const ph = document.createElement('div');
+                        ph.className = 'ph';
+                        ph.innerHTML = '<i class="fa-solid fa-film"></i>';
+                        link.appendChild(ph);
+                    }
+
+                    const name = document.createElement('div');
+                    name.className = 'name';
+                    name.textContent = file.name;
+                    link.appendChild(name);
+
+                    grid.appendChild(link);
+                });
+
+                wrap.appendChild(grid);
+                libraryBox.appendChild(wrap);
+            });
+        }
+    </script>
+</body>
+
+</html>
