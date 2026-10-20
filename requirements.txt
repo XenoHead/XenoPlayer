@@ -16,3 +16,5 @@ tensorboard
 transformers
 argostranslate
 manga-ocr
+torchvision
+tiktoken

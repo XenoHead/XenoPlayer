@@ -25,6 +25,10 @@ def build():
             except Exception as e:
                 print(f"Warning: could not remove {spec}: {e}")
             
+    manga_model_exists = os.path.exists(os.path.join(script_dir, "manga_ocr_model"))
+    if not manga_model_exists:
+        print("Warning: manga_ocr_model directory not found. Skipping bundling of the model files.")
+
     # PHASE A: Package the OCR background runtime execution engine
     print(f"Building background OCR worker binary in isolated process...")
     cmd_a = [
@@ -33,7 +37,10 @@ def build():
         '--onedir',
         '--clean',
         '--name=ocr_worker',
-        '--add-data=manga_ocr_model;manga_ocr_model',
+    ]
+    if manga_model_exists:
+        cmd_a.append('--add-data=manga_ocr_model;manga_ocr_model')
+    cmd_a.extend([
         '--hidden-import=manga_ocr',
         '--collect-all=unidic_lite',
         '--collect-all=fugashi',
@@ -45,7 +52,7 @@ def build():
         '--exclude-module=torch.utils.tensorboard',
         '--exclude-module=triton',
         '--noconfirm'
-    ]
+    ])
     subprocess.run(cmd_a, check=True)
 
     # PHASE B: Package the core application user interface layout
@@ -59,8 +66,11 @@ def build():
         '--name=XenoPlayer',
         '--icon=icon.ico',
         '--add-data=web;web',
-        '--add-data=manga_ocr_model;manga_ocr_model',
-        
+        f'--add-data={os.path.join(script_dir, "MAINLIST.json")};.',
+    ]
+    if manga_model_exists:
+        cmd_b.append('--add-data=manga_ocr_model;manga_ocr_model')
+    cmd_b.extend([
         # Inject the newly compiled asset binary folder layout
         f'--add-data={os.path.join(script_dir, "dist", "ocr_worker", "ocr_worker.exe")};.',
         
@@ -78,7 +88,7 @@ def build():
         '--hidden-import=webview',
         '--hidden-import=cv2',  
         '--noconfirm'
-    ]
+    ])
     subprocess.run(cmd_b, check=True)
     
     # Copy dist/ocr_worker directory into dist/XenoPlayer/ocr_worker/

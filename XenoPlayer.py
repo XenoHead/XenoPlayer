@@ -8,14 +8,13 @@ os.environ["TRANSFORMERS_OFFLINE"] = "1"
 import threading
 import json
 import re
-import socket
-import time
 import cv2
 import webview
 import tempfile
 import shutil
 import hashlib
 import urllib.parse
+import zipfile
 from flask import Flask, request, send_file, Response
 
 class DummyWriter:
@@ -47,12 +46,31 @@ else:
 SETTINGS_FILE = os.path.join(app_dir, "web_settings.json")
 
 def load_settings():
+    settings = {"favorites": [], "last_video": None, "max_volume": 100, "move_targets": {}, 
+"saved_folders": ["", "", "", "", ""], "external_apps": ["", "", "", "", ""], "default_folder": -1, "hotkeys": 
+{"next": ["ArrowRight", "Space", "", "", ""], "prev": ["ArrowLeft", "", "", "", ""], 
+"pause": ["KeyP", "", "", "", ""], "mute": ["KeyM", "", "", "", ""], 
+"split_next_video": ["KeyD", "", "", "", ""], "split_next_image": ["KeyE", "", "", "", ""]}, "saved_volumes": {}, 
+"favs_mode": "folder", "collection_sites": [], "audio_sites": [], "online_playlists": {}}
     if os.path.exists(SETTINGS_FILE):
         try:
             with open(SETTINGS_FILE, "r") as f:
-                return json.load(f)
+                settings.update(json.load(f))
         except: pass
-    return {"favorites": [], "last_video": None, "max_volume": 100, "move_targets": {}, "saved_folders": ["", "", "", "", ""], "external_apps": ["", "", "", "", ""], "default_folder": -1, "hotkeys": {"next": ["ArrowRight", "Space", "", "", ""], "prev": ["ArrowLeft", "", "", "", ""]}, "saved_volumes": {}, "favs_mode": "folder", "collection_sites": [], "audio_sites": [], "online_playlists": {}}
+    
+    online_src_file = os.path.join(app_dir, "MAINLIST.json")
+    if not os.path.exists(online_src_file):
+        online_src_file = resource_path("MAINLIST.json")
+    if os.path.exists(online_src_file):
+        try:
+            with open(online_src_file, "r", encoding="utf-8") as f:
+                online_settings = json.load(f)
+                if "collection_sites" in online_settings: settings["collection_sites"] = online_settings["collection_sites"]
+                if "audio_sites" in online_settings: settings["audio_sites"] = online_settings["audio_sites"]
+                if "story_sites" in online_settings: settings["story_sites"] = online_settings["story_sites"]
+        except: pass
+
+    return settings
 
 def save_settings(s):
     with open(SETTINGS_FILE, "w") as f:
@@ -67,49 +85,6 @@ def clean_filename(name):
     cleaned = ''.join(c for c in name if c in valid_chars or c.isalnum())
     return cleaned.strip()
 
-# --- SHARING HUB ---
-
-SHARE_ALLOWED_DOMAIN = "xenohead.com"
-SHARE_EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
-SHARE_PORT = 5050
-
-def validate_share_email(email):
-    if not email or not isinstance(email, str):
-        return None, "Enter an email address."
-    normalized = email.strip().lower()
-    if not SHARE_EMAIL_RE.match(normalized):
-        return None, "That is not a valid email address."
-    domain = normalized.split("@", 1)[1]
-    if domain != SHARE_ALLOWED_DOMAIN:
-        return None, "Only @%s email addresses can connect." % SHARE_ALLOWED_DOMAIN
-    return normalized, None
-
-def get_local_ip():
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            s.connect(("8.8.8.8", 80))
-            return s.getsockname()[0]
-        finally:
-            s.close()
-    except Exception:
-        return "127.0.0.1"
-
-def get_share_hub_url():
-    return "http://%s:%d/share" % (get_local_ip(), SHARE_PORT)
-
-def normalize_hub_address(address):
-    if not address or not isinstance(address, str):
-        return ""
-    addr = address.strip()
-    if not addr:
-        return ""
-    if not addr.startswith("http://") and not addr.startswith("https://"):
-        addr = "http://" + addr
-    if addr.endswith("/share"):
-        return addr
-    return addr + "/share"
-
 # --- CORE FRONTEND INTEGRATED API HANDLERS ---
 
 class Api:
@@ -121,6 +96,12 @@ class Api:
         self.current_index = -1
         self._window = None
         self.cancel_flags = {}
+        self.ftp_files = []
+        self.ftp_index = -1
+        self._current_directory = self.settings.get("last_opened_dir", "")
+        self._cbz_temp_dir = None
+        self._cbz_root = None
+        self._cbz_archive_path = None
 
     def get_startup_info(self):
         art_path = resource_path('XenoHead_art.png')
@@ -139,6 +120,7 @@ class Api:
         if 0 <= default_index < len(folders):
             def_folder = folders[default_index]
             if def_folder and os.path.isdir(def_folder):
+                self._current_directory = def_folder
                 try:
                     supported = {'.mp4', '.webm', '.ogg', '.mp3', '.wav', '.wave', '.jpg', '.jpeg', '.png', '.webp', '.gif', '.txt', '.md', '.json', '.csv'}
                     if self.settings.get("recursive_load", False):
@@ -156,6 +138,8 @@ class Api:
                             self.load_directory(os.path.join(def_folder, first_file), play=False)
                             return {"status": "ready"}
                 except Exception: pass
+                self.load_selected_directory(def_folder)
+                return {"status": "ready"}
                 
         last_video = self.settings.get("last_video")
         if last_video and os.path.exists(last_video):
@@ -165,7 +149,7 @@ class Api:
     def open_dialog(self):
         last_dir = self.settings.get("last_opened_dir", "")
         if last_dir and not os.path.exists(last_dir): last_dir = ""
-        result = self._window.create_file_dialog(webview.FileDialog.OPEN, directory=last_dir, allow_multiple=False, file_types=('Media Files (*.mp4;*.webm;*.ogg;*.mp3;*.wav;*.wave;*.jpg;*.png;*.gif;*.webp)', 'All files (*.*)'))
+        result = self._window.create_file_dialog(webview.FileDialog.OPEN, directory=last_dir, allow_multiple=False, file_types=('Media Files (*.mp4;*.webm;*.ogg;*.mp3;*.wav;*.wave;*.jpg;*.png;*.gif;*.webp;*.cbz)', 'All files (*.*)'))
         if result and len(result) > 0:
             self.settings["last_opened_dir"] = os.path.dirname(result[0])
             save_settings(self.settings)
@@ -218,7 +202,11 @@ class Api:
     def load_directory(self, filepath, play=True):
         filepath = os.path.abspath(filepath)
         if not os.path.isfile(filepath): return
+        if os.path.splitext(filepath)[1].lower() == '.cbz':
+            self.open_cbz_archive(filepath)
+            return
         directory = os.path.dirname(filepath)
+        self._current_directory = directory
         
         supported = {'.mp4', '.webm', '.ogg', '.mp3', '.wav', '.wave', '.jpg', '.jpeg', '.png', '.webp', '.gif', '.txt', '.md', '.json', '.csv'}
         
@@ -248,7 +236,16 @@ class Api:
 
     def load_selected_directory(self, directory_path):
         directory_path = os.path.abspath(directory_path)
-        if not os.path.isdir(directory_path): return
+        if not os.path.isdir(directory_path):
+            return {"status": "error", "msg": "Folder does not exist."}
+        if self._cbz_root:
+            try:
+                inside_cbz = os.path.commonpath([self._cbz_root, directory_path]) == self._cbz_root
+            except ValueError:
+                inside_cbz = False
+            if not inside_cbz:
+                self._cleanup_cbz_archive()
+        self._current_directory = directory_path
         
         supported = {'.mp4', '.webm', '.ogg', '.mp3', '.wav', '.wave', '.jpg', '.jpeg', '.png', '.webp', '.gif', '.txt', '.md', '.json', '.csv'}
         
@@ -278,6 +275,52 @@ class Api:
         self._window.evaluate_js('updatePlaylist()')
         if filepath:
             self.play_current()
+        return {"status": "success", "directory": directory_path, "count": len(self.playlist)}
+
+    def _cleanup_cbz_archive(self):
+        if self._cbz_temp_dir:
+            self._cbz_temp_dir.cleanup()
+        self._cbz_temp_dir = None
+        self._cbz_root = None
+        self._cbz_archive_path = None
+
+    def open_cbz_archive(self, archive_path):
+        archive_path = os.path.abspath(archive_path)
+        if not os.path.isfile(archive_path) or os.path.splitext(archive_path)[1].lower() != '.cbz':
+            return {"status": "error", "msg": "The selected file is not a CBZ archive."}
+
+        self._cleanup_cbz_archive()
+        temp_dir = tempfile.TemporaryDirectory(prefix="XenoPlayer_cbz_")
+        archive_root = os.path.abspath(temp_dir.name)
+        try:
+            with zipfile.ZipFile(archive_path) as archive:
+                for member in archive.infolist():
+                    member_path = os.path.abspath(os.path.join(archive_root, member.filename.replace("/", os.sep).replace("\\", os.sep)))
+                    if os.path.commonpath([archive_root, member_path]) != archive_root:
+                        raise ValueError(f"Unsafe path in CBZ archive: {member.filename}")
+                    if member.is_dir():
+                        os.makedirs(member_path, exist_ok=True)
+                        continue
+                    os.makedirs(os.path.dirname(member_path), exist_ok=True)
+                    with archive.open(member) as source, open(member_path, "wb") as destination:
+                        shutil.copyfileobj(source, destination)
+        except Exception as e:
+            temp_dir.cleanup()
+            return {"status": "error", "msg": f"Could not open CBZ archive: {e}"}
+
+        self._cbz_temp_dir = temp_dir
+        self._cbz_root = archive_root
+        self._cbz_archive_path = archive_path
+        self.load_selected_directory(archive_root)
+        return {"status": "success"}
+
+    def close_cbz_archive(self):
+        if not self._cbz_archive_path:
+            return {"status": "error", "msg": "No CBZ archive is currently open."}
+        parent_directory = os.path.dirname(self._cbz_archive_path)
+        self._cleanup_cbz_archive()
+        self.load_selected_directory(parent_directory)
+        return {"status": "success"}
 
     def refresh_current_directory(self):
         current_path = self.playlist[self.current_index] if (0 <= self.current_index < len(self.playlist)) else None
@@ -350,7 +393,7 @@ class Api:
         path = self.playlist[self.current_index]
         self.settings["last_video"] = path
         save_settings(self.settings)
-        self._window.evaluate_js(f'loadMedia({json.dumps(path)}, {self.current_index})')
+        self._window.evaluate_js(f'loadMedia({json.dumps(path)}, {self.current_index}); null;')
 
     def play_index(self, index):
         if 0 <= index < len(self.playlist):
@@ -389,34 +432,25 @@ class Api:
             "saved_folders": self.settings.get("saved_folders", ["", "", "", "", ""]),
             "external_apps": self.settings.get("external_apps", ["", "", "", "", ""]),
             "default_folder": self.settings.get("default_folder", -1),
-            "hotkeys": self.settings.get("hotkeys", {"next": ["ArrowRight", "Space", "", "", ""], "prev": ["ArrowLeft", "", "", "", ""]}),
+            "hotkeys": self.settings.get("hotkeys", {"next": ["ArrowRight", "Space", "", "", ""], 
+"prev": ["ArrowLeft", "", "", "", ""], "pause": ["KeyP", "", "", "", ""], "mute": ["KeyM", "", "", "", ""],
+"split_next_video": ["KeyD", "", "", "", ""], "split_next_image": ["KeyE", "", "", "", ""]}),
             "current_path": current_path,
             "is_favorite": current_path in self.settings.get("favorites", []) if current_path else False,
             "is_collection_folder": is_collection,
             "favs_mode": favs_mode,
             "collection_sites": self.settings.get("collection_sites", []),
             "audio_sites": self.settings.get("audio_sites", []),
+            "story_sites": self.settings.get("story_sites", []),
             "online_playlists": self.settings.get("online_playlists", {}),
             "favorite_collection_tags": self.settings.get("favorite_collection_tags", {"nhentai": [], "danbooru": [], "hentaiyoga": [], "rule34art": [], "ehentai": []}),
             "recursive_load": self.settings.get("recursive_load", False),
             "type_filter": self.settings.get("type_filter", "all"),
             "playlist_sort": self.settings.get("playlist_sort", "name"),
             "sort_asc": self.settings.get("sort_asc", True),
-            "view_mode": self.settings.get("view_mode", "medium")
+            "view_mode": self.settings.get("view_mode", "medium"),
+            "gemini_api_key": self.settings.get("gemini_api_key", "")
         }
-
-        # Load online sources
-        try:
-            with open('online_sources.json', 'r', encoding='utf-8') as f:
-                import json
-                sources = json.load(f)
-                state["collection_sites"] = sources.get("collection_sites", [])
-                state["audio_sites"] = sources.get("audio_sites", [])
-                state["story_sites"] = sources.get("story_sites", [])
-        except Exception as e:
-            state["collection_sites"] = []
-            state["audio_sites"] = []
-            state["story_sites"] = []
 
         return state
 
@@ -429,8 +463,12 @@ class Api:
         return {"status": "success"}
 
     def save_online_sources(self, collection_sites, audio_sites, story_sites):
+        self.settings["collection_sites"] = collection_sites
+        self.settings["audio_sites"] = audio_sites
+        self.settings["story_sites"] = story_sites
+        save_settings(self.settings)
         try:
-            src_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'online_sources.json')
+            src_path = os.path.join(app_dir, 'MAINLIST.json')
             with open(src_path, 'w', encoding='utf-8') as f:
                 json.dump({
                     "collection_sites": collection_sites,
@@ -438,7 +476,7 @@ class Api:
                     "story_sites": story_sites
                 }, f, indent=4)
         except Exception as e:
-            print(f"Warning: could not save online_sources.json: {e}")
+            print(f"Warning: could not save MAINLIST.json: {e}")
         return self.get_state()
 
     def export_online_sources(self, collection_sites, audio_sites, story_sites):
@@ -446,7 +484,7 @@ class Api:
             result = self._window.create_file_dialog(
                 webview.FileDialog.SAVE,
                 directory=os.path.expanduser('~'),
-                save_filename='online_sources.json',
+                save_filename='MAINLIST.json',
                 file_types=('JSON Files (*.json)', 'All files (*.*)')
             )
             if result:
@@ -483,35 +521,85 @@ class Api:
             print(f"Import error: {e}")
         return {"status": "cancelled"}
 
-    def get_dir_tree(self):
-        if not self.full_playlist:
-            return {"root": "", "subdirs": []}
-        
-        paths = [p for p in self.full_playlist if not (p.startswith('http://') or p.startswith('https://'))]
-        if not paths:
-            return {"root": "", "subdirs": []}
-            
+    def browse_copyparty(self, url):
+        import urllib.request
         try:
-            dirs = [os.path.dirname(p) for p in paths]
-            common_root = os.path.commonpath(dirs)
-        except Exception:
+            sep = '&' if '?' in url else '?'
+            api_url = url.rstrip('/') + '/' + sep + 'ls&dirs=1&files=1'
+            req = urllib.request.Request(api_url, headers={'User-Agent': 'Porn Player/1.0'})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                data = json.loads(r.read().decode('utf-8'))
+            dirs = [{"name": d.get("href","").rstrip('/'), "href": d.get("href",""), "files": d.get("tags",{}).get(".files",0), "sz": d.get("sz",0)} for d in data.get("dirs", [])]
+            image_exts = {'.jpg','.jpeg','.png','.webp','.gif','.bmp','.tiff','.avif'}
+            video_exts = {'.mp4','.webm','.ogg','.mkv','.avi','.mov','.flv','.wmv','.m4v','.ts'}
+            audio_exts = {'.mp3','.wav','.wave','.flac','.aac','.ogg','.m4a','.opus','.wma'}
+            archive_exts = {'.zip','.rar','.7z','.tar','.gz','.cbz','.cbr','.cb7'}
+            manga_exts = {'.cbz','.cbr','.cb7','.cbt'}
+            doc_exts = {'.pdf','.txt','.md','.epub','.mobi'}
+            files = []
+            for f in data.get("files", []):
+                href = f.get("href","")
+                ext = ('.' + href.rsplit('.',1)[-1]).lower() if '.' in href else ''
+                if ext in manga_exts:
+                    ftype = 'manga'
+                elif ext in image_exts:
+                    ftype = 'image'
+                elif ext in video_exts:
+                    ftype = 'video'
+                elif ext in audio_exts:
+                    ftype = 'audio'
+                elif ext in archive_exts:
+                    ftype = 'archive'
+                elif ext in doc_exts:
+                    ftype = 'doc'
+                else:
+                    ftype = 'file'
+                files.append({"name": href, "href": href, "sz": f.get("sz",0), "type": ftype, "ext": ext})
+            base = url.rstrip('/') + '/'
+            return {"status": "ok", "dirs": dirs, "files": files, "base_url": base}
+        except Exception as e:
+            return {"status": "error", "msg": str(e)}
+
+    def set_ftp_playlist(self, files, index):
+        self.ftp_files = files
+        self.ftp_index = index
+        return {"status": "success"}
+
+    def get_ftp_playlist(self):
+        return {"files": self.ftp_files, "index": self.ftp_index}
+
+    def get_dir_tree(self):
+        common_root = self._current_directory
+        if not common_root or not os.path.isdir(common_root):
+            paths = [p for p in self.full_playlist if not (p.startswith('http://') or p.startswith('https://'))]
+            if not paths:
+                return {"root": "", "subdirs": [], "cbz_files": []}
             common_root = os.path.dirname(paths[0])
         
         if not common_root or not os.path.isdir(common_root):
-            return {"root": "", "subdirs": []}
+            return {"root": "", "subdirs": [], "cbz_files": []}
             
         subdirs = []
+        cbz_files = []
         try:
             for root, dirs, files in os.walk(common_root):
                 dirs[:] = [d for d in dirs if not d.startswith('.')]
                 for d in dirs:
                     subdirs.append(os.path.normpath(os.path.join(root, d)))
+                cbz_files.extend(
+                    os.path.normpath(os.path.join(root, name))
+                    for name in files
+                    if os.path.splitext(name)[1].lower() == '.cbz'
+                )
         except:
             pass
             
-        state = {
+        return {
             "root": common_root,
-            "subdirs": subdirs
+            "subdirs": subdirs,
+            "cbz_files": cbz_files,
+            "cbz_root": self._cbz_root,
+            "cbz_archive_path": self._cbz_archive_path
         }
 
     def toggle_favorite(self):
@@ -552,7 +640,7 @@ class Api:
             
         return self.get_state()
 
-    def save_options(self, folders, default_index, external_apps=None, favs_mode="folder", collection_sites=None, audio_sites=None, recursive_load=None):
+    def save_options(self, folders, default_index, external_apps=None, favs_mode="folder", collection_sites=None, audio_sites=None, recursive_load=None, gemini_api_key=None):
         self.settings["saved_folders"] = folders
         self.settings["default_folder"] = default_index
         if external_apps is not None: self.settings["external_apps"] = external_apps
@@ -560,6 +648,7 @@ class Api:
         if collection_sites is not None: self.settings["collection_sites"] = collection_sites
         if audio_sites is not None: self.settings["audio_sites"] = audio_sites
         if recursive_load is not None: self.settings["recursive_load"] = recursive_load
+        if gemini_api_key is not None: self.settings["gemini_api_key"] = gemini_api_key
         save_settings(self.settings)
         return self.get_state()
 
@@ -832,7 +921,7 @@ class Api:
     def search_online_stories(self, source_id, query):
         # Find the site config from settings
         try:
-            src_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'online_sources.json')
+            src_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'MAINLIST.json')
             with open(src_path, 'r', encoding='utf-8') as f:
                 sources = json.load(f)
                 all_sites = sources.get("story_sites", [])
@@ -859,11 +948,28 @@ class Api:
         elif parser_type == 'generic_html':
             return self._search_generic_html(query, search_config)
         
-        return {"status": "error", "msg": "Search not configured for this source. Edit its 'notes' in online_sources.json."}
+        return {"status": "error", "msg": "Search not configured for this source. Edit its 'notes' in MAINLIST.json."}
+
+    def search_custom_collection(self, source_id, query):
+        try:
+            all_sites = self.settings.get("collection_sites", [])
+            site_config = next((s for s in all_sites if s.get('id') == source_id), None)
+            if not site_config:
+                return {"status": "error", "msg": f"Could not find configuration for custom site ID: {source_id}"}
+            
+            notes = site_config.get('notes', '')
+            search_config = {}
+            if notes.strip().startswith('{') and notes.strip().endswith('}'):
+                search_config = json.loads(notes)
+            
+            res = self._search_generic_html(query, search_config)
+            return res
+        except Exception as e:
+            return {"status": "error", "msg": str(e)}
 
     def _search_generic_html(self, query, config):
         try:
-            import requests
+            import cloudscraper
             from bs4 import BeautifulSoup
             import urllib.parse
 
@@ -873,9 +979,8 @@ class Api:
             
             search_url = search_url_template.replace('{query}', urllib.parse.quote(query))
             
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-            
-            response = requests.get(search_url, headers=headers, timeout=15)
+            scraper = cloudscraper.create_scraper()
+            response = scraper.get(search_url, timeout=15)
             if response.status_code != 200:
                 return {"status": "error", "msg": f"Site returned HTTP {response.status_code}"}
 
@@ -902,7 +1007,15 @@ class Api:
                 base_url = config.get('base_url', '')
                 full_url = urllib.parse.urljoin(base_url if base_url else search_url, url)
 
-                results.append({"title": title, "author": author, "summary": summary, "url": full_url})
+                thumb_selector = config.get('thumb_selector')
+                thumb_el = item.select_one(thumb_selector) if thumb_selector else item.select_one('img')
+                thumb = ""
+                if thumb_el:
+                    thumb = thumb_el.get('src') or thumb_el.get('data-src') or thumb_el.get('data-original') or ""
+                    if thumb:
+                        thumb = urllib.parse.urljoin(base_url if base_url else search_url, thumb)
+
+                results.append({"title": title, "author": author, "summary": summary, "url": full_url, "thumb": thumb})
             
             return {"status": "success", "results": results}
         except Exception as e:
@@ -943,14 +1056,14 @@ class Api:
 
     def guess_story_site_selectors(self, url):
         try:
-            import requests
+            import cloudscraper
             from bs4 import BeautifulSoup
             from collections import Counter
             import urllib.parse
             import re
 
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-            response = requests.get(url, headers=headers, timeout=15)
+            scraper = cloudscraper.create_scraper()
+            response = scraper.get(url, timeout=15)
             soup = BeautifulSoup(response.text, 'html.parser')
 
             parsed_url = urllib.parse.urlparse(url)
@@ -988,12 +1101,12 @@ class Api:
                     best_sig_selectors = selectors
             
             if not best_sig_selectors:
-                return {"status": "error", "msg": "Could not find any repeating element structures on the page. This site may be too complex to auto-configure."}
+                return self._guess_selectors_with_ai(url, soup)
 
             results_selector = Counter(best_sig_selectors).most_common(1)[0][0]
             first_result_item = soup.select_one(results_selector)
             if not first_result_item:
-                return {"status": "error", "msg": f"Guessed selector '{results_selector}' found no items. The site might use dynamic JS loading."}
+                return self._guess_selectors_with_ai(url, soup)
 
             def get_selector(element):
                 if not element: return ""
@@ -1025,6 +1138,289 @@ class Api:
             return {"status": "success", "config": config}
         except Exception as e:
             return {"status": "error", "msg": str(e)}
+
+    def _get_env_var(self, *names):
+        for name in names:
+            value = os.environ.get(name)
+            if value:
+                return value
+
+        for relative_path in [".env", os.path.join("web", ".env")]:
+            path = os.path.join(app_dir, relative_path)
+            if os.path.exists(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        for line in f:
+                            if "=" in line:
+                                k, v = line.split("=", 1)
+                                if k.strip() in names:
+                                    return v.strip().strip('"').strip("'")
+                except: pass
+        return ""
+
+    def _guess_selectors_with_ai(self, url, soup):
+        account_id = self._get_env_var("CLOUDFLARE_ACCOUNTID", "Cloudflare_Account_ID")
+        api_key = self._get_env_var("CF_WORKERSAI_REST_API", "CF_ACCOUNT_API_Token", "Cloudflare_API_Key")
+        
+        try:
+            for tag in soup(["script", "style", "svg", "head", "path", "meta", "link"]):
+                tag.decompose()
+                
+            html_content = str(soup)[:50000]
+            
+            import requests
+            import json
+            
+            prompt = (
+                "You are an expert web scraper helper. I need you to analyze the HTML source code of a search results page "
+                f"from URL: {url} and extract the CSS selectors for the repeating items.\n\n"
+                "Extract the following:\n"
+                "1. 'results_selector': The CSS selector matching each repeating item card/element (e.g. '.result-card', 'li.work', 'div.item').\n"
+                "2. 'title_selector': The relative CSS selector (relative to the results_selector element) matching the anchor tag for the item title.\n"
+                "3. 'url_selector': The relative CSS selector matching the anchor tag containing the detail URL (usually same as title_selector).\n"
+                "4. 'author_selector': Relative CSS selector matching the author link or name element (empty string if not found).\n"
+                "5. 'summary_selector': Relative CSS selector matching the description / summary / synopsis text element (empty string if not found).\n"
+                "6. 'thumb_selector': Relative CSS selector matching the thumbnail image element (img tag) if present (empty string if not found).\n\n"
+                "Return ONLY a valid JSON object matching this structure. Do not output markdown codeblocks, just raw JSON:\n"
+                "{\n"
+                '  "results_selector": "...",\n'
+                '  "title_selector": "...",\n'
+                '  "url_selector": "...",\n'
+                '  "author_selector": "...",\n'
+                '  "summary_selector": "...",\n'
+                '  "thumb_selector": "..."\n'
+                "}\n\n"
+                f"HTML Source Snippet:\n{html_content}"
+            )
+
+            # Try Cloudflare Workers AI
+            if account_id and api_key:
+                try:
+                    cf_url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/@cf/meta/llama-3.1-8b-instruct"
+                    headers = {
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json"
+                    }
+                    payload = {
+                        "messages": [
+                            {"role": "user", "content": prompt}
+                        ]
+                    }
+                    r = requests.post(cf_url, json=payload, headers=headers, timeout=20)
+                    if r.status_code == 200:
+                        resp_data = r.json()
+                        response_text = resp_data['result']['response'].strip()
+                        if response_text.startswith("```"):
+                            lines = response_text.splitlines()
+                            if lines[0].startswith("```json"):
+                                response_text = "\n".join(lines[1:-1])
+                            elif lines[0].startswith("```"):
+                                response_text = "\n".join(lines[1:-1])
+                        config = json.loads(response_text)
+                        return self._build_final_config(url, config)
+                except Exception as e:
+                    print(f"Cloudflare AI failed: {e}")
+
+            # Fallback to Gemini
+            gemini_key = self.settings.get("gemini_api_key", "").strip() or self._get_env_var("GEMINI_API_KEY")
+            if gemini_key:
+                try:
+                    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key}"
+                    payload = {
+                        "contents": [{
+                            "parts": [{"text": prompt}]
+                        }],
+                        "generationConfig": {
+                            "responseMimeType": "application/json"
+                        }
+                    }
+                    r = requests.post(api_url, json=payload, headers={"Content-Type": "application/json"}, timeout=20)
+                    if r.status_code == 200:
+                        resp_data = r.json()
+                        response_text = resp_data['candidates'][0]['content']['parts'][0]['text'].strip()
+                        if response_text.startswith("```"):
+                            lines = response_text.splitlines()
+                            if lines[0].startswith("```json"):
+                                response_text = "\n".join(lines[1:-1])
+                            elif lines[0].startswith("```"):
+                                response_text = "\n".join(lines[1:-1])
+                        config = json.loads(response_text)
+                        return self._build_final_config(url, config)
+                except Exception as e:
+                    print(f"Gemini AI failed: {e}")
+
+            return {"status": "error", "msg": "Heuristic failed, and AI models could not run. Provide a Gemini API key in Options, or set Cloudflare keys in your .env file."}
+        except Exception as e:
+            return {"status": "error", "msg": f"AI Guess failed: {str(e)}"}
+
+    def scrape_custom_gallery(self, url, source_id=None):
+        try:
+            import cloudscraper
+            from bs4 import BeautifulSoup
+            import urllib.parse
+            
+            scraper = cloudscraper.create_scraper()
+            r = scraper.get(url, timeout=15)
+            if r.status_code != 200:
+                return {"status": "error", "msg": f"Failed to load gallery page. HTTP {r.status_code}"}
+                
+            soup = BeautifulSoup(r.text, 'html.parser')
+            
+            for tag in soup(["script", "style", "svg", "path", "head"]):
+                tag.decompose()
+                
+            media_urls = []
+            seen = set()
+            
+            # Extract large gallery images
+            for img in soup.find_all("img"):
+                src = img.get("src") or img.get("data-src") or img.get("data-original") or img.get("file-src") or ""
+                if src:
+                    src_lower = src.lower()
+                    if any(x in src_lower for x in ["logo", "avatar", "icon", "theme", "header", "footer", "button", "sprite"]):
+                        continue
+                    full_url = urllib.parse.urljoin(url, src)
+                    if full_url not in seen:
+                        seen.add(full_url)
+                        media_urls.append(full_url)
+            
+            # Extract links to media
+            for a in soup.find_all("a"):
+                href = a.get("href") or ""
+                if href:
+                    href_lower = href.lower()
+                    if any(href_lower.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".gif", ".webp", ".mp4", ".webm"]):
+                        full_url = urllib.parse.urljoin(url, href)
+                        if full_url not in seen:
+                            seen.add(full_url)
+                            media_urls.append(full_url)
+                            
+            if not media_urls:
+                return self._scrape_gallery_with_ai(url, soup)
+                
+            playlist = []
+            for i, mu in enumerate(media_urls):
+                filename = mu.split('/')[-1].split('?')[0] or f"item_{i}"
+                playlist.append({
+                    "name": filename,
+                    "type": "image" if not any(mu.lower().endswith(x) for x in [".mp4", ".webm"]) else "video",
+                    "url": mu
+                })
+                
+            return {"status": "success", "playlist": playlist}
+        except Exception as e:
+            return {"status": "error", "msg": str(e)}
+
+    def _scrape_gallery_with_ai(self, url, soup):
+        account_id = self._get_env_var("CLOUDFLARE_ACCOUNTID", "Cloudflare_Account_ID")
+        api_key = self._get_env_var("CF_WORKERSAI_REST_API", "CF_ACCOUNT_API_Token", "Cloudflare_API_Key")
+        gemini_key = self.settings.get("gemini_api_key", "").strip() or self._get_env_var("GEMINI_API_KEY")
+        
+        for tag in soup(["script", "style", "svg", "head", "path", "meta", "link"]):
+            tag.decompose()
+        html_content = str(soup)[:60000]
+        
+        prompt = (
+            "You are an expert web scraper helper. I need you to analyze the HTML source code of a gallery detail page "
+            f"from URL: {url} and extract a list of absolute or relative image/video source URLs (the actual images of the comic/gallery).\n\n"
+            "Identify the repeating image elements, extract their 'src' or 'href' attribute, and resolve them to absolute URLs if relative.\n\n"
+            "Return ONLY a valid JSON object matching this structure. Do not output markdown codeblocks, just raw JSON:\n"
+            "{\n"
+            '  "media_urls": [\n'
+            '    "https://...",\n'
+            '    "https://..."\n'
+            '  ]\n'
+            "}\n\n"
+            f"HTML Source Snippet:\n{html_content}"
+        )
+        
+        import requests
+        import json
+
+        if account_id and api_key:
+            try:
+                cf_url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/@cf/meta/llama-3.1-8b-instruct"
+                headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+                r = requests.post(cf_url, json={"messages": [{"role": "user", "content": prompt}]}, headers=headers, timeout=20)
+                if r.status_code == 200:
+                    resp_data = r.json()
+                    response_text = resp_data['result']['response'].strip()
+                    if response_text.startswith("```"):
+                        lines = response_text.splitlines()
+                        if lines[0].startswith("```json"): response_text = "\n".join(lines[1:-1])
+                        elif lines[0].startswith("```"): response_text = "\n".join(lines[1:-1])
+                    config = json.loads(response_text)
+                    urls = config.get("media_urls", [])
+                    if urls:
+                        return self._build_gallery_playlist(url, urls)
+            except Exception as e:
+                print(f"Cloudflare gallery scraping failed: {e}")
+                
+        if gemini_key:
+            try:
+                api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key}"
+                payload = {
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"responseMimeType": "application/json"}
+                }
+                r = requests.post(api_url, json=payload, headers={"Content-Type": "application/json"}, timeout=20)
+                if r.status_code == 200:
+                    resp_data = r.json()
+                    response_text = resp_data['candidates'][0]['content']['parts'][0]['text'].strip()
+                    if response_text.startswith("```"):
+                        lines = response_text.splitlines()
+                        if lines[0].startswith("```json"): response_text = "\n".join(lines[1:-1])
+                        elif lines[0].startswith("```"): response_text = "\n".join(lines[1:-1])
+                    config = json.loads(response_text)
+                    urls = config.get("media_urls", [])
+                    if urls:
+                        return self._build_gallery_playlist(url, urls)
+            except Exception as e:
+                print(f"Gemini gallery scraping failed: {e}")
+                
+        return {"status": "error", "msg": "Could not extract any media elements from this page."}
+
+    def _build_gallery_playlist(self, url, urls):
+        import urllib.parse
+        playlist = []
+        for i, u in enumerate(urls):
+            full_url = urllib.parse.urljoin(url, u)
+            filename = full_url.split('/')[-1].split('?')[0] or f"item_{i}"
+            playlist.append({
+                "name": filename,
+                "type": "image" if not any(full_url.lower().endswith(x) for x in [".mp4", ".webm"]) else "video",
+                "url": full_url
+            })
+        return {"status": "success", "playlist": playlist}
+
+    def _build_final_config(self, url, config):
+        import urllib.parse
+        import re
+        parsed_url = urllib.parse.urlparse(url)
+        query_params = urllib.parse.parse_qs(parsed_url.query)
+        search_term = ""
+        for key, values in query_params.items():
+            if len(values) == 1 and len(values[0]) > 2 and re.search(r'[a-zA-Z]{3,}', values[0]):
+                search_term = values[0]
+                break
+        
+        search_url = url.replace(search_term, '{query}') if search_term else url
+        base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+        
+        return {
+            "status": "success",
+            "config": {
+                "parser": "generic_html", 
+                "search_url": search_url, 
+                "base_url": base_url,
+                "results_selector": config.get("results_selector", ""),
+                "title_selector": config.get("title_selector", ""),
+                "url_selector": config.get("url_selector", ""),
+                "author_selector": config.get("author_selector", ""),
+                "summary_selector": config.get("summary_selector", ""),
+                "thumb_selector": config.get("thumb_selector", "")
+            }
+        }
 
     def rename_collection(self, path, newName):
         if not path: return {"status": "error"}
@@ -1122,7 +1518,7 @@ class Api:
     def get_danbooru_tags(self, query=None):
         try:
             import requests
-            headers = {'User-Agent': 'XenoPlayer/1.0 (contact@xenohead.com)'}
+            headers = {'User-Agent': 'PornPlayer/1.0 (contact@xenohead.com)'}
             url = 'https://danbooru.donmai.us/tags.json?search[order]=count&limit=100'
             if query:
                 url += f'&search[name_matches]=*{urllib.parse.quote(query)}*'
@@ -1137,7 +1533,7 @@ class Api:
     def search_danbooru(self, query):
         try:
             import requests
-            headers = {'User-Agent': 'XenoPlayer/1.0 (contact@xenohead.com)'}
+            headers = {'User-Agent': 'Porn Player/1.0 (contact@xenohead.com)'}
             url = f"https://danbooru.donmai.us/posts.json?tags={urllib.parse.quote(query)}&limit=20"
             r = requests.get(url, headers=headers, timeout=10)
             if r.status_code == 200:
@@ -1529,7 +1925,25 @@ class Api:
                         raise Exception("Cancelled by user")
                     time.sleep(0.5)
                 if process.returncode != 0 and not self.cancel_flags.get(title):
-                    raise Exception(f"gallery-dl failed with return code {process.returncode}")
+                    # Fallback to custom scraper for unsupported urls (e.g. multporn.net)
+                    scraped = self.scrape_custom_gallery(url)
+                    if scraped.get("status") == "success" and scraped.get("playlist"):
+                        import urllib.request
+                        headers = {'User-Agent': 'Mozilla/5.0'}
+                        for index, item in enumerate(scraped["playlist"]):
+                            item_url = item["url"]
+                            ext = "." + item_url.split('.')[-1].split('?')[0] if '.' in item_url.split('/')[-1] else ".jpg"
+                            if ext.lower() not in [".jpg", ".jpeg", ".png", ".gif", ".webp", ".mp4", ".webm"]:
+                                ext = ".jpg"
+                            local_path = os.path.join(download_dir, f"{index:04d}{ext}")
+                            try:
+                                req = urllib.request.Request(item_url, headers=headers)
+                                with urllib.request.urlopen(req, timeout=10) as response, open(local_path, 'wb') as out_file:
+                                    out_file.write(response.read())
+                            except Exception as e:
+                                print(f"Scrape download failed for item {index}: {e}")
+                    else:
+                        raise Exception(f"gallery-dl failed (code {process.returncode}) and scraper fallback failed: {scraped.get('msg')}")
                 
                 # Flatten any nested subdirectories created by gallery-dl
                 import shutil
@@ -1570,7 +1984,7 @@ class Api:
             safe_title = title.replace('\\', '\\\\').replace('"', '\\"')
             try:
                 import requests
-                headers = {'User-Agent': 'XenoPlayer/1.0 (contact@xenohead.com)'}
+                headers = {'User-Agent': 'Porn Player/1.0 (contact@xenohead.com)'}
                 
                 os.makedirs(download_dir, exist_ok=True)
                 open(os.path.join(download_dir, ".collection"), 'w').close()
@@ -2089,7 +2503,7 @@ class Api:
                 cropped.save(temp_img_path)
                 
                 if getattr(sys, 'frozen', False):
-                    # In a COLLECT/onedir build, ocr_worker.exe sits in ocr_worker/ or next to XenoPlayer.exe
+                    # In a COLLECT/onedir build, ocr_worker.exe sits in ocr_worker/ or next to Porn layer.exe
                     exe_dir = os.path.dirname(sys.executable)
                     worker_exe = os.path.join(exe_dir, "ocr_worker", "ocr_worker.exe")
                     if not os.path.exists(worker_exe):
@@ -2459,126 +2873,14 @@ class Api:
         self.save_window_state()
         self._window.destroy()
 
-    # --- Sharing Hub ---
-
-    def _share_peers(self):
-        peers = self.settings.get("share_peers", [])
-        if not isinstance(peers, list):
-            peers = []
-        return peers
-
-    def get_share_hub(self):
-        return {
-            "status": "success",
-            "identity": self.settings.get("share_identity", ""),
-            "peers": self._share_peers(),
-            "allowed_domain": SHARE_ALLOWED_DOMAIN,
-            "hub_url": get_share_hub_url(),
-            "shared_folders": self.settings.get("share_folders", [])
-        }
-
-    def set_share_identity(self, email):
-        normalized, err = validate_share_email(email)
-        if err:
-            return {"status": "error", "msg": err}
-        self.settings["share_identity"] = normalized
-        save_settings(self.settings)
-        return {"status": "success", "identity": normalized, "hub_url": get_share_hub_url()}
-
-    def share_add_peer(self, email, hub_address=""):
-        normalized, err = validate_share_email(email)
-        if err:
-            return {"status": "error", "msg": err}
-        identity = self.settings.get("share_identity", "")
-        if not identity:
-            return {"status": "error", "msg": "Set your hub identity before connecting."}
-        if normalized == identity:
-            return {"status": "error", "msg": "That is your own hub address."}
-        peers = self._share_peers()
-        existing = next((p for p in peers if p.get("email") == normalized), None)
-        if existing:
-            existing["hub"] = normalize_hub_address(hub_address) or existing.get("hub", "")
-            existing["status"] = "connected"
-        else:
-            peers.append({
-                "email": normalized,
-                "hub": normalize_hub_address(hub_address),
-                "status": "connected",
-                "added": time.time()
-            })
-        self.settings["share_peers"] = peers
-        save_settings(self.settings)
-        return {"status": "success", "peers": peers}
-
-    def share_remove_peer(self, email):
-        normalized, err = validate_share_email(email)
-        if err:
-            return {"status": "error", "msg": err}
-        peers = [p for p in self._share_peers() if p.get("email") != normalized]
-        self.settings["share_peers"] = peers
-        save_settings(self.settings)
-        return {"status": "success", "peers": peers}
-
-    def share_friend_library(self, email, hub_address):
-        normalized, err = validate_share_email(email)
-        if err:
-            return {"status": "error", "msg": err}
-        identity = self.settings.get("share_identity", "")
-        if not identity:
-            return {"status": "error", "msg": "Set your hub identity before connecting."}
-        target = normalize_hub_address(hub_address)
-        if not target:
-            return {"status": "error", "msg": "Enter your friend's hub address."}
-        try:
-            import requests
-            base = target[:-len("/share")] if target.endswith("/share") else target
-            r = requests.get(base + "/share/library", params={"email": identity}, timeout=10)
-            if r.status_code != 200:
-                msg = ""
-                try:
-                    msg = r.json().get("error", "")
-                except Exception:
-                    pass
-                return {"status": "error", "msg": msg or "Could not reach that hub (%s)." % r.status_code}
-            data = r.json()
-        except Exception as e:
-            return {"status": "error", "msg": "Could not reach that hub: %s" % e}
-        owner = (data.get("owner") or "").strip().lower()
-        if owner and owner != normalized:
-            return {"status": "error", "msg": "That hub belongs to %s, not %s." % (data.get("owner"), email)}
-        peers = self._share_peers()
-        existing = next((p for p in peers if p.get("email") == normalized), None)
-        if existing:
-            existing["hub"] = target
-            existing["status"] = "connected"
-        else:
-            peers.append({"email": normalized, "hub": target, "status": "connected", "added": time.time()})
-        self.settings["share_peers"] = peers
-        save_settings(self.settings)
-        return {"status": "success", "peers": peers, "owner": data.get("owner", ""), "library": data.get("library", [])}
-
-    def share_set_folders(self, paths):
-        if not isinstance(paths, list):
-            return {"status": "error", "msg": "Invalid folder list."}
-        valid = [p for p in paths if isinstance(p, str) and os.path.isdir(p)]
-        self.settings["share_folders"] = valid
-        save_settings(self.settings)
-        return {"status": "success", "shared_folders": valid}
-
 api = Api()
 
 # --- FLASK STREAMING INFRASTRUCTURE ---
 
-def is_local_request():
-    remote = request.remote_addr or ''
-    return remote in ('127.0.0.1', '::1', 'localhost')
-
 @app.route('/media')
 def stream_media():
-    if not is_local_request():
-        return "Forbidden", 403
     path = request.args.get('path')
-    if not path or not os.path.exists(path): return "Not found", 404
+    if not path or not os.path.exists(path) or os.path.isdir(path): return "Not found", 404
     
     import mimetypes
     mime, _ = mimetypes.guess_type(path)
@@ -2613,10 +2915,8 @@ def stream_media():
 
 @app.route('/thumbnail')
 def get_thumbnail():
-    if not is_local_request():
-        return "Forbidden", 403
     path = request.args.get('path')
-    if not path or not os.path.exists(path): return "Not found", 404
+    if not path or not os.path.exists(path) or os.path.isdir(path): return "Not found", 404
     ext = os.path.splitext(path)[1].lower()
     if ext in {'.jpg', '.jpeg', '.png', '.webp', '.gif'}: return send_file(path)
     if ext not in {'.mp4', '.webm', '.ogg'}: return "Not video", 404
@@ -2632,8 +2932,6 @@ def get_thumbnail():
 
 @app.route('/imgproxy')
 def img_proxy():
-    if not is_local_request():
-        return "Forbidden", 403
     img_url = request.args.get('url', '')
     referer = request.args.get('ref', '')
     if not img_url or not img_url.startswith('http'):
@@ -2658,130 +2956,206 @@ def img_proxy():
     except Exception as e:
         return str(e), 500
 
-# --- SHARING HUB SERVER ---
+@app.route('/ftp_player')
+def ftp_player_page():
+    return """<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>FTP Player</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body {
+            margin: 0;
+            background: #09090e;
+            color: #cdd6f4;
+            font-family: system-ui, -apple-system, sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+            justify-content: center;
+            align-items: center;
+            user-select: none;
+        }
+        #viewer-container {
+            flex: 1;
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+            background: #000;
+        }
+        img, video {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+        #controls {
+            background: #11111b;
+            width: 100%;
+            padding: 15px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 20px;
+            box-sizing: border-box;
+        }
+        button {
+            background: #313244;
+            color: #cdd6f4;
+            border: 1px solid #45475a;
+            border-radius: 6px;
+            padding: 8px 16px;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: background 0.15s, border-color 0.15s;
+        }
+        button:hover {
+            background: #45475a;
+            border-color: #a6e3a1;
+        }
+        #title-display {
+            font-size: 13px;
+            color: #a6e3a1;
+            text-align: center;
+            max-width: 50%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        /* Floating Prev/Next arrows on hover */
+        .nav-arrow {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            background: rgba(0,0,0,0.5);
+            color: #fff;
+            border: none;
+            width: 50px;
+            height: 50px;
+            border-radius: 25px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 24px;
+            cursor: pointer;
+            opacity: 0;
+            transition: opacity 0.2s, background 0.15s;
+            z-index: 10;
+        }
+        #viewer-container:hover .nav-arrow {
+            opacity: 0.7;
+        }
+        .nav-arrow:hover {
+            opacity: 1 !important;
+            background: rgba(166, 227, 161, 0.8);
+            color: #11111b;
+        }
+        #prev-arrow { left: 20px; }
+        #next-arrow { right: 20px; }
+    </style>
+</head>
+<body>
+    <div id="viewer-container">
+        <button id="prev-arrow" class="nav-arrow" onclick="playPrev()"><i class="fa-solid fa-chevron-left"></i></button>
+        <div id="media-slot" style="width:100%; height:100%; display:flex; justify-content:center; align-items:center;"></div>
+        <button id="next-arrow" class="nav-arrow" onclick="playNext()"><i class="fa-solid fa-chevron-right"></i></button>
+    </div>
+    <div id="controls">
+        <button onclick="playPrev()"><i class="fa-solid fa-backward"></i> Prev</button>
+        <div id="title-display">Loading...</div>
+        <button onclick="playNext()">Next <i class="fa-solid fa-forward"></i></button>
+    </div>
 
-SHARE_MEDIA_EXT = {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.mpg', '.mpeg', '.ogg'}
+    <script>
+        let playlist = [];
+        let currentIndex = -1;
 
-def share_folders():
-    folders = api.settings.get("share_folders", [])
-    if isinstance(folders, list) and folders:
-        return [f for f in folders if isinstance(f, str) and os.path.isdir(f)]
-    known = api.settings.get("known_collection_folders", [])
-    return [f for f in known if isinstance(f, str) and os.path.isdir(f)]
+        document.addEventListener('DOMContentLoaded', () => {
+            window.addEventListener('pywebviewready', () => {
+                loadPlaylist();
+            });
+            if (window.pywebview && window.pywebview.api) {
+                loadPlaylist();
+            }
+        });
 
-def share_library_for(email):
-    base = request.host_url.rstrip('/')
-    library = []
-    for folder in share_folders():
-        try:
-            files = sorted([f for f in os.listdir(folder) if os.path.splitext(f)[1].lower() in SHARE_MEDIA_EXT], key=natural_sort_key)
-        except Exception:
-            files = []
-        library.append({
-            "name": os.path.basename(folder) or folder,
-            "path": folder,
-            "files": [{
-                "name": f,
-                "url": "%s/share/media?email=%s&path=%s" % (base, urllib.parse.quote(email), urllib.parse.quote(os.path.join(folder, f)))
-            } for f in files]
-        })
-    return library
+        function loadPlaylist() {
+            pywebview.api.get_ftp_playlist().then(res => {
+                playlist = res.files || [];
+                currentIndex = res.index;
+                playCurrent();
+            });
+        }
 
-@app.route('/share')
-def share_page():
-    try:
-        return send_file(resource_path(os.path.join('web', 'share.html')))
-    except Exception:
-        return "Sharing hub page not found", 404
+        function playCurrent() {
+            if (currentIndex < 0 || currentIndex >= playlist.length) return;
+            const item = playlist[currentIndex];
+            const name = decodeURIComponent(item.name);
+            document.getElementById('title-display').textContent = `(${currentIndex + 1}/${playlist.length}) ${name}`;
+            document.title = name;
 
-@app.route('/share/owner')
-def share_owner():
-    return {"status": "success", "owner": api.settings.get("share_identity", ""), "allowed_domain": SHARE_ALLOWED_DOMAIN}
+            const slot = document.getElementById('media-slot');
+            slot.innerHTML = '';
 
-@app.route('/share/connect', methods=['POST'])
-def share_connect():
-    try:
-        data = request.get_json(silent=True) or {}
-    except Exception:
-        data = {}
-    email = data.get('email', '') or request.form.get('email', '')
-    normalized, err = validate_share_email(email)
-    if err:
-        return {"status": "error", "error": err}, 403
-    owner = api.settings.get("share_identity", "")
-    if not owner:
-        return {"status": "error", "error": "This hub has no owner identity set yet."}, 403
-    peers = api._share_peers()
-    existing = next((p for p in peers if p.get("email") == normalized), None)
-    if existing:
-        existing["status"] = "connected"
-        existing["last_seen"] = time.time()
-    else:
-        peers.append({"email": normalized, "hub": "", "status": "connected", "added": time.time(), "last_seen": time.time()})
-    api.settings["share_peers"] = peers
-    save_settings(api.settings)
-    return {"status": "success", "owner": owner, "library": share_library_for(normalized)}
+            if (item.type === 'image') {
+                const img = document.createElement('img');
+                img.src = item.url;
+                slot.appendChild(img);
+            } else if (item.type === 'video') {
+                const vid = document.createElement('video');
+                vid.src = item.url;
+                vid.autoplay = true;
+                vid.controls = true;
+                vid.style.width = '100%';
+                vid.style.height = '100%';
+                slot.appendChild(vid);
+            } else if (item.type === 'audio') {
+                const aud = document.createElement('audio');
+                aud.src = item.url;
+                aud.autoplay = true;
+                aud.controls = true;
+                slot.appendChild(aud);
+            } else {
+                slot.innerHTML = `<div style="text-align:center;color:#888;"><i class="fa-solid fa-file" style="font-size:64px;margin-bottom:15px;"></i><br>Unsupported preview format: ${name}</div>`;
+            }
+        }
 
-@app.route('/share/library')
-def share_library():
-    email = request.args.get('email', '')
-    normalized, err = validate_share_email(email)
-    if err:
-        return {"status": "error", "error": err}, 403
-    return {"status": "success", "owner": api.settings.get("share_identity", ""), "library": share_library_for(normalized)}
+        function playNext() {
+            if (playlist.length === 0) return;
+            currentIndex = (currentIndex + 1) % playlist.length;
+            playCurrent();
+        }
 
-@app.route('/share/media')
-def share_media():
-    email = request.args.get('email', '')
-    path = request.args.get('path', '')
-    normalized, err = validate_share_email(email)
-    if err:
-        return {"status": "error", "error": err}, 403
-    if not path or not os.path.isfile(path):
-        return "Not found", 404
-    allowed = False
-    for folder in share_folders():
-        try:
-            if os.path.commonpath([os.path.abspath(folder), os.path.abspath(path)]) == os.path.abspath(folder):
-                allowed = True
-                break
-        except Exception:
-            continue
-    if not allowed:
-        return "Not shared", 403
-    import mimetypes
-    mime, _ = mimetypes.guess_type(path)
-    if not mime:
-        mime = 'application/octet-stream'
-    range_header = request.headers.get('Range', None)
-    if not range_header:
-        return send_file(path, mimetype=mime)
-    size = os.path.getsize(path)
-    byte1, byte2 = 0, size - 1
-    m = re.search(r'bytes=(\d+)-(\d*)', range_header)
-    if m:
-        g = m.groups()
-        if g[0]: byte1 = int(g[0])
-        if g[1]: byte2 = int(g[1])
-    length = byte2 - byte1 + 1
-    def generate():
-        with open(path, 'rb') as f:
-            f.seek(byte1)
-            remaining = length
-            while remaining > 0:
-                chunk = f.read(min(1024 * 1024, remaining))
-                if not chunk: break
-                remaining -= len(chunk)
-                yield chunk
-    rv = Response(generate(), 206, mimetype=mime)
-    rv.headers.add('Content-Range', f"bytes {byte1}-{byte2}/{size}")
-    rv.headers.add('Accept-Ranges', 'bytes')
-    return rv
+        function playPrev() {
+            if (playlist.length === 0) return;
+            currentIndex = (currentIndex - 1 + playlist.length) % playlist.length;
+            playCurrent();
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowRight' || e.key === ' ') {
+                e.preventDefault();
+                playNext();
+            } else if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                playPrev();
+            }
+        });
+    </script>
+</body>
+</html>"""
 
 def run_server():
     import logging
     logging.getLogger('werkzeug').setLevel(logging.ERROR)
-    app.run(host='0.0.0.0', port=5050, debug=False, use_reloader=False)
+    app.run(port=5050, debug=False, use_reloader=False)
 
 if __name__ == '__main__':
     threading.Thread(target=run_server, daemon=True).start()

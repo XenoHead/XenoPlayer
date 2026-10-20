@@ -68,9 +68,10 @@
                     style="background-color: #fab387; color: #11111b; font-weight: bold; margin-top: 10px;"><i
                         class="fa-solid fa-book-open"></i>
                     Online Stories</button>
-                <button onclick="openShareHub()"
-                    style="background-color: #f9e2af; color: #11111b; font-weight: bold; margin-top: 10px;"><i
-                        class="fa-solid fa-share-nodes"></i> Sharing Hub</button>
+                <button onclick="openFtpBrowser()"
+                    style="background-color: #a6e3a1; color: #11111b; font-weight: bold; margin-top: 10px;"><i
+                        class="fa-solid fa-folder-tree"></i>
+                    FTP Browser</button>
             </div>
 
             <div id="split-tabs-container" style="display:none; margin: 10px; border-bottom: 2px solid #313244;">
@@ -194,8 +195,20 @@
                 <button id="view-collection-btn" onclick="pywebview.api.open_collection_viewer(appState.current_path)" style="display: none;"><i class="fa-solid fa-book-open"></i> VIEW COLLECTION</button>
             </div>
 
-            <div id="top-bar">
-                <span id="current-file-name">No file loaded</span>
+            <div id="top-bar" style="display:flex; align-items:center; justify-content:space-between; position:relative;">
+                <div style="display:flex; align-items:center; flex:1; min-width:0; gap:10px;">
+                    <span id="current-file-name" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">No file loaded</span>
+                    
+                    <!-- Top Inline Audio Bar -->
+                    <div id="top-audio-bar" style="display:none; align-items:center; gap:8px; background:#1e1e2e; border:1px solid #45475a; border-radius:4px; padding:2px 8px; font-size:11px; color:#cdd6f4; flex-shrink:0;">
+                        <span id="top-audio-name" style="font-weight:bold; color:#89dceb; max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Audio Name</span>
+                        <button onclick="topAudioPrev()" style="background:none; border:none; color:#cdd6f4; cursor:pointer; font-size:11px; padding:0 2px;"><i class="fa-solid fa-backward-step"></i></button>
+                        <button id="top-audio-play-btn" onclick="topAudioTogglePlay()" style="background:none; border:none; color:#89dceb; cursor:pointer; font-size:11px; padding:0 2px;"><i class="fa-solid fa-pause"></i></button>
+                        <button onclick="topAudioNext()" style="background:none; border:none; color:#cdd6f4; cursor:pointer; font-size:11px; padding:0 2px;"><i class="fa-solid fa-forward-step"></i></button>
+                        <button onclick="topAudioClose()" style="background:none; border:none; color:#f38ba8; cursor:pointer; font-size:11px; padding:0 2px; margin-left:3px;"><i class="fa-solid fa-xmark"></i></button>
+                        <audio id="top-audio-element" style="display:none;"></audio>
+                    </div>
+                </div>
 
                 <button id="favorite-btn" onclick="toggleFavorite()"><i class="fa-regular fa-star"></i></button>
             </div>
@@ -214,6 +227,9 @@
                         <video id="video-player" style="display:none;" autoplay></video>
                     </div>
                 </div>
+
+                <!-- Split Resizer -->
+                <div id="split-resizer" style="width: 8px; cursor: col-resize; background: #313244; z-index: 10; display: none; transition: background 0.15s; position: relative;" onmouseover="this.style.background='#a6e3a1'" onmouseout="this.style.background='#313244'"></div>
 
                 <!-- Right Split Pane (Images) -->
                 <div id="right-split-pane" class="split-pane-wrapper">
@@ -414,6 +430,12 @@
             <label for="opt-recursive-load" style="cursor:pointer; user-select:none;">Scan subfolders recursively when loading directories</label>
         </div>
 
+        <h3 style="margin-top: 15px; margin-bottom: 5px; color:#a6e3a1;"><i class="fa-solid fa-brain"></i> AI Configuration</h3>
+        <div style="display: flex; flex-direction: column; gap: 4px; margin-bottom: 15px;">
+            <label for="opt-gemini-key" style="font-size:12px; color:#aaa;">Gemini API Key (for Auto-Config AI fallback):</label>
+            <input type="password" id="opt-gemini-key" placeholder="Paste your Gemini API Key..." style="width: 100%; box-sizing: border-box; background: #222; color: white; border: 1px solid #444; padding: 6px 10px; border-radius: 4px;">
+        </div>
+
         <button onclick="saveOptionsModal()" style="margin-top: 15px; width: 100%;">Save Options</button>
         <button onclick="closeModals()" style="margin-top: 5px; width: 100%; background: #444;">Cancel</button>
     </div>
@@ -425,6 +447,16 @@
         <!-- Collection Sites -->
         <h3 style="margin-top: 15px; margin-bottom: 5px; color:#cba6f7;"><i class="fa-solid fa-list"></i> Collection Sites</h3>
         <p style="font-size: 11px; color: #aaa; margin-top: 0;">These appear in the Online Media browser's source dropdown.</p>
+        
+        <div style="background:#16161f; border:1px solid #cba6f7; border-radius:4px; padding:10px; margin-bottom:15px;">
+            <h4 style="margin:0 0 5px 0; color:#cba6f7; font-size:13px;"><i class="fa-solid fa-wand-magic-sparkles"></i> Auto-Config from URL</h4>
+            <p style="font-size:11px; color:#aaa; margin:0 0 8px 0;">Go to an image/video gallery search page and paste the URL here to guess the configuration.</p>
+            <div style="display:flex; gap:8px;">
+                <input type="text" id="collection-config-guesser-url" placeholder="Paste a gallery/search results URL here..." style="flex:1; min-width:0;">
+                <button onclick="guessCollectionSiteConfig()" style="background:#cba6f7; color:#111; border:none; border-radius:3px; padding:5px 10px; font-weight:bold; cursor:pointer;">Guess Config</button>
+            </div>
+        </div>
+
         <div id="collection-sites-list"
             style="width: 100%; max-height: 160px; overflow-y: auto; background: #222; border-radius: 4px; padding: 5px; margin-bottom: 5px; text-align: left;">
         </div>
@@ -447,6 +479,16 @@
         <!-- Audio Sites -->
         <h3 style="margin-top: 15px; margin-bottom: 5px; color:#89dceb;"><i class="fa-solid fa-music"></i> Audio Sites</h3>
         <p style="font-size: 11px; color: #aaa; margin-top: 0;">These appear in the Online Audio streamer's sites list.</p>
+        
+        <div style="background:#16161f; border:1px solid #89dceb; border-radius:4px; padding:10px; margin-bottom:15px;">
+            <h4 style="margin:0 0 5px 0; color:#89dceb; font-size:13px;"><i class="fa-solid fa-wand-magic-sparkles"></i> Auto-Config from URL</h4>
+            <p style="font-size:11px; color:#aaa; margin:0 0 8px 0;">Go to a music/audio site, search for audio, and paste the results URL here to guess the configuration.</p>
+            <div style="display:flex; gap:8px;">
+                <input type="text" id="audio-config-guesser-url" placeholder="Paste an audio search results URL here..." style="flex:1; min-width:0;">
+                <button onclick="guessAudioSiteConfig()" style="background:#89dceb; color:#111; border:none; border-radius:3px; padding:5px 10px; font-weight:bold; cursor:pointer;">Guess Config</button>
+            </div>
+        </div>
+
         <div id="audio-sites-list"
             style="width: 100%; max-height: 160px; overflow-y: auto; background: #222; border-radius: 4px; padding: 5px; margin-bottom: 5px; text-align: left;">
         </div>
@@ -507,19 +549,35 @@
     </div>
     <!-- Hotkeys Modal -->
     <div id="hotkeys-modal" class="modal"
-        style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:#333; padding:20px; z-index:1000; width:500px; border-radius: 8px;">
+        style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:#333; padding:20px; z-index:1000; width:600px; border-radius: 8px; max-height:90vh; overflow-y:auto;">
         <h2 style="margin-top:0;">Edit Hotkeys</h2>
         <p style="font-size: 12px; color: #ccc;">Click on an input and press a key or click a mouse button to assign it.
             Press Backspace to
             clear.</p>
-        <div style="display:flex; gap: 20px;">
-            <div style="flex: 1;">
+        <div style="display:flex; gap: 20px; flex-wrap:wrap;">
+            <div style="flex: 1; min-width:120px;">
                 <h3>Previous Media</h3>
                 <div id="hotkeys-prev-list"></div>
             </div>
-            <div style="flex: 1;">
+            <div style="flex: 1; min-width:120px;">
                 <h3>Next Media</h3>
                 <div id="hotkeys-next-list"></div>
+            </div>
+            <div style="flex: 1; min-width:120px;">
+                <h3>Pause Video/Auto Play</h3>
+                <div id="hotkeys-pause-list"></div>
+            </div>
+            <div style="flex: 1; min-width:120px;">
+                <h3>Mute Video</h3>
+                <div id="hotkeys-mute-list"></div>
+            </div>
+            <div style="flex: 1; min-width:120px;">
+                <h3>Split Mode Next Video</h3>
+                <div id="hotkeys-split-video-list"></div>
+            </div>
+            <div style="flex: 1; min-width:120px;">
+                <h3>Split Mode Next Image</h3>
+                <div id="hotkeys-split-image-list"></div>
             </div>
         </div>
         <button onclick="saveHotkeysModal()" style="margin-top: 15px; width: 100%;">Save Hotkeys</button>
@@ -530,14 +588,14 @@
     <div id="online-media-modal" class="modal">
         <div class="modal-content" style="max-width: 800px; max-height: 80vh; display: flex; flex-direction: column;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                <h3 style="margin: 0; color: #ff477e;"><i class="fa-solid fa-globe"></i> Online Images/Videos</h3>
+                <h3 style="margin: 0; color: #ff477e; display: flex; align-items: center; gap: 8px;">
+                    <i class="fa-solid fa-globe"></i> Online Images/Videos
+                    <span onclick="openOnlineSourcesModal()" style="color: #aaa; font-size: 14px; cursor: pointer; display: inline-flex; align-items: center;" title="Manage Sources"><i class="fa-solid fa-gear"></i></span>
+                </h3>
                 <div style="display: flex; gap: 12px; align-items: center;">
                     <span class="maximize-btn" onclick="toggleMaximizeCollectionBrowser()"
                         style="color: #aaa; font-size: 14px; cursor: pointer; display: inline-flex; align-items: center;"
                         title="Maximize"><i class="fa-regular fa-square" id="collection-max-icon"></i></span>
-                    <span class="close-btn" onclick="closeOnlineMedia()"
-                        style="color: #aaa; font-size: 28px; font-weight: bold; cursor: pointer; line-height: 1; display: inline-block;"
-                        title="Close">&times;</span>
                 </div>
             </div>
 
@@ -571,6 +629,8 @@
                         style="flex-grow: 1; padding: 8px; border-radius: 4px; border: 1px solid #444; background: #111; color: white;">
                     <button onclick="downloadDirectCollectionUrl()"
                         style="background-color: #4CAF50; color: white; padding: 8px 15px; font-weight: bold; border: none; border-radius: 4px; cursor: pointer;">Download</button>
+                    <button onclick="previewDirectCollectionUrl()"
+                        style="background-color: #89b4fa; color: #11111b; padding: 8px 15px; font-weight: bold; border: none; border-radius: 4px; cursor: pointer;">Browse/Play</button>
                 </div>
             </div>
 
@@ -590,6 +650,8 @@
                     <option value="6" selected>6</option>
                     <option value="9">9</option>
                 </select>
+                <label for="collection-thumb-size" style="color: #aaa; font-size: 13px; white-space: nowrap; margin-left: 5px;">Thumb Size:</label>
+                <input type="range" id="collection-thumb-size" min="80" max="350" value="150" oninput="onCollectionThumbSizeChanged()" style="width: 80px; padding: 0; margin: 0;">
             </div>
 
             <div
@@ -653,8 +715,15 @@
     <div id="online-stories-modal" class="modal">
         <div class="modal-content" style="max-width: 800px; max-height: 80vh; display: flex; flex-direction: column; width: 90%; height: 70vh;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid #444; padding-bottom: 10px;">
-                <h3 style="margin: 0; color: #fab387; font-size: 18px; display: flex; align-items: center; gap: 8px;"><i class="fa-solid fa-book-open"></i> Online Stories</h3>
-                <span class="close" onclick="closeOnlineStories()" style="position: static; font-size: 24px;">&times;</span>
+                <h3 style="margin: 0; color: #fab387; font-size: 18px; display: flex; align-items: center; gap: 8px;">
+                    <i class="fa-solid fa-book-open"></i> Online Stories
+                    <span onclick="openOnlineSourcesModal()" style="color: #aaa; font-size: 14px; cursor: pointer; display: inline-flex; align-items: center;" title="Manage Sources"><i class="fa-solid fa-gear"></i></span>
+                </h3>
+                <div style="display: flex; gap: 12px; align-items: center;">
+                    <span class="maximize-btn" onclick="toggleMaximizeStoriesBrowser()"
+                        style="color: #aaa; font-size: 14px; cursor: pointer; display: inline-flex; align-items: center;"
+                        title="Maximize"><i class="fa-regular fa-square" id="stories-max-icon"></i></span>
+                </div>
             </div>
 
             <div style="display: flex; gap: 15px; margin-bottom: 15px; align-items: center; justify-content: flex-start;">
@@ -672,15 +741,29 @@
                 <button onclick="searchOnlineStories()"
                     style="background-color: #fab387; color: #11111b; padding: 10px 20px; font-size: 16px; border:none; border-radius:4px; cursor:pointer; font-weight:bold;"><i
                         class="fa-solid fa-magnifying-glass"></i> Search</button>
+                <label for="story-columns-select" style="color: #aaa; font-size: 13px; white-space: nowrap;">Columns:</label>
+                <select id="story-columns-select" onchange="onStoryColumnsChanged()"
+                    style="background: #222; color: white; border: 1px solid #444; border-radius: 4px; padding: 8px 6px; font-size: 14px;">
+                    <option value="2">2</option>
+                    <option value="3" selected>3</option>
+                    <option value="4">4</option>
+                </select>
+                <label for="story-thumb-size" style="color: #aaa; font-size: 13px; white-space: nowrap; margin-left: 5px;">Thumb Size:</label>
+                <input type="range" id="story-thumb-size" min="80" max="350" value="150" oninput="onStoryThumbSizeChanged()" style="width: 80px; padding: 0; margin: 0;">
             </div>
 
             <div id="online-stories-status" style="margin-bottom: 10px; color: #aaa; height: 18px; text-align: left;"></div>
 
             <div id="online-stories-results-area"
-                style="flex-grow: 1; background: #222; border-radius: 4px; padding: 10px; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 15px; align-content: start;">
+                style="flex-grow: 1; background: #222; border-radius: 4px; padding: 10px; overflow-y: auto; display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; align-content: start;">
                 <div style="grid-column: 1 / -1; text-align: center; color: #666; margin-top: 20px;">
                     Select a site and enter a search term to begin.
                 </div>
+            </div>
+
+            <div style="text-align: right; margin-top: 15px;">
+                <button onclick="closeOnlineStories()"
+                    style="background-color: #444; color: white; padding: 10px 20px; font-size: 14px; border: none; border-radius: 4px; cursor: pointer;">Close</button>
             </div>
         </div>
     </div>
@@ -689,13 +772,17 @@
     <div id="online-audio-modal" class="modal">
         <div class="modal-content"
             style="max-width: 950px; max-height: 85vh; display: flex; flex-direction: column; width: 95%; height: 80vh; padding: 0;">
-            <!-- Header (always full width) -->
             <div
                 style="display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 15px 20px; border-bottom: 1px solid #444; background: var(--bg-panel); border-radius: 8px 8px 0 0;">
-                <h3 style="margin: 0; color: #89dceb; font-size: 18px; display: flex; align-items: center; gap: 8px;"><i
-                        class="fa-solid fa-music"></i> Online Audio Streamer</h3>
-                <span class="close" onclick="closeOnlineAudio()"
-                    style="position: static; font-size: 24px;">&times;</span>
+                <h3 style="margin: 0; color: #89dceb; font-size: 18px; display: flex; align-items: center; gap: 8px;">
+                    <i class="fa-solid fa-music"></i> Online Audio Streamer
+                    <span onclick="openOnlineSourcesModal()" style="color: #aaa; font-size: 14px; cursor: pointer; display: inline-flex; align-items: center;" title="Manage Sources"><i class="fa-solid fa-gear"></i></span>
+                </h3>
+                <div style="display: flex; gap: 12px; align-items: center;">
+                    <span class="maximize-btn" onclick="toggleMaximizeAudioBrowser()"
+                        style="color: #aaa; font-size: 14px; cursor: pointer; display: inline-flex; align-items: center;"
+                        title="Maximize"><i class="fa-regular fa-square" id="audio-max-icon"></i></span>
+                </div>
             </div>
 
             <!-- Main Panel (Sidebar + Content) -->
@@ -738,6 +825,15 @@
                                 style="flex: 1; background: transparent; border: none; outline: none; color: white; font-size: 14px; padding: 4px 0; box-shadow: none !important;">
                             <button onclick="clearAudioFilters()"
                                 style="background: #444; border: none; color: white; padding: 4px 10px; border-radius: 4px; font-size: 11px; cursor: pointer;">Reset</button>
+                            <label for="audio-columns-select" style="color: #aaa; font-size: 13px; white-space: nowrap; margin-left: 10px;">Columns:</label>
+                            <select id="audio-columns-select" onchange="onAudioColumnsChanged()"
+                                style="background: #222; color: white; border: 1px solid #444; border-radius: 4px; padding: 4px 6px; font-size: 13px;">
+                                <option value="2">2</option>
+                                <option value="3" selected>3</option>
+                                <option value="4">4</option>
+                            </select>
+                            <label for="audio-thumb-size" style="color: #aaa; font-size: 13px; white-space: nowrap; margin-left: 5px;">Thumb Size:</label>
+                            <input type="range" id="audio-thumb-size" min="80" max="350" value="150" oninput="onAudioThumbSizeChanged()" style="width: 80px; padding: 0; margin: 0;">
                         </div>
                         <div style="width: 100%; margin-bottom: 15px; text-align: left;">
                             <div
@@ -746,7 +842,7 @@
                             <div id="audio-tags-filter-bar" style="display: flex; flex-wrap: wrap; gap: 6px;"></div>
                         </div>
                         <div id="online-audio-list" class="audio-card-grid"
-                            style="flex-grow: 1; overflow-y: auto; width: 100%;">
+                            style="flex-grow: 1; overflow-y: auto; width: 100%; display: grid; grid-template-columns: repeat(3, 1fr);">
                             <!-- Sites populates here -->
                         </div>
                     </div>
@@ -892,64 +988,44 @@
         </div>
     </div>
 
-    <!-- Sharing Hub Modal -->
-    <div id="share-hub-modal" class="modal"
-        style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:#1e1e2e; color:#cdd6f4; padding:20px; z-index:1000; width:640px; height:auto; max-height:85vh; overflow-y:auto; border-radius:8px;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-            <h2 style="margin:0; color:#f9e2af;"><i class="fa-solid fa-share-nodes"></i> Sharing Hub</h2>
-            <span class="close" onclick="closeShareHub()" style="color:#cdd6f4;">&times;</span>
+    <!-- FTP Browser Modal (CopyParty) -->
+    <div id="ftp-browser-modal" class="modal">
+        <div class="modal-content" style="max-width: 860px; max-height: 85vh; display: flex; flex-direction: column; width: 95%; height: 80vh;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid #444; padding-bottom: 10px;">
+                <h3 style="margin: 0; color: #a6e3a1; font-size: 18px; display: flex; align-items: center; gap: 8px;"><i class="fa-solid fa-folder-tree"></i> FTP Browser</h3>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <button class="maximize-btn" onclick="toggleMaximizeFtpBrowser()"
+                        style="padding: 6px 12px; background: #555; color: white; border: none; border-radius: 4px; cursor: pointer;"
+                        title="Maximize"><i class="fa-regular fa-square" id="ftp-max-icon"
+                            style="margin-right: 4px;"></i> Maximize</button>
+                    <button onclick="closeFtpBrowser()" style="background:#555; color:white; border:none; border-radius:4px; cursor:pointer; padding:6px 14px;">Close</button>
+                </div>
+            </div>
+            <!-- URL bar + presets -->
+            <div style="display:flex; gap:8px; margin-bottom:10px; align-items:center;">
+                <select id="ftp-preset-select" onchange="ftpLoadPreset()" style="background:#222;color:white;border:1px solid #444;border-radius:4px;padding:6px;font-size:13px;flex:0 0 auto;">
+                    <option value="">-- Preset sites --</option>
+                    <option value="https://iwiftp.yerf.org/Japan%20animation/">iwiftp / Japan animation</option>
+                </select>
+                <select id="ftp-cols-select" onchange="ftpChangeCols(this.value)" style="background:#222;color:white;border:1px solid #444;border-radius:4px;padding:6px;font-size:13px;flex:0 0 auto;">
+                    <option value="auto">Auto Cols</option>
+                    <option value="3">3 Cols</option>
+                    <option value="6" selected>6 Cols</option>
+                    <option value="9">9 Cols</option>
+                    <option value="12">12 Cols</option>
+                </select>
+                <input id="ftp-url-input" type="text" value="https://iwiftp.yerf.org/Japan%20animation/" placeholder="CopyParty URL..." style="flex:1;padding:7px 10px;background:#222;color:white;border:1px solid #444;border-radius:4px;font-size:13px;">
+                <button onclick="ftpNavigateTo(document.getElementById('ftp-url-input').value)" style="background:#a6e3a1;color:#11111b;border:none;border-radius:4px;padding:7px 14px;font-weight:bold;cursor:pointer;"><i class="fa-solid fa-arrow-right"></i> Go</button>
+            </div>
+            <!-- Breadcrumb -->
+            <div id="ftp-breadcrumb" style="font-size:12px;color:#aaa;margin-bottom:8px;word-break:break-all;"></div>
+            <!-- Directory listing -->
+            <div id="ftp-listing" style="flex:1;overflow-y:auto;background:#1a1a2e;border-radius:6px;padding:8px;">
+                <div style="color:#666;text-align:center;padding:20px;">Enter a URL and press Go.</div>
+            </div>
+            <!-- Status -->
+            <div id="ftp-status" style="font-size:12px;color:#888;margin-top:8px;"></div>
         </div>
-
-        <p style="font-size:12px; color:#a0a0b0; margin-top:0;">
-            <i class="fa-solid fa-lock"></i> Only <b style="color:#a6e3a1;">@xenohead.com</b> email addresses can
-            connect to your hub. Anything else is rejected.
-        </p>
-
-        <h3 style="margin: 0 0 5px 0; color:#89b4fa; font-size:14px;">Your Hub Identity</h3>
-        <div style="display:flex; gap:6px; margin-bottom:5px;">
-            <input type="email" id="share-identity-email" placeholder="you@xenohead.com"
-                style="flex:1; min-width:0; background:#11111b; color:#cdd6f4; border:1px solid #45475a; border-radius:4px; padding:7px 9px;">
-            <button onclick="saveShareIdentity()"
-                style="background:#89b4fa; color:#11111b; border:none; border-radius:4px; padding:7px 14px; font-weight:bold; cursor:pointer;">Save</button>
-        </div>
-        <div id="share-identity-status" style="font-size:11px; color:#a0a0b0; margin-bottom:14px;"></div>
-
-        <h3 style="margin: 0 0 5px 0; color:#89b4fa; font-size:14px;">Your Hub Address</h3>
-        <div style="display:flex; gap:6px; margin-bottom:5px;">
-            <input type="text" id="share-hub-url" readonly placeholder="Loading..."
-                style="flex:1; min-width:0; background:#11111b; color:#a6e3a1; border:1px solid #45475a; border-radius:4px; padding:7px 9px; font-family:monospace; font-size:12px;">
-            <button onclick="copyShareHubUrl()"
-                style="background:#45475a; color:#cdd6f4; border:none; border-radius:4px; padding:7px 14px; cursor:pointer;"><i
-                        class="fa-solid fa-copy"></i></button>
-        </div>
-        <div style="font-size:11px; color:#a0a0b0; margin-bottom:14px;">Friends open this address in a browser and
-            connect with their own @xenohead.com address.</div>
-
-        <h3 style="margin: 0 0 5px 0; color:#89b4fa; font-size:14px;">Connect to a Friend</h3>
-        <div style="display:flex; flex-direction:column; gap:6px; margin-bottom:5px;">
-            <input type="email" id="share-peer-email" placeholder="friend@xenohead.com"
-                style="width:100%; background:#11111b; color:#cdd6f4; border:1px solid #45475a; border-radius:4px; padding:7px 9px;">
-            <input type="text" id="share-peer-hub" placeholder="Friend hub address (optional, e.g. 192.168.1.20:5050/share)"
-                style="width:100%; background:#11111b; color:#cdd6f4; border:1px solid #45475a; border-radius:4px; padding:7px 9px; font-size:12px;">
-            <button onclick="shareConnectPeer()"
-                style="background:#a6e3a1; color:#11111b; border:none; border-radius:4px; padding:7px 14px; font-weight:bold; cursor:pointer;"><i
-                        class="fa-solid fa-link"></i> Connect</button>
-        </div>
-        <div id="share-peer-status" style="font-size:11px; color:#a0a0b0; margin-bottom:14px;"></div>
-
-        <h3 style="margin: 0 0 5px 0; color:#89b4fa; font-size:14px;">Connected Friends</h3>
-        <div id="share-peer-list" style="background:#181825; border:1px solid #313244; border-radius:5px; padding:10px; margin-bottom:14px; min-height:40px;">
-        </div>
-
-        <h3 style="margin: 0 0 5px 0; color:#89b4fa; font-size:14px;">Shared Folders</h3>
-        <div id="share-folder-list" style="background:#181825; border:1px solid #313244; border-radius:5px; padding:10px; margin-bottom:8px; min-height:40px;">
-        </div>
-        <button onclick="addShareFolder()"
-            style="width:100%; background:#45475a; color:#cdd6f4; border:none; border-radius:4px; padding:7px; cursor:pointer; margin-bottom:14px;"><i
-                    class="fa-solid fa-folder-plus"></i> Add Shared Folder</button>
-
-        <button onclick="closeShareHub()"
-            style="width:100%; background:#89b4fa; color:#11111b; font-weight:bold; padding:10px; border:none; border-radius:5px; cursor:pointer;">Close</button>
     </div>
 
     <!-- Collection Library Context Menu -->

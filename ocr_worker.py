@@ -1,3 +1,4 @@
+import sentencepiece
 import os
 import sys
 import io
@@ -25,8 +26,10 @@ os.environ["TRANSFORMERS_DYNAMIC_MODULES_PREVENT_IMPORTS"] = "1"
 os.environ["FORCE_TRANSFORMERS_NO_LAZY"] = "1"
 
 def main():
+
+    print(f"DEBUG: sys.argv is {sys.argv}") # Add this!
     if len(sys.argv) < 3:
-        print("ERROR: Missing parameters.")
+        print("ERROR: Missing parameters. Expected 3 arguments.")
         sys.exit(1)
 
     img_path = sys.argv[1]
@@ -45,7 +48,10 @@ def main():
         if os.path.exists(model_path) and os.path.exists(os.path.join(model_path, "config.json")):
             mocr = MangaOcr(pretrained_model_name_or_path=model_path)
         else:
-            mocr = MangaOcr()
+            # FORCE the hardcoded path here to avoid automatic resolution
+            forced_path = r"D:\Git\Xeno\XenoPlayer\models\manga-ocr-base"
+            mocr = MangaOcr(pretrained_model_name_or_path=forced_path)
+
 
         text = mocr(img).strip()
         # Write directly to the binary buffer to guarantee UTF-8 bytes

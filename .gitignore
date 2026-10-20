@@ -23,4 +23,7 @@ XenoPlayer.exe
 33Build/
 33dist/
 web_settings.json
+/models
 .env
+web/node_modules/
+.wrangler/

@@ -24,19 +24,21 @@ import shutil
 import json
 import hashlib
 import re
+import threading
+
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
     QPushButton, QFileDialog, QListWidget, QListWidgetItem,
     QListView, QCheckBox, QSpinBox, QLabel, QDial,
     QSlider, QDialog, QMenu, QMenuBar, QInputDialog, QMessageBox,
     QAbstractItemView, QStackedWidget, QComboBox, QLineEdit,
-    QRubberBand, QTextEdit
+    QRubberBand, QTextEdit, QScrollArea
     )
 
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QVideoWidget
 from PyQt6.QtCore import QUrl, Qt, QThread, pyqtSignal, QSize, QSettings, QPoint, QRect, QTimer
-from PyQt6.QtGui import QImage, QPixmap, QIcon, QMovie
+from PyQt6.QtGui import QImage, QPixmap, QIcon, QMovie, QKeySequence
 
 
 def resource_path(relative_path):
@@ -136,10 +138,11 @@ class TranslationWorker(QThread):
     error_occurred = pyqtSignal(str)
     status_update = pyqtSignal(str)
 
-    def __init__(self, image, ocr_mode, target_lang):
+    def __init__(self, image, ocr_mode, target_lang, priority_list=None):
         super().__init__()
         self.ocr_mode = ocr_mode
         self.target_lang = target_lang
+        self.priority_list = priority_list or ["offline"]
         from PyQt6.QtCore import QByteArray, QBuffer, QIODevice
         ba = QByteArray()
         buffer = QBuffer(ba)
@@ -216,20 +219,26 @@ class TranslationWorker(QThread):
                 self.error_occurred.emit("No text recognized. Try selecting a tighter box around the text.")
                 return
 
-            self.status_update.emit("Processing local neural translation...")
+            self.status_update.emit("Processing translation...")
             
             # Dynamic destination fallback
             lang_code = self.target_lang.split("(")[-1].replace(")", "").strip()
             if "-" in lang_code: 
                 lang_code = lang_code.split("-")[0] # Normalize 'zh-CN' to 'zh' style for Argos
                 
-            # Compute directly inside system RAM on CPU thread
-            translated_text = argostranslate.translate.translate(extracted_text, source_lang, lang_code)
+            from translation_manager import get_best_translation
+            translated_text = get_best_translation(extracted_text, source_lang, lang_code, self.priority_list)
             self.result_ready.emit(extracted_text, translated_text)
             
         except Exception as e:
             import traceback
-            self.error_occurred.emit(f"{str(e)}\n\n{traceback.format_exc()}")
+            tb = traceback.format_exc()
+            try:
+                from translation_manager import log_translation_message
+                log_translation_message(f"TranslationWorker.run failed: {e}\nTraceback:\n{tb}")
+            except:
+                pass
+            self.error_occurred.emit(f"{str(e)}\n\n{tb}")
 
 def find_manga_ocr_model_path():
     """Locates the manga_ocr_model directory in both dev and frozen states."""
@@ -313,11 +322,74 @@ class SavedTranslationLabel(QLabel):
         else:
             super().mouseReleaseEvent(event)
 
+class HotkeyConfigDialog(QDialog):
+    def __init__(self, current_next, current_prev, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Configure Hotkeys")
+        self.setStyleSheet("background-color: #222; color: white;")
+        layout = QVBoxLayout(self)
+        
+        self.next_key = current_next
+        self.prev_key = current_prev
+        
+        self.lbl_info = QLabel("Click a button and press any key to assign it.")
+        layout.addWidget(self.lbl_info)
+        
+        self.btn_next = QPushButton(f"Next Page: {self.next_key}")
+        self.btn_next.setStyleSheet("background-color: #333; color: white; padding: 10px;")
+        self.btn_next.clicked.connect(self.record_next)
+        layout.addWidget(self.btn_next)
+        
+        self.btn_prev = QPushButton(f"Prev Page: {self.prev_key}")
+        self.btn_prev.setStyleSheet("background-color: #333; color: white; padding: 10px;")
+        self.btn_prev.clicked.connect(self.record_prev)
+        layout.addWidget(self.btn_prev)
+        
+        btn_box = QHBoxLayout()
+        self.btn_ok = QPushButton("OK")
+        self.btn_ok.clicked.connect(self.accept)
+        self.btn_cancel = QPushButton("Cancel")
+        self.btn_cancel.clicked.connect(self.reject)
+        btn_box.addWidget(self.btn_ok)
+        btn_box.addWidget(self.btn_cancel)
+        layout.addLayout(btn_box)
+        
+        self.recording = None
+        
+    def record_next(self):
+        self.recording = "next"
+        self.btn_next.setText("Press any key...")
+        self.btn_next.setFocus()
+        
+    def record_prev(self):
+        self.recording = "prev"
+        self.btn_prev.setText("Press any key...")
+        self.btn_prev.setFocus()
+        
+    def keyPressEvent(self, event):
+        if self.recording:
+            key_code = event.key()
+            key_str = QKeySequence(key_code).toString()
+            if not key_str:
+                key_str = str(key_code)
+            
+            if self.recording == "next":
+                self.next_key = key_str
+                self.btn_next.setText(f"Next Page: {self.next_key}")
+            else:
+                self.prev_key = key_str
+                self.btn_prev.setText(f"Prev Page: {self.prev_key}")
+            self.recording = None
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
+
 class CollectionViewerWindow(QDialog):
     def __init__(self, directory, image_paths, parent=None):
         super().__init__(parent)
-        # Force-load local language assets on window launch
-        ensure_japanese_offline_model()
+        # Force-load local language assets on window launch in background to prevent UI freeze
+        threading.Thread(target=ensure_japanese_offline_model, daemon=True).start()
         self.directory = directory
         self.image_paths = image_paths
         self.current_index = 0
@@ -329,6 +401,13 @@ class CollectionViewerWindow(QDialog):
         self.last_selection_rect = None
         self.last_translated_text = ""
         self.last_orig_text = ""
+        
+        self.view_mode = "fit"
+        self.zoom_factor = 1.0
+        
+        self.settings = QSettings("XenoPlayer", "CollectionViewer")
+        self.hotkey_next = self.settings.value("hotkey_next", "Right")
+        self.hotkey_prev = self.settings.value("hotkey_prev", "Left")
         
         self.setWindowTitle("Collection Viewer")
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.WindowMaximizeButtonHint | Qt.WindowType.WindowMinimizeButtonHint | Qt.WindowType.WindowCloseButtonHint)
@@ -363,6 +442,12 @@ class CollectionViewerWindow(QDialog):
         self.btn_save.clicked.connect(self.save_collection_info)
         top_layout.addWidget(self.btn_save)
         
+        self.combo_ai_provider = QComboBox()
+        self.combo_ai_provider.addItems(["Cloudflare", "Gemini", "Google Translate", "Offline"])
+        self.combo_ai_provider.setStyleSheet("background-color: #333; color: white; padding: 5px; border-radius: 3px;")
+        top_layout.addWidget(QLabel("AI Provider:"))
+        top_layout.addWidget(self.combo_ai_provider)
+
         self.combo_ocr_lang = QComboBox()
         self.combo_ocr_lang.addItems(["Japanese (Manga OCR)", "Russian", "Chinese (Simplified)", "Chinese (Traditional)", "English", "Japanese (Tesseract)"])
         self.combo_ocr_lang.setStyleSheet("background-color: #333; color: white; padding: 5px; border-radius: 3px;")
@@ -374,6 +459,21 @@ class CollectionViewerWindow(QDialog):
         self.combo_target_lang.setStyleSheet("background-color: #333; color: white; padding: 5px; border-radius: 3px;")
         top_layout.addWidget(QLabel("To:"))
         top_layout.addWidget(self.combo_target_lang)
+
+        self.btn_fit = QPushButton("Fit")
+        self.btn_fit.setStyleSheet("background-color: #333; color: white; padding: 5px; border-radius: 3px;")
+        self.btn_fit.clicked.connect(self.set_fit_mode)
+        top_layout.addWidget(self.btn_fit)
+
+        self.btn_original = QPushButton("Original")
+        self.btn_original.setStyleSheet("background-color: #333; color: white; padding: 5px; border-radius: 3px;")
+        self.btn_original.clicked.connect(self.set_original_mode)
+        top_layout.addWidget(self.btn_original)
+
+        self.btn_hotkeys = QPushButton("Hotkeys")
+        self.btn_hotkeys.setStyleSheet("background-color: #333; color: white; padding: 5px; border-radius: 3px;")
+        self.btn_hotkeys.clicked.connect(self.configure_hotkeys)
+        top_layout.addWidget(self.btn_hotkeys)
         
         self.btn_close = QPushButton("Close Viewer")
         self.btn_close.setStyleSheet("background-color: #333; color: white; padding: 5px; border-radius: 3px;")
@@ -390,15 +490,13 @@ class CollectionViewerWindow(QDialog):
         self.image_label.next_page_requested.connect(self.go_next_page)
         self.image_label.prev_page_requested.connect(self.go_prev_page)
 
-        # This layout will control the horizontal alignment of the image
-        self.image_alignment_layout = QHBoxLayout()
-        self.image_alignment_layout.setContentsMargins(10, 0, 10, 0) # 10px margin on left/right
-        self.image_alignment_layout.addStretch(1)
-        self.image_alignment_layout.addWidget(self.image_label)
-        self.image_alignment_layout.addStretch(1)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(False)
+        self.scroll_area.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.scroll_area.setStyleSheet("background-color: black; border: none;")
+        self.scroll_area.setWidget(self.image_label)
         
-        # The main layout adds the alignment layout
-        layout.addLayout(self.image_alignment_layout, stretch=1)
+        layout.addWidget(self.scroll_area, stretch=1)
         
         # Translation Overlay (Interactive)
         self.translation_container = QWidget(self)
@@ -472,7 +570,14 @@ class CollectionViewerWindow(QDialog):
             self.auto_timer.stop()
         
     def show_toast(self, message, is_error=True):
-        bg_color = "rgba(200, 50, 50, 230)" if is_error else "rgba(50, 200, 50, 230)"
+        if is_error:
+            try:
+                from translation_manager import log_translation_message
+                log_translation_message(f"ERROR TOAST: {message}")
+            except:
+                pass
+            return
+        bg_color = "rgba(50, 200, 50, 230)"
         self.toast_label.setStyleSheet(f"background-color: {bg_color}; color: white; font-size: 18px; font-weight: bold; padding: 10px 20px; border-radius: 5px;")
         self.toast_label.setText(message)
         self.toast_label.adjustSize()
@@ -542,19 +647,29 @@ class CollectionViewerWindow(QDialog):
             self.translation_container.hide()
 
     def process_translation(self, rect):
-        if not self.current_pixmap: return
-        if not TRANSLATION_AVAILABLE:
-            self.show_toast("Dependencies Missing: run 'pip install manga-ocr Pillow deep-translator'")
-            return
-            
         self.last_selection_rect = rect
         cropped = self.image_label.grab(rect).toImage()
-        self.translation_worker = TranslationWorker(cropped, self.combo_ocr_lang.currentText(), self.combo_target_lang.currentText())
+        selected_provider = self.combo_ai_provider.currentText().lower()
+        
+        provider_map = {
+            "cloudflare": "cloudflare",
+            "gemini": "gemini",
+            "google translate": "google",
+            "offline": "offline"
+        }
+        provider = provider_map.get(selected_provider, "offline")
+        
+        self.translation_worker = TranslationWorker(
+            cropped, 
+            self.combo_ocr_lang.currentText(), 
+            self.combo_target_lang.currentText(),
+            priority_list=[provider]
+        )
         self.translation_worker.result_ready.connect(self.show_translation)
         self.translation_worker.error_occurred.connect(self.show_translation_error)
         self.translation_worker.status_update.connect(self.show_translation_status)
         self.translation_worker.start()
-        self.setWindowTitle(f"Collection Viewer - TRANSLATING...")
+        self.setWindowTitle("Collection Viewer - TRANSLATING...")
         self.hide_translation()
         
     def show_translation_status(self, status_text):
@@ -703,10 +818,38 @@ class CollectionViewerWindow(QDialog):
         self.hide_translation()
         self.show_toast(f"Could not translate: {err}")
             
+    def set_fit_mode(self):
+        self.view_mode = "fit"
+        self.update_image_view()
+        self.render_saved_translations()
+
+    def set_original_mode(self):
+        self.view_mode = "original"
+        self.update_image_view()
+        self.render_saved_translations()
+
+    def configure_hotkeys(self):
+        dialog = HotkeyConfigDialog(self.hotkey_next, self.hotkey_prev, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.hotkey_next = dialog.next_key
+            self.hotkey_prev = dialog.prev_key
+            self.settings.setValue("hotkey_next", self.hotkey_next)
+            self.settings.setValue("hotkey_prev", self.hotkey_prev)
+            self.show_toast(f"Hotkeys updated! Next: {self.hotkey_next}, Prev: {self.hotkey_prev}", is_error=False)
+
     def update_image_view(self):
         if self.current_pixmap and not self.current_pixmap.isNull():
-            scaled_pixmap = self.current_pixmap.scaled(self.image_label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            if self.view_mode == "fit":
+                viewport_size = self.scroll_area.viewport().size()
+                target_size = self.current_pixmap.size().scaled(viewport_size, Qt.AspectRatioMode.KeepAspectRatio)
+            elif self.view_mode == "original":
+                target_size = self.current_pixmap.size()
+            else:
+                target_size = self.current_pixmap.size() * self.zoom_factor
+                
+            scaled_pixmap = self.current_pixmap.scaled(target_size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             self.image_label.setPixmap(scaled_pixmap)
+            self.image_label.setFixedSize(target_size)
             self.setWindowTitle(f"Collection Viewer - {self.name_edit.text() or 'Unknown'} - ({self.current_index + 1}/{len(self.image_paths)})")
             if hasattr(self, 'page_count_label'):
                 self.page_count_label.setText(f"Page: {self.current_index + 1} / {len(self.image_paths)}")
@@ -805,12 +948,16 @@ class CollectionViewerWindow(QDialog):
             self.load_current_image()
 
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key.Key_Right:
+        key_str = QKeySequence(event.key()).toString()
+        if key_str == self.hotkey_next:
             self.go_next_page()
-        elif event.key() == Qt.Key.Key_Left:
+            event.accept()
+        elif key_str == self.hotkey_prev:
             self.go_prev_page()
+            event.accept()
         elif event.key() == Qt.Key.Key_Escape:
             self.close()
+            event.accept()
         else:
             super().keyPressEvent(event)
             
@@ -818,8 +965,31 @@ class CollectionViewerWindow(QDialog):
         super().closeEvent(event)
             
     def wheelEvent(self, event):
-        # Disabled mouse wheel page changing per user request
-        super().wheelEvent(event)
+        if not self.current_pixmap or self.current_pixmap.isNull():
+            super().wheelEvent(event)
+            return
+        
+        angle = event.angleDelta().y()
+        if angle != 0:
+            if self.view_mode == "fit":
+                viewport_size = self.scroll_area.viewport().size()
+                current_size = self.current_pixmap.size().scaled(viewport_size, Qt.AspectRatioMode.KeepAspectRatio)
+                self.zoom_factor = current_size.width() / self.current_pixmap.width()
+            elif self.view_mode == "original":
+                self.zoom_factor = 1.0
+            
+            if angle > 0:
+                self.zoom_factor *= 1.1
+            else:
+                self.zoom_factor /= 1.1
+                
+            self.zoom_factor = max(0.1, min(self.zoom_factor, 10.0))
+            self.view_mode = "zoom"
+            self.update_image_view()
+            self.render_saved_translations()
+            event.accept()
+        else:
+            super().wheelEvent(event)
 
 
 def main():

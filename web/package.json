@@ -1,0 +1,15 @@
+{
+  "name": "xenoplayer-sharing-hub-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:share-crypto": "esbuild share-crypto.js --bundle --format=esm --target=es2022 --minify --outfile=share-crypto.bundle.js",
+    "test": "node --test share-crypto.test.js"
+  },
+  "dependencies": {
+    "@zip.js/zip.js": "2.24.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

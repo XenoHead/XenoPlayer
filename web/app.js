@@ -305,11 +305,7 @@ window.addEventListener('pywebviewready', function () {
 
         // Now, proceed with normal initialization
         pywebview.api.init().then(response => {
-            console.log("Backend ready", response);
-            // If init() didn't load a file, we need to manually update state
-            if (currentIndex === -1) {
-                updateState();
-            }
+            updateState();
         });
     });
 
@@ -1294,6 +1290,12 @@ function renderOptionsList() {
     if (optRecCheckbox) {
         optRecCheckbox.checked = appState.recursive_load || false;
     }
+
+    // Bind Gemini API Key Option
+    const optGeminiKey = document.getElementById('opt-gemini-key');
+    if (optGeminiKey) {
+        optGeminiKey.value = appState.gemini_api_key || "";
+    }
 }
 
 function saveOptionsModal() {
@@ -1316,6 +1318,7 @@ function saveOptionsModal() {
     }
 
     const recursiveLoad = document.getElementById('opt-recursive-load').checked;
+    const geminiApiKey = document.getElementById('opt-gemini-key').value.trim();
 
     appState.saved_folders = folders;
     appState.default_folder = defIndex;
@@ -1324,8 +1327,9 @@ function saveOptionsModal() {
     appState.collection_sites = tempCollectionSites;
     appState.audio_sites = tempAudioSites;
     appState.recursive_load = recursiveLoad;
+    appState.gemini_api_key = geminiApiKey;
 
-    pywebview.api.save_options(folders, defIndex, apps, favsMode, tempCollectionSites, tempAudioSites, recursiveLoad).then(state => {
+    pywebview.api.save_options(folders, defIndex, apps, favsMode, tempCollectionSites, tempAudioSites, recursiveLoad, geminiApiKey).then(state => {
         appState = state;
         renderState();
         closeModals();
@@ -1335,56 +1339,82 @@ function saveOptionsModal() {
 function renderHotkeysList() {
     const prevList = document.getElementById('hotkeys-prev-list');
     const nextList = document.getElementById('hotkeys-next-list');
-    prevList.innerHTML = '';
-    nextList.innerHTML = '';
+    const pauseList = document.getElementById('hotkeys-pause-list');
+    const muteList = document.getElementById('hotkeys-mute-list');
+    const splitVideoList = document.getElementById('hotkeys-split-video-list');
+    const splitImageList = document.getElementById('hotkeys-split-image-list');
+    if (prevList) prevList.innerHTML = '';
+    if (nextList) nextList.innerHTML = '';
+    if (pauseList) pauseList.innerHTML = '';
+    if (muteList) muteList.innerHTML = '';
+    if (splitVideoList) splitVideoList.innerHTML = '';
+    if (splitImageList) splitImageList.innerHTML = '';
 
-    const hotkeys = appState.hotkeys || { next: ["ArrowRight", "Space", "", "", ""], prev: ["ArrowLeft", "", "", "", ""] };
+    const hotkeys = appState.hotkeys || { next: ["ArrowRight", "Space", "", "", ""], prev: ["ArrowLeft", "", "", "", ""], 
+        pause: ["KeyP", "", "", "", ""], mute: ["KeyM", "", "", "", ""], 
+        split_next_video: ["KeyD", "", "", "", ""], split_next_image: ["KeyE", "", "", "", ""] };
     const prevKeys = hotkeys.prev || ["ArrowLeft", "", "", "", ""];
     const nextKeys = hotkeys.next || ["ArrowRight", "Space", "", "", ""];
+    const pauseKeys = hotkeys.pause || ["KeyP", "", "", "", ""];
+    const muteKeys = hotkeys.mute || ["KeyM", "", "", "", ""];
+    const splitNextVideoKeys = hotkeys.split_next_video || ["KeyD", "", "", "", ""];
+    const splitNextImageKeys = hotkeys.split_next_image || ["KeyE", "", "", "", ""];
 
-    for (let i = 0; i < 5; i++) {
-        // Prev
-        const pInput = document.createElement('input');
-        pInput.type = 'text';
-        pInput.id = `hk-prev-${i}`;
-        pInput.value = prevKeys[i] || '';
-        pInput.readOnly = true;
-        pInput.placeholder = 'Click to assign...';
-        pInput.style.width = '100%';
-        pInput.style.marginBottom = '5px';
-        pInput.style.cursor = 'pointer';
-        pInput.onclick = (e) => {
-            e.stopPropagation();
-            startListening(pInput);
-        };
-        prevList.appendChild(pInput);
-
-        // Next
-        const nInput = document.createElement('input');
-        nInput.type = 'text';
-        nInput.id = `hk-next-${i}`;
-        nInput.value = nextKeys[i] || '';
-        nInput.readOnly = true;
-        nInput.placeholder = 'Click to assign...';
-        nInput.style.width = '100%';
-        nInput.style.marginBottom = '5px';
-        nInput.style.cursor = 'pointer';
-        nInput.onclick = (e) => {
-            e.stopPropagation();
-            startListening(nInput);
-        };
-        nextList.appendChild(nInput);
+    function addKeyInputs(listEl, keysArr, prefix) {
+        if (!listEl) return;
+        for (let i = 0; i < 5; i++) {
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.id = `hk-${prefix}-${i}`;
+            input.value = keysArr[i] || '';
+            input.readOnly = true;
+            input.placeholder = 'Click to assign...';
+            input.style.width = '100%';
+            input.style.marginBottom = '5px';
+            input.style.cursor = 'pointer';
+            input.onclick = (e) => {
+                e.stopPropagation();
+                startListening(input);
+            };
+            listEl.appendChild(input);
+        }
     }
+
+    addKeyInputs(prevList, prevKeys, 'prev');
+    addKeyInputs(nextList, nextKeys, 'next');
+    addKeyInputs(pauseList, pauseKeys, 'pause');
+    addKeyInputs(muteList, muteKeys, 'mute');
+    addKeyInputs(splitVideoList, splitNextVideoKeys, 'split-video');
+    addKeyInputs(splitImageList, splitNextImageKeys, 'split-image');
 }
 
 function saveHotkeysModal() {
     const nextKeys = [];
     const prevKeys = [];
+    const pauseKeys = [];
+    const muteKeys = [];
+    const splitVideoKeys = [];
+    const splitImageKeys = [];
     for (let i = 0; i < 5; i++) {
         nextKeys.push(document.getElementById(`hk-next-${i}`).value);
         prevKeys.push(document.getElementById(`hk-prev-${i}`).value);
+        const pk = document.getElementById(`hk-pause-${i}`);
+        const mk = document.getElementById(`hk-mute-${i}`);
+        const sv = document.getElementById(`hk-split-video-${i}`);
+        const si = document.getElementById(`hk-split-image-${i}`);
+        pauseKeys.push(pk ? pk.value : '');
+        muteKeys.push(mk ? mk.value : '');
+        splitVideoKeys.push(sv ? sv.value : '');
+        splitImageKeys.push(si ? si.value : '');
     }
-    pywebview.api.save_hotkeys({ next: nextKeys, prev: prevKeys }).then(state => {
+    pywebview.api.save_hotkeys({ 
+        next: nextKeys, 
+        prev: prevKeys, 
+        pause: pauseKeys, 
+        mute: muteKeys, 
+        split_next_video: splitVideoKeys, 
+        split_next_image: splitImageKeys 
+    }).then(state => {
         appState = state;
         closeModals();
     });
@@ -1422,6 +1452,9 @@ function updatePlaylist() {
         if (showFoldersActive && typeof pywebview.api.get_dir_tree === 'function') {
             pywebview.api.get_dir_tree().then(res => {
                 currentSubdirs = res ? res.subdirs : [];
+                currentCbzFiles = res ? (res.cbz_files || []) : [];
+                currentTreeRoot = res ? (res.root || '') : '';
+                activeCbzRoot = res ? (res.cbz_root || '') : '';
                 let activePath = playlist[currentIndex]?.path;
                 if (splitScreenActive) {
                     if (activeSidebarTab === 'left') {
@@ -1437,6 +1470,9 @@ function updatePlaylist() {
             });
         } else {
             currentSubdirs = [];
+            currentCbzFiles = [];
+            currentTreeRoot = '';
+            activeCbzRoot = '';
             renderPlaylist();
         }
     });
@@ -1594,7 +1630,7 @@ function renderPlaylist() {
     // Scroll active item into view
     const activeItem = document.querySelector('.playlist-item.active');
     if (activeItem) {
-        activeItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        activeItem.scrollIntoView({ block: 'nearest' });
     }
 }
 
@@ -1848,6 +1884,7 @@ videoPlayer.addEventListener('loadedmetadata', () => {
 });
 
 document.addEventListener('DOMContentLoaded', () => {
+    initSplitResizer();
     const progressSlider = document.getElementById('progress-slider');
     if (progressSlider) {
         progressSlider.addEventListener('input', () => {
@@ -1900,7 +1937,105 @@ window.addEventListener('keydown', e => {
     // Prevent triggering if typing in an input or textarea
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
-    const hotkeys = appState.hotkeys || { next: ["ArrowRight", "Space"], prev: ["ArrowLeft"] };
+    const hotkeys = appState.hotkeys || { next: ["ArrowRight", "Space", "", "", ""], prev: ["ArrowLeft", "", "", "", ""], 
+        pause: ["KeyP", "", "", "", ""], mute: ["KeyM", "", "", "", ""], 
+        split_next_video: ["KeyD", "", "", "", ""], split_next_image: ["KeyE", "", "", "", ""] };
+    const pauseKeys = hotkeys.pause || ["KeyP", "", "", "", ""];
+    const muteKeys = hotkeys.mute || ["KeyM", "", "", "", ""];
+    const splitNextVideoKeys = hotkeys.split_next_video || ["KeyD", "", "", "", ""];
+    const splitNextImageKeys = hotkeys.split_next_image || ["KeyE", "", "", "", ""];
+
+    // Play / Pause Toggle
+    if (pauseKeys.includes(e.code) || pauseKeys.includes(e.key) || e.code === 'KeyP' || e.code === 'KeyK' || e.code === 'MediaPlayPause') {
+        const topAudioBar = document.getElementById('top-audio-bar');
+        if (topAudioBar && topAudioBar.style.display !== 'none') {
+            topAudioTogglePlay();
+        } else {
+            togglePlay();
+        }
+        e.preventDefault();
+        return;
+    }
+
+    // Top Inline Audio: KeyN (next), KeyB (prev/back)
+    const topAudioBar = document.getElementById('top-audio-bar');
+    if (topAudioBar && topAudioBar.style.display !== 'none') {
+        if (e.code === 'KeyN') {
+            topAudioNext();
+            e.preventDefault();
+            return;
+        } else if (e.code === 'KeyB') {
+            topAudioPrev();
+            e.preventDefault();
+            return;
+        }
+    }
+
+    // Toggle Favorite: KeyF
+    if (e.code === 'KeyF') {
+        toggleFavorite();
+        e.preventDefault();
+        return;
+    }
+
+    // Toggle Split Screen Layout: KeyS
+    if (e.code === 'KeyS') {
+        toggleSplitScreen();
+        e.preventDefault();
+        return;
+    }
+
+    // Mute Audio
+    if (muteKeys.includes(e.code) || muteKeys.includes(e.key) || e.code === 'KeyM') {
+        if (videoPlayer) {
+            videoPlayer.muted = !videoPlayer.muted;
+        }
+        e.preventDefault();
+        return;
+    }
+
+    // Split Screen specific keys
+    if (splitScreenActive) {
+        if (splitNextVideoKeys.includes(e.code) || splitNextVideoKeys.includes(e.key) || e.code === 'KeyA' || e.code === 'KeyD') {
+            if (e.code === 'KeyA' || (splitNextVideoKeys.includes(e.code) && splitNextVideoKeys.indexOf(e.code) < splitNextVideoKeys.indexOf('KeyD'))) {
+                navigateLeftPane(-1);
+            } else {
+                navigateLeftPane(1);
+            }
+            e.preventDefault();
+            return;
+        }
+        if (splitNextImageKeys.includes(e.code) || splitNextImageKeys.includes(e.key) || e.code === 'KeyQ' || e.code === 'KeyE') {
+            if (e.code === 'KeyQ') {
+                navigatePaneImage(-1);
+            } else {
+                navigatePaneImage(1);
+            }
+            e.preventDefault();
+            return;
+        }
+        // Video Pane (Left): KeyA (prev), KeyD (next)
+        if (e.code === 'KeyA') {
+            navigateLeftPane(-1);
+            e.preventDefault();
+            return;
+        } else if (e.code === 'KeyD') {
+            navigateLeftPane(1);
+            e.preventDefault();
+            return;
+        }
+        // Image Pane (Right): KeyQ (prev), KeyE (next)
+        if (e.code === 'KeyQ') {
+            navigatePaneImage(-1);
+            e.preventDefault();
+            return;
+        } else if (e.code === 'KeyE') {
+            navigatePaneImage(1);
+            e.preventDefault();
+            return;
+        }
+    }
+
     const nextKeys = hotkeys.next || ["ArrowRight", "Space"];
     const prevKeys = hotkeys.prev || ["ArrowLeft"];
 
@@ -2239,17 +2374,13 @@ function onCollectionSourceChanged() {
 
         if (browseBtn) browseBtn.style.display = 'inline-block';
         if (directDownloadContainer) directDownloadContainer.style.display = 'block';
-        if (searchContainer) searchContainer.style.display = 'none';
+        if (searchContainer) searchContainer.style.display = 'flex';
         if (sidebar) sidebar.style.display = 'none';
 
         if (resultsArea && site) {
-            const displayUrl = site.domain || '';
             resultsArea.innerHTML = `<div style="grid-column: 1 / -1; text-align: center; color: #bbb; margin-top: 20px; font-size: 14px; line-height: 1.8;">
                 <strong>${site.name}</strong> selected.<br><br>
-                Search is not supported for custom sources.<br>
-                1. Click <strong>Browse Site</strong> to open ${site.name} in your default browser.<br>
-                2. Copy a gallery or chapter URL.<br>
-                3. Paste it into the <strong>Direct URL Downloader</strong> above and click Browse.
+                Type a query in the search bar above to scrape results via AI auto-configured selectors, or use the direct downloader.
             </div>`;
         }
     }
@@ -2303,6 +2434,41 @@ function downloadDirectCollectionUrl() {
     urlInput.value = '';
 }
 
+function previewDirectCollectionUrl() {
+    const urlInput = document.getElementById('collection-direct-url');
+    if (!urlInput) return;
+
+    const url = urlInput.value.trim();
+    if (!url) {
+        alert('Please paste a valid collection URL to browse/play.');
+        return;
+    }
+
+    onlineCollectionStatus.innerText = 'Scraping gallery media...';
+    
+    const select = document.getElementById('collection-source-select');
+    const source = select ? select.value : '';
+
+    pywebview.api.scrape_custom_gallery(url, source).then(res => {
+        if (res.status === 'success' && res.playlist && res.playlist.length > 0) {
+            onlineCollectionStatus.innerText = `Scraped ${res.playlist.length} items from gallery. Opening slideshow player...`;
+            
+            pywebview.api.set_ftp_playlist(res.playlist, 0).then(() => {
+                let title = 'Gallery Preview';
+                try {
+                    const u = new URL(url);
+                    title = u.pathname.split('/').filter(p => p).pop() || 'Gallery Preview';
+                } catch(e) {}
+                
+                pywebview.api.open_in_app_browser('http://localhost:5050/ftp_player', decodeURIComponent(title));
+            });
+        } else {
+            onlineCollectionStatus.innerText = 'Failed to scrape gallery contents.';
+            alert('Failed to scrape gallery:\n' + (res.msg || 'No images or videos found on the target page.'));
+        }
+    });
+}
+
 function openOnlineMedia() {
     onlineCollectionModal.style.display = 'flex';
     renderOnlineCollectionSources();
@@ -2343,6 +2509,37 @@ function toggleMaximizeCollectionBrowser() {
         icon.parentNode.title = 'Restore';
     }
 }
+
+function toggleMaximizeStoriesBrowser() {
+    const modalContent = document.querySelector('#online-stories-modal .modal-content');
+    const icon = document.getElementById('stories-max-icon');
+    if (!modalContent || !icon) return;
+    if (modalContent.classList.contains('maximized')) {
+        modalContent.classList.remove('maximized');
+        icon.className = 'fa-regular fa-square';
+    } else {
+        modalContent.classList.add('maximized');
+        icon.className = 'fa-regular fa-window-restore';
+    }
+}
+
+function toggleMaximizeAudioBrowser() {
+    const modalContent = document.querySelector('#online-audio-modal .modal-content');
+    const icon = document.getElementById('audio-max-icon');
+    if (!modalContent || !icon) return;
+    if (modalContent.classList.contains('maximized')) {
+        modalContent.classList.remove('maximized');
+        icon.className = 'fa-regular fa-square';
+    } else {
+        modalContent.classList.add('maximized');
+        icon.className = 'fa-regular fa-window-restore';
+    }
+}
+
+function loadNextOnlineMediaPage() { console.log('Load Next Media Page'); }
+function loadNextOnlineStoriesPage() { console.log('Load Next Stories Page'); }
+function loadNextOnlineAudioPage() { console.log('Load Next Audio Page'); }
+
 
 function changeCollectionDownloadDir() {
     pywebview.api.choose_collection_download_dir().then(res => {
@@ -2692,7 +2889,10 @@ function searchOnlineMedia() {
     const source = select ? select.value : 'nhentai';
 
     let searchPromise;
-    if (source === 'danbooru') {
+    const isBuiltIn = ['nhentai', 'danbooru', 'hentaiyoga', 'rule34art', 'ehentai'].includes(source);
+    if (!isBuiltIn) {
+        searchPromise = pywebview.api.search_custom_collection(source, query);
+    } else if (source === 'danbooru') {
         searchPromise = pywebview.api.search_danbooru(query);
     } else if (source === 'hentaiyoga') {
         searchPromise = pywebview.api.search_hentai_yoga(query);
@@ -2743,16 +2943,32 @@ function searchOnlineMedia() {
                 dlBtn.style.padding = '5px';
                 dlBtn.style.borderRadius = '3px';
                 dlBtn.style.cursor = 'pointer';
+                
+                const isCustom = !['nhentai', 'danbooru', 'hentaiyoga', 'rule34art', 'ehentai'].includes(source);
+                if (isCustom) {
+                    dlBtn.innerText = 'Load Gallery';
+                    dlBtn.style.background = '#89b4fa';
+                    dlBtn.style.color = '#111';
+                }
+                
                 dlBtn.onclick = () => {
-                    dlBtn.innerText = 'Downloading...';
-                    dlBtn.disabled = true;
-                    dlBtn.style.background = '#888';
-                    let mediaType = "all";
-                    if (source === 'hentaiyoga') {
-                        const mediaTypeSelect = document.getElementById('hentaiyoga-media-type');
-                        if (mediaTypeSelect) mediaType = mediaTypeSelect.value;
+                    if (isCustom) {
+                        const dlInput = document.getElementById('collection-direct-url');
+                        if (dlInput) {
+                            dlInput.value = item.url;
+                            previewDirectCollectionUrl();
+                        }
+                    } else {
+                        dlBtn.innerText = 'Downloading...';
+                        dlBtn.disabled = true;
+                        dlBtn.style.background = '#888';
+                        let mediaType = "all";
+                        if (source === 'hentaiyoga') {
+                            const mediaTypeSelect = document.getElementById('hentaiyoga-media-type');
+                            if (mediaTypeSelect) mediaType = mediaTypeSelect.value;
+                        }
+                        pywebview.api.download_nhentai(item.url, item.title, mediaType);
                     }
-                    pywebview.api.download_nhentai(item.url, item.title, mediaType);
                 };
 
                 card.oncontextmenu = (e) => {
@@ -2817,6 +3033,54 @@ function onCollectionColumnsChanged() {
     if (area) {
         area.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
     }
+}
+
+function onCollectionThumbSizeChanged() {
+    const slider = document.getElementById('collection-thumb-size');
+    if (!slider) return;
+    const size = slider.value + 'px';
+    const imgs = document.querySelectorAll('#nhentai-results-area img');
+    imgs.forEach(img => {
+        img.style.height = size;
+    });
+}
+
+function onStoryColumnsChanged() {
+    const sel = document.getElementById('story-columns-select');
+    const cols = sel ? parseInt(sel.value) : 3;
+    const area = document.getElementById('online-stories-results-area');
+    if (area) {
+        area.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+    }
+}
+
+function onStoryThumbSizeChanged() {
+    const slider = document.getElementById('story-thumb-size');
+    if (!slider) return;
+    const size = slider.value + 'px';
+    const imgs = document.querySelectorAll('#online-stories-results-area img');
+    imgs.forEach(img => {
+        img.style.height = size;
+    });
+}
+
+function onAudioColumnsChanged() {
+    const sel = document.getElementById('audio-columns-select');
+    const cols = sel ? parseInt(sel.value) : 3;
+    const area = document.getElementById('online-audio-list');
+    if (area) {
+        area.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+    }
+}
+
+function onAudioThumbSizeChanged() {
+    const slider = document.getElementById('audio-thumb-size');
+    if (!slider) return;
+    const size = slider.value + 'px';
+    const cards = document.querySelectorAll('#online-audio-list .audio-site-card, #online-playlists-grid .audio-site-card');
+    cards.forEach(card => {
+        card.style.minHeight = size;
+    });
 }
 
 function updateGlobalDownloadUI(title, progressText, percent, isComplete = false, isError = false) {
@@ -2978,17 +3242,17 @@ let audioCtx = null;
 let sourceNode = null;
 let compressorNode = null;
 let makeupGainNode = null;
-let isNormalized = true;
+let isNormalized = false;
 
 // Create the toggle button dynamically and place it next to the play button
 // Create the toggle button dynamically
 normBtn = document.createElement('button');
-normBtn.innerHTML = 'Norm: ON';
+normBtn.innerHTML = 'Norm: OFF';
 normBtn.style.padding = '5px 10px';
 normBtn.style.marginLeft = '10px';
 normBtn.style.borderRadius = '3px';
 normBtn.style.border = 'none';
-normBtn.style.background = '#4CAF50';
+normBtn.style.background = '#555';
 normBtn.style.color = 'white';
 normBtn.style.cursor = 'pointer';
 
@@ -4106,6 +4370,7 @@ function toggleSplitScreen() {
         tabs.style.display = 'flex';
         leftHeader.style.display = 'flex';
         rightHeader.style.display = 'flex';
+        document.getElementById('split-resizer').style.display = 'block';
         
         // Populate left playlist from current playlist, filtering to videos
         const videoExts = ['mp4', 'webm', 'ogg', 'mp3', 'wav', 'wave'];
@@ -4176,6 +4441,9 @@ function toggleSplitScreen() {
         tabs.style.display = 'none';
         leftHeader.style.display = 'none';
         rightHeader.style.display = 'none';
+        document.getElementById('split-resizer').style.display = 'none';
+        document.getElementById('left-split-pane').style.removeProperty('width');
+        document.getElementById('right-split-pane').style.removeProperty('width');
         
         // Restore single screen display styles on panes
         document.getElementById('left-split-pane').style.display = '';
@@ -4388,6 +4656,9 @@ function loadFolderAction() {
 // --- Folder Tree-view & Navigation Helpers ---
 let showFoldersActive = false;
 let currentSubdirs = [];
+let currentCbzFiles = [];
+let currentTreeRoot = '';
+let activeCbzRoot = '';
 const openFolders = new Set();
 
 function toggleShowFolders(enabled) {
@@ -4453,18 +4724,20 @@ function getParentDirectory(path) {
     return parent;
 }
 
-function buildFolderOnlyTree(flatPlaylist, subdirs) {
+function buildFolderOnlyTree(flatPlaylist, subdirs, cbzFiles, rootPath) {
     const tree = { name: 'Root', type: 'directory', children: [], path: '' };
-    if ((!flatPlaylist || flatPlaylist.length === 0) && (!subdirs || subdirs.length === 0)) return tree;
+    if ((!flatPlaylist || flatPlaylist.length === 0) && (!subdirs || subdirs.length === 0) && (!cbzFiles || cbzFiles.length === 0)) return tree;
     
-    let commonRoot = '';
-    if (flatPlaylist && flatPlaylist.length > 0) {
+    let commonRoot = rootPath || '';
+    if (!commonRoot && flatPlaylist && flatPlaylist.length > 0) {
         commonRoot = getCommonRootPath(flatPlaylist);
-    } else if (subdirs && subdirs.length > 0) {
+    } else if (!commonRoot && subdirs && subdirs.length > 0) {
         const paths = subdirs.map(p => p.replace(/\\/g, '/'));
         const parts = paths[0].split('/');
         parts.pop();
         commonRoot = parts.join('/');
+    } else if (!commonRoot && cbzFiles && cbzFiles.length > 0) {
+        commonRoot = getParentDirectory(cbzFiles[0]) || '';
     }
     
     tree.path = commonRoot;
@@ -4473,11 +4746,9 @@ function buildFolderOnlyTree(flatPlaylist, subdirs) {
     const commonParts = commonNorm ? commonNorm.split('/') : [];
     const commonPrefixLength = commonParts.length;
     
-    function addDirectoryToTree(dirPath) {
-        const normPath = dirPath.replace(/\\/g, '/');
-        const parts = normPath.split('/');
+    function ensureDirectoryPath(dirPath) {
+        const parts = dirPath.replace(/\\/g, '/').split('/');
         const relParts = parts.slice(commonPrefixLength);
-        
         let currentNode = tree;
         relParts.forEach((part, i) => {
             let dirNode = currentNode.children.find(c => c.type === 'directory' && c.name === part);
@@ -4501,6 +4772,11 @@ function buildFolderOnlyTree(flatPlaylist, subdirs) {
             }
             currentNode = dirNode;
         });
+        return currentNode;
+    }
+
+    function addDirectoryToTree(dirPath) {
+        ensureDirectoryPath(dirPath);
     }
     
     if (subdirs) {
@@ -4509,36 +4785,22 @@ function buildFolderOnlyTree(flatPlaylist, subdirs) {
     
     if (flatPlaylist) {
         flatPlaylist.forEach(item => {
-            const normPath = item.path.replace(/\\/g, '/');
-            const parts = normPath.split('/');
-            const dirParts = parts.slice(0, -1);
-            const relParts = dirParts.slice(commonPrefixLength);
-            
-            let currentNode = tree;
-            relParts.forEach((part, i) => {
-                let dirNode = currentNode.children.find(c => c.type === 'directory' && c.name === part);
-                if (!dirNode) {
-                    const currentParts = dirParts.slice(0, commonPrefixLength + i + 1);
-                    const isWindows = item.path.includes('\\');
-                    const separator = isWindows ? '\\' : '/';
-                    let currentDirPath = currentParts.join(separator);
-                    if (isWindows && currentParts[0].endsWith(':') && currentParts.length > 1) {
-                        currentDirPath = currentParts[0] + separator + currentParts.slice(1).join(separator);
-                    }
-                    
-                    dirNode = {
-                        name: part,
-                        type: 'directory',
-                        path: currentDirPath,
-                        children: [],
-                        open: openFolders.has(currentDirPath)
-                    };
-                    currentNode.children.push(dirNode);
-                }
-                currentNode = dirNode;
-            });
+            ensureDirectoryPath(getParentDirectory(item.path) || '');
         });
     }
+
+    (cbzFiles || []).forEach(archivePath => {
+        const parent = getParentDirectory(archivePath) || '';
+        const parentNode = ensureDirectoryPath(parent);
+        if (!parentNode.children.some(child => child.type === 'archive' && child.path === archivePath)) {
+            parentNode.children.push({
+                name: archivePath.split(/[/\\]/).pop(),
+                type: 'archive',
+                path: archivePath,
+                children: []
+            });
+        }
+    });
     
     return tree;
 }
@@ -4548,7 +4810,7 @@ function renderFolderTree(listToRender, currentSubdirs) {
     if (!container) return;
     container.innerHTML = '';
     
-    const commonRoot = getCommonRootPath(listToRender);
+    const commonRoot = currentTreeRoot || getCommonRootPath(listToRender);
     const parentDir = getParentDirectory(commonRoot);
     
     const headerDiv = document.createElement('div');
@@ -4561,7 +4823,24 @@ function renderFolderTree(listToRender, currentSubdirs) {
     headerDiv.style.color = '#cdd6f4';
     headerDiv.innerHTML = `<span>Folders</span>`;
     
-    if (parentDir) {
+    const isCbzRoot = activeCbzRoot && commonRoot.replace(/\\/g, '/') === activeCbzRoot.replace(/\\/g, '/');
+    if (isCbzRoot) {
+        const closeArchiveBtn = document.createElement('button');
+        closeArchiveBtn.className = 'go-up-btn';
+        closeArchiveBtn.style.background = 'none';
+        closeArchiveBtn.style.border = 'none';
+        closeArchiveBtn.style.color = '#a6e3a1';
+        closeArchiveBtn.style.cursor = 'pointer';
+        closeArchiveBtn.style.fontSize = '11px';
+        closeArchiveBtn.style.padding = '2px 5px';
+        closeArchiveBtn.textContent = 'Close CBZ';
+        closeArchiveBtn.onclick = () => {
+            pywebview.api.close_cbz_archive().then(result => {
+                if (result && result.status === 'error') alert(result.msg);
+            });
+        };
+        headerDiv.appendChild(closeArchiveBtn);
+    } else if (parentDir) {
         const goUpBtn = document.createElement('button');
         goUpBtn.className = 'go-up-btn';
         goUpBtn.style.background = 'none';
@@ -4578,7 +4857,7 @@ function renderFolderTree(listToRender, currentSubdirs) {
     }
     container.appendChild(headerDiv);
     
-    const tree = buildFolderOnlyTree(listToRender, currentSubdirs);
+    const tree = buildFolderOnlyTree(listToRender, currentSubdirs, currentCbzFiles, commonRoot);
     
     function renderFolderNode(node, depth) {
         if (node.name === 'Root') {
@@ -4595,10 +4874,23 @@ function renderFolderTree(listToRender, currentSubdirs) {
         toggleIcon.style.display = 'inline-block';
         toggleIcon.style.width = '12px';
         toggleIcon.style.textAlign = 'center';
-        toggleIcon.innerHTML = node.open ? '<i class="fa-solid fa-chevron-down" style="font-size: 8px;"></i>' : '<i class="fa-solid fa-chevron-right" style="font-size: 8px;"></i>';
+        toggleIcon.style.cursor = node.type === 'archive' ? 'default' : 'pointer';
+        toggleIcon.innerHTML = node.type === 'archive' ? '<i class="fa-solid fa-arrow-turn-down" style="font-size: 8px;"></i>' : (node.open ? '<i class="fa-solid fa-chevron-down" style="font-size: 8px;"></i>' : '<i class="fa-solid fa-chevron-right" style="font-size: 8px;"></i>');
+        toggleIcon.onclick = (e) => {
+            e.stopPropagation();
+            if (node.type === 'archive') return;
+            if (openFolders.has(node.path)) {
+                openFolders.delete(node.path);
+            } else {
+                openFolders.add(node.path);
+            }
+            renderPlaylist();
+        };
         
         const folderIcon = document.createElement('span');
-        folderIcon.innerHTML = '<i class="fa-solid fa-folder" style="color: #f9e2af; margin-right: 6px;"></i>';
+        folderIcon.innerHTML = node.type === 'archive'
+            ? '<i class="fa-solid fa-folder-open" style="color: #f9e2af; margin-right: 6px;"></i>'
+            : '<i class="fa-solid fa-folder" style="color: #f9e2af; margin-right: 6px;"></i>';
         
         const nameSpan = document.createElement('span');
         nameSpan.className = 'playlist-name';
@@ -4612,17 +4904,21 @@ function renderFolderTree(listToRender, currentSubdirs) {
         div.appendChild(nameSpan);
         
         div.onclick = (e) => {
-            if (openFolders.has(node.path)) {
-                openFolders.delete(node.path);
-            } else {
-                openFolders.add(node.path);
-            }
-            renderPlaylist();
+            if (e.detail > 1) return;
+            const openFolder = node.type === 'archive'
+                ? pywebview.api.open_cbz_archive(node.path)
+                : pywebview.api.load_selected_directory(node.path);
+            openFolder.then(result => {
+                if (result && result.status === 'error') {
+                    alert(result.msg);
+                    return;
+                }
+                updatePlaylist();
+            }).catch(error => alert(`Could not open folder: ${error}`));
         };
         
         div.ondblclick = (e) => {
             e.stopPropagation();
-            pywebview.api.load_selected_directory(node.path);
         };
         
         container.appendChild(div);
@@ -4789,6 +5085,78 @@ function guessStorySiteConfig() {
             } catch(e) { /* ignore if URL is invalid */ }
 
             document.getElementById('new-story-notes').value = JSON.stringify(config);
+            
+            alert('Successfully guessed configuration! The fields below have been pre-filled. Review and click "Add".');
+        } else {
+            alert('Failed to guess configuration:\n' + res.msg);
+        }
+    });
+}
+
+function guessCollectionSiteConfig() {
+    const urlInput = document.getElementById('collection-config-guesser-url');
+    const url = urlInput.value.trim();
+    if (!url) {
+        alert('Please paste a URL to guess from.');
+        return;
+    }
+
+    const guessBtn = urlInput.nextElementSibling;
+    guessBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Guessing...';
+    guessBtn.disabled = true;
+
+    pywebview.api.guess_story_site_selectors(url).then(res => {
+        guessBtn.innerHTML = 'Guess Config';
+        guessBtn.disabled = false;
+
+        if (res.status === 'success') {
+            const config = res.config;
+            
+            try {
+                const urlObj = new URL(url);
+                let name = urlObj.hostname.replace(/^www\./, '').split('.')[0];
+                name = name.charAt(0).toUpperCase() + name.slice(1);
+                document.getElementById('new-collection-name').value = name;
+                document.getElementById('new-collection-domain').value = urlObj.origin;
+            } catch(e) { /* ignore if URL is invalid */ }
+
+            document.getElementById('new-collection-notes').value = JSON.stringify(config);
+            
+            alert('Successfully guessed configuration! The fields below have been pre-filled. Review and click "Add".');
+        } else {
+            alert('Failed to guess configuration:\n' + res.msg);
+        }
+    });
+}
+
+function guessAudioSiteConfig() {
+    const urlInput = document.getElementById('audio-config-guesser-url');
+    const url = urlInput.value.trim();
+    if (!url) {
+        alert('Please paste a URL to guess from.');
+        return;
+    }
+
+    const guessBtn = urlInput.nextElementSibling;
+    guessBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Guessing...';
+    guessBtn.disabled = true;
+
+    pywebview.api.guess_story_site_selectors(url).then(res => {
+        guessBtn.innerHTML = 'Guess Config';
+        guessBtn.disabled = false;
+
+        if (res.status === 'success') {
+            const config = res.config;
+            
+            try {
+                const urlObj = new URL(url);
+                let name = urlObj.hostname.replace(/^www\./, '').split('.')[0];
+                name = name.charAt(0).toUpperCase() + name.slice(1);
+                document.getElementById('new-audio-name').value = name;
+                document.getElementById('new-audio-domain').value = urlObj.origin;
+            } catch(e) { /* ignore if URL is invalid */ }
+
+            document.getElementById('new-audio-notes').value = JSON.stringify(config);
             
             alert('Successfully guessed configuration! The fields below have been pre-filled. Review and click "Add".');
         } else {
@@ -5151,216 +5519,512 @@ function makeDraggable(win, header) {
     document.addEventListener('mouseup', () => { isDragging = false; });
 }
 
-// --- Sharing Hub ---
+// --- FTP / CopyParty Browser ---
+let ftpCurrentUrl = '';
+let currentFtpListing = null;
+let ftpActiveFilter = 'all';
 
-const SHARE_ALLOWED_DOMAIN = 'xenohead.com';
-let shareHubFolders = [];
-let shareHubIdentity = '';
-
-function isAllowedShareEmail(email) {
-    if (!email) return false;
-    const e = String(email).trim().toLowerCase();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) return false;
-    return e.split('@').pop() === SHARE_ALLOWED_DOMAIN;
+function openFtpBrowser() {
+    document.getElementById('ftp-browser-modal').style.display = 'flex';
+    const url = document.getElementById('ftp-url-input').value.trim();
+    if (url) ftpNavigateTo(url);
 }
 
-function openShareHub() {
-    const modal = document.getElementById('share-hub-modal');
-    if (!modal) return;
-    modal.style.display = 'block';
-    pywebview.api.get_share_hub().then(res => {
-        if (!res || res.status !== 'success') return;
-        document.getElementById('share-identity-email').value = res.identity || '';
-        document.getElementById('share-hub-url').value = res.hub_url || '';
-        shareHubIdentity = res.identity || '';
-        const status = document.getElementById('share-identity-status');
-        status.textContent = res.identity
-            ? 'Connected as ' + res.identity
-            : 'No identity set. Save your @' + SHARE_ALLOWED_DOMAIN + ' address so friends can connect.';
-        renderSharePeers(res.peers || []);
-        renderShareFolders(res.shared_folders || []);
+function closeFtpBrowser() {
+    document.getElementById('ftp-browser-modal').style.display = 'none';
+}
+
+function ftpLoadPreset() {
+    const sel = document.getElementById('ftp-preset-select');
+    if (sel.value) {
+        document.getElementById('ftp-url-input').value = sel.value;
+        ftpNavigateTo(sel.value);
+    }
+}
+
+function ftpNavigateTo(url) {
+    url = url.trim();
+    if (!url) return;
+    if (!url.endsWith('/')) url += '/';
+    ftpCurrentUrl = url;
+    document.getElementById('ftp-url-input').value = url;
+    document.getElementById('ftp-status').textContent = 'Loading...';
+    document.getElementById('ftp-listing').innerHTML = '<div style="color:#888;text-align:center;padding:20px;">Loading...</div>';
+    ftpUpdateBreadcrumb(url);
+    pywebview.api.browse_copyparty(url).then(res => {
+        document.getElementById('ftp-status').textContent = '';
+        if (res.status === 'error') {
+            document.getElementById('ftp-listing').innerHTML = `<div style="color:#f38ba8;padding:10px;">Error: ${res.msg}</div>`;
+            return;
+        }
+        currentFtpListing = res;
+        ftpRenderListing(res);
     });
 }
 
-function closeShareHub() {
-    const modal = document.getElementById('share-hub-modal');
-    if (modal) modal.style.display = 'none';
+function ftpUpdateBreadcrumb(url) {
+    try {
+        const u = new URL(url);
+        const parts = u.pathname.split('/').filter(p => p);
+        let crumbs = `<a href="#" onclick="ftpNavigateTo('${u.origin}/')" style="color:#89b4fa;">${u.hostname}</a>`;
+        let built = u.origin + '/';
+        parts.forEach(p => {
+            built += p + '/';
+            const cap = built;
+            crumbs += ` / <a href="#" onclick="ftpNavigateTo('${cap}')" style="color:#89b4fa;">${decodeURIComponent(p)}</a>`;
+        });
+        document.getElementById('ftp-breadcrumb').innerHTML = crumbs;
+    } catch(e) {
+        document.getElementById('ftp-breadcrumb').textContent = url;
+    }
 }
 
-function saveShareIdentity() {
-    const input = document.getElementById('share-identity-email');
-    const status = document.getElementById('share-identity-status');
-    const email = input.value.trim();
+function ftpFormatSize(bytes) {
+    if (!bytes) return '';
+    if (bytes > 1e12) return (bytes/1e12).toFixed(1) + ' TiB';
+    if (bytes > 1e9)  return (bytes/1e9).toFixed(1) + ' GiB';
+    if (bytes > 1e6)  return (bytes/1e6).toFixed(1) + ' MiB';
+    return (bytes/1e3).toFixed(0) + ' KiB';
+}
 
-    if (!isAllowedShareEmail(email)) {
-        status.textContent = 'Only @' + SHARE_ALLOWED_DOMAIN + ' email addresses can connect.';
-        status.style.color = '#f38ba8';
-        return;
+function ftpRenderListing(res) {
+    const container = document.getElementById('ftp-listing');
+    container.innerHTML = '';
+    const base = res.base_url;
+
+    document.addEventListener('click', ftpHideCtxMenu, { once: true });
+
+    // Up button
+    try {
+        const u = new URL(base);
+        const parts = u.pathname.split('/').filter(p => p);
+        if (parts.length > 0) {
+            const upUrl = u.origin + '/' + parts.slice(0, -1).join('/') + (parts.length > 1 ? '/' : '');
+            const upRow = document.createElement('div');
+            upRow.style.cssText = 'display:flex;align-items:center;gap:10px;padding:7px 10px;cursor:pointer;border-radius:4px;color:#cdd6f4;margin-bottom:4px;';
+            upRow.onmouseover = () => upRow.style.background = '#2a2a3e';
+            upRow.onmouseout  = () => upRow.style.background = '';
+            upRow.onclick = () => ftpNavigateTo(upUrl);
+            upRow.innerHTML = '<i class="fa-solid fa-arrow-up" style="color:#a6e3a1;width:16px;"></i><span>.. (up)</span>';
+            container.appendChild(upRow);
+        }
+    } catch(e) {}
+
+    // Dirs
+    res.dirs.forEach(d => {
+        const dirUrl = base + d.href;
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:7px 10px;cursor:pointer;border-radius:4px;color:#cdd6f4;';
+        row.onmouseover = () => row.style.background = '#2a2a3e';
+        row.onmouseout  = () => row.style.background = '';
+        row.onclick = () => ftpNavigateTo(dirUrl);
+        const meta = d.files ? `<span style="color:#555;font-size:11px;margin-left:auto;">${d.files} files &nbsp;${ftpFormatSize(d.sz)}</span>` : '';
+        row.innerHTML = `<i class="fa-solid fa-folder" style="color:#f9e2af;width:16px;"></i><span style="flex:1;">${decodeURIComponent(d.name)}/</span>${meta}`;
+        container.appendChild(row);
+    });
+
+    if (res.files.length > 0) {
+        // Type filter pills
+        const typeCounts = {};
+        res.files.forEach(f => { typeCounts[f.type] = (typeCounts[f.type] || 0) + 1; });
+        const typeInfo = {
+            image:   { label: 'Images',   icon: 'fa-image',       color: '#89b4fa' },
+            video:   { label: 'Videos',   icon: 'fa-film',        color: '#cba6f7' },
+            audio:   { label: 'Audio',    icon: 'fa-music',       color: '#89dceb' },
+            manga:   { label: 'Manga',    icon: 'fa-book',        color: '#f38ba8' },
+            archive: { label: 'Archives', icon: 'fa-file-zipper', color: '#f9e2af' },
+            doc:     { label: 'Docs',     icon: 'fa-file-lines',  color: '#a6e3a1' },
+            file:    { label: 'Other',    icon: 'fa-file',        color: '#888'    },
+        };
+
+        ftpActiveFilter = 'all';
+        const filterBar = document.createElement('div');
+        filterBar.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 8px 0;';
+
+        const allPill = document.createElement('span');
+        allPill.style.cssText = 'padding:3px 10px;border-radius:12px;font-size:11px;cursor:pointer;background:#313244;color:#cdd6f4;border:1px solid #45475a;';
+        allPill.textContent = `All (${res.files.length})`;
+        allPill.dataset.filter = 'all';
+        filterBar.appendChild(allPill);
+
+        Object.keys(typeCounts).sort().forEach(type => {
+            const ti = typeInfo[type] || typeInfo.file;
+            const pill = document.createElement('span');
+            pill.style.cssText = `padding:3px 10px;border-radius:12px;font-size:11px;cursor:pointer;background:#1a1a2e;color:${ti.color};border:1px solid #2a2a3e;`;
+            pill.innerHTML = `<i class="fa-solid ${ti.icon}" style="margin-right:4px;"></i>${ti.label} (${typeCounts[type]})`;
+            pill.dataset.filter = type;
+            filterBar.appendChild(pill);
+        });
+
+        container.appendChild(filterBar);
+
+        const grid = document.createElement('div');
+        grid.id = 'ftp-file-grid';
+        ftpApplyGridColumns(grid);
+
+        const renderCards = (filter) => {
+            grid.innerHTML = '';
+            const shown = filter === 'all' ? res.files : res.files.filter(f => f.type === filter);
+            // Update pill highlights
+            filterBar.querySelectorAll('span').forEach(p => {
+                p.style.background = p.dataset.filter === filter ? '#313244' : '#1a1a2e';
+                p.style.borderColor = p.dataset.filter === filter ? '#585b70' : '#2a2a3e';
+            });
+
+            shown.forEach(f => {
+                const fileUrl = base + f.href;
+                const name = decodeURIComponent(f.name);
+                const ti = typeInfo[f.type] || typeInfo.file;
+                const card = document.createElement('div');
+                card.style.cssText = 'background:#111827;border-radius:5px;overflow:hidden;cursor:pointer;border:1px solid #2a2a3e;display:flex;flex-direction:column;transition:border-color 0.15s;position:relative;';
+                card.onmouseover = () => card.style.borderColor = ti.color;
+                card.onmouseout  = () => card.style.borderColor = '#2a2a3e';
+
+                const thumbDiv = document.createElement('div');
+                thumbDiv.style.cssText = 'width:100%;aspect-ratio:16/9;background:#0a0a14;display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative;';
+
+                if (f.type === 'image') {
+                    const img = document.createElement('img');
+                    img.src = fileUrl + '?th=w';
+                    img.loading = 'lazy';
+                    img.style.cssText = 'width:100%;height:100%;object-fit:cover;';
+                    img.onerror = () => {
+                        if (img.src !== fileUrl) {
+                            img.src = fileUrl;
+                        } else {
+                            img.style.display = 'none';
+                            thumbDiv.innerHTML = `<i class="fa-solid ${ti.icon}" style="font-size:30px;color:${ti.color};"></i>`;
+                        }
+                    };
+                    thumbDiv.appendChild(img);
+                } else if (f.type === 'video') {
+                    const vid = document.createElement('video');
+                    vid.src = fileUrl + '#t=3';
+                    vid.preload = 'metadata';
+                    vid.muted = true;
+                    vid.style.cssText = 'width:100%;height:100%;object-fit:cover;position:absolute;top:0;left:0;';
+                    vid.addEventListener('loadeddata', () => { vid.currentTime = 3; });
+                    thumbDiv.appendChild(vid);
+                    const icon = document.createElement('i');
+                    icon.className = `fa-solid ${ti.icon}`;
+                    icon.style.cssText = `font-size:30px;color:rgba(203,166,247,0.85);position:relative;z-index:1;pointer-events:none;`;
+                    thumbDiv.appendChild(icon);
+                } else {
+                    thumbDiv.innerHTML = `<i class="fa-solid ${ti.icon}" style="font-size:30px;color:${ti.color};"></i>`;
+                }
+
+                // Type badge
+                const badge = document.createElement('span');
+                badge.style.cssText = `position:absolute;top:4px;right:4px;background:rgba(0,0,0,0.65);color:${ti.color};font-size:8px;padding:1px 4px;border-radius:3px;`;
+                badge.textContent = (f.ext || f.type).replace('.','').toUpperCase();
+                thumbDiv.appendChild(badge);
+
+                const infoDiv = document.createElement('div');
+                infoDiv.style.cssText = 'padding:4px 6px;';
+                infoDiv.innerHTML = `<div style="font-size:10px;color:#cdd6f4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${name}">${name}</div><div style="font-size:9px;color:#555;">${ftpFormatSize(f.sz)}</div>`;
+
+                card.appendChild(thumbDiv);
+                card.appendChild(infoDiv);
+                card.onclick = () => ftpPlayFile(fileUrl);
+                card.oncontextmenu = (e) => { e.preventDefault(); e.stopPropagation(); ftpShowCtxMenu(e.clientX, e.clientY, fileUrl, f.type); };
+                grid.appendChild(card);
+            });
+
+            if (shown.length === 0) {
+                grid.innerHTML = '<div style="color:#666;font-size:11px;padding:10px;">No files of this type.</div>';
+            }
+        };
+
+        filterBar.addEventListener('click', (e) => {
+            const pill = e.target.closest('[data-filter]');
+            if (pill) { ftpActiveFilter = pill.dataset.filter; renderCards(ftpActiveFilter); }
+        });
+
+        renderCards('all');
+        container.appendChild(grid);
     }
 
-    pywebview.api.set_share_identity(email).then(res => {
-        if (res.status === 'success') {
-            input.value = res.identity;
-            shareHubIdentity = res.identity;
-            status.textContent = 'Connected as ' + res.identity;
-            status.style.color = '#a6e3a1';
-        } else {
-            status.textContent = res.msg || 'Could not save identity.';
-            status.style.color = '#f38ba8';
-        }
-    });
+    if (res.dirs.length === 0 && res.files.length === 0) {
+        container.innerHTML = '<div style="color:#666;text-align:center;padding:20px;">Empty directory.</div>';
+    }
 }
 
-function copyShareHubUrl() {
-    const field = document.getElementById('share-hub-url');
-    if (!field) return;
-    field.select();
-    if (navigator.clipboard) {
-        navigator.clipboard.writeText(field.value);
+function toggleMaximizeFtpBrowser() {
+    const modalContent = document.querySelector('#ftp-browser-modal .modal-content');
+    const icon = document.getElementById('ftp-max-icon');
+    if (!modalContent || !icon) return;
+
+    if (modalContent.classList.contains('maximized')) {
+        modalContent.classList.remove('maximized');
+        icon.className = 'fa-regular fa-square';
+        icon.parentNode.title = 'Maximize';
     } else {
-        document.execCommand('copy');
-    }
-    const btn = field.nextElementSibling;
-    if (btn) {
-        const original = btn.innerHTML;
-        btn.innerHTML = '<i class="fa-solid fa-check"></i>';
-        setTimeout(() => { btn.innerHTML = original; }, 1200);
+        modalContent.classList.add('maximized');
+        icon.className = 'fa-regular fa-window-restore';
+        icon.parentNode.title = 'Restore';
     }
 }
 
-function shareConnectPeer() {
-    const emailField = document.getElementById('share-peer-email');
-    const hubField = document.getElementById('share-peer-hub');
-    const status = document.getElementById('share-peer-status');
-    const email = emailField.value.trim();
-    const hub = hubField.value.trim();
+function ftpShowCtxMenu(x, y, url, type) {
+    ftpHideCtxMenu();
+    const menu = document.createElement('div');
+    menu.id = 'ftp-ctx-menu';
+    menu.style.cssText = `position:fixed;left:${x}px;top:${y}px;background:#1e1e2e;border:1px solid #444;border-radius:6px;z-index:9999;padding:4px 0;min-width:160px;box-shadow:0 4px 16px rgba(0,0,0,0.6);`;
 
-    if (!isAllowedShareEmail(email)) {
-        status.textContent = 'Only @' + SHARE_ALLOWED_DOMAIN + ' email addresses can connect.';
-        status.style.color = '#f38ba8';
-        return;
-    }
-
-    const finish = (res) => {
-        if (res.status === 'success') {
-            let text = 'Connected to ' + email + '.';
-            if (res.owner) text += ' Hub owner: ' + res.owner + '.';
-            if (res.library) text += ' ' + res.library.length + ' folder(s) shared.';
-            status.textContent = text;
-            status.style.color = '#a6e3a1';
-            emailField.value = '';
-            hubField.value = '';
-            renderSharePeers(res.peers || []);
-        } else {
-            status.textContent = res.msg || 'Could not connect.';
-            status.style.color = '#f38ba8';
-        }
+    const makeItem = (icon, label, cb) => {
+        const item = document.createElement('div');
+        item.style.cssText = 'padding:8px 16px;cursor:pointer;color:#cdd6f4;font-size:13px;display:flex;align-items:center;gap:10px;';
+        item.onmouseover = () => item.style.background = '#2a2a3e';
+        item.onmouseout  = () => item.style.background = '';
+        item.innerHTML = `<i class="fa-solid ${icon}" style="width:14px;"></i>${label}`;
+        item.onclick = (e) => { e.stopPropagation(); ftpHideCtxMenu(); cb(); };
+        return item;
     };
 
-    if (hub) {
-        pywebview.api.share_friend_library(email, hub).then(finish);
-    } else {
-        pywebview.api.share_add_peer(email, '').then(finish);
+    menu.appendChild(makeItem('fa-play', 'Play', () => ftpPlayFile(url)));
+    if (type === 'video') {
+        menu.appendChild(makeItem('fa-eye', 'Preview 10s', () => ftpPreview10s(url)));
     }
+    menu.appendChild(makeItem('fa-arrow-up-right-from-square', 'Go to website', () => pywebview.api.open_external_url(url)));
+    
+    // Parse the filename from the URL to display in notifications
+    let filename = 'file';
+    try {
+        const u = new URL(url);
+        filename = u.pathname.split('/').filter(p => p).pop() || 'file';
+    } catch(e) {
+        filename = url.substring(url.lastIndexOf('/') + 1) || 'file';
+    }
+    const cleanFilename = decodeURIComponent(filename).split('?')[0];
+
+    menu.appendChild(makeItem('fa-download', 'Download', () => {
+        pywebview.api.download_online_track(url, cleanFilename);
+        alert(`Starting download for: ${cleanFilename}\nCheck main playlist or active directory once complete.`);
+    }));
+
+    document.body.appendChild(menu);
+
+    // Auto-close on next click
+    setTimeout(() => document.addEventListener('click', ftpHideCtxMenu, { once: true }), 50);
 }
 
-function removeSharePeer(email) {
-    pywebview.api.share_remove_peer(email).then(res => {
-        if (res.status === 'success') renderSharePeers(res.peers || []);
-    });
+function ftpHideCtxMenu() {
+    const m = document.getElementById('ftp-ctx-menu');
+    if (m) m.remove();
+    ftpStopPreview();
 }
 
-function renderSharePeers(peers) {
-    const list = document.getElementById('share-peer-list');
-    if (!list) return;
-    list.innerHTML = '';
+let ftpPreviewTimer = null;
 
-    if (!peers.length) {
-        list.innerHTML = '<div style="font-size:12px; color:#6c7086;">No friends connected yet.</div>';
+function ftpPreview10s(url) {
+    ftpStopPreview();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'ftp-preview-overlay';
+    overlay.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:9998;background:#000;border-radius:8px;overflow:hidden;border:2px solid #a6e3a1;box-shadow:0 4px 24px rgba(0,0,0,0.8);width:360px;';
+
+    const bar = document.createElement('div');
+    bar.style.cssText = 'background:#1e1e2e;padding:6px 10px;display:flex;justify-content:space-between;align-items:center;font-size:12px;color:#cdd6f4;';
+    bar.innerHTML = '<span><i class="fa-solid fa-eye" style="color:#a6e3a1;margin-right:6px;"></i>10s Preview</span>';
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕';
+    closeBtn.style.cssText = 'background:none;border:none;color:#888;cursor:pointer;font-size:14px;';
+    closeBtn.onclick = ftpStopPreview;
+    bar.appendChild(closeBtn);
+
+    const vid = document.createElement('video');
+    vid.src = url;
+    vid.autoplay = true;
+    vid.controls = true;
+    vid.muted = false;
+    vid.style.cssText = 'width:100%;display:block;max-height:200px;';
+
+    const countdown = document.createElement('div');
+    countdown.style.cssText = 'background:#1e1e2e;padding:4px 10px;font-size:11px;color:#888;text-align:right;';
+    countdown.textContent = 'Stops in 10s';
+
+    overlay.appendChild(bar);
+    overlay.appendChild(vid);
+    overlay.appendChild(countdown);
+    document.body.appendChild(overlay);
+
+    let remaining = 10;
+    ftpPreviewTimer = setInterval(() => {
+        remaining--;
+        countdown.textContent = `Stops in ${remaining}s`;
+        if (remaining <= 0) ftpStopPreview();
+    }, 1000);
+}
+
+function ftpStopPreview() {
+    if (ftpPreviewTimer) { clearInterval(ftpPreviewTimer); ftpPreviewTimer = null; }
+    const o = document.getElementById('ftp-preview-overlay');
+    if (o) { const v = o.querySelector('video'); if (v) { v.pause(); v.src = ''; } o.remove(); }
+}
+
+function ftpPlayFile(url) {
+    ftpStopPreview();
+    if (!currentFtpListing || !currentFtpListing.files) return;
+
+    // Filter playlist based on active tab/filter
+    const filtered = ftpActiveFilter === 'all' 
+        ? currentFtpListing.files 
+        : currentFtpListing.files.filter(f => f.type === ftpActiveFilter);
+
+    // Build absolute URL playlist
+    const playlist = filtered.map(f => ({
+        name: f.name,
+        type: f.type,
+        url: currentFtpListing.base_url + f.href
+    }));
+
+    const idx = playlist.findIndex(f => f.url === url);
+
+    const clickedItem = playlist[idx];
+    if (clickedItem && clickedItem.type === 'audio') {
+        playTopAudio(playlist, idx);
         return;
     }
 
-    peers.forEach(peer => {
-        const row = document.createElement('div');
-        row.style.cssText = 'display:flex; justify-content:space-between; align-items:center; gap:8px; padding:5px 0; border-bottom:1px solid #313244; font-size:12px;';
-
-        const info = document.createElement('div');
-        if (peer.hub) {
-            const link = document.createElement('a');
-            link.href = '#';
-            link.style.color = '#a6e3a1';
-            link.textContent = peer.email;
-            link.title = 'Open their hub';
-            link.onclick = () => {
-                const url = peer.hub + '?email=' + encodeURIComponent(shareHubIdentity);
-                pywebview.api.open_external_url(url);
-            };
-            info.appendChild(link);
-        } else {
-            const span = document.createElement('span');
-            span.style.color = '#a6e3a1';
-            span.textContent = peer.email;
-            info.appendChild(span);
+    pywebview.api.set_ftp_playlist(playlist, idx).then(() => {
+        let filename = 'File Preview';
+        try {
+            const u = new URL(url);
+            filename = u.pathname.split('/').filter(p => p).pop() || 'File Preview';
+        } catch(e) {
+            filename = url.substring(url.lastIndexOf('/') + 1) || 'File Preview';
         }
-        const meta = document.createElement('span');
-        meta.style.color = '#6c7086';
-        meta.textContent = (peer.hub ? ' ' + peer.hub : '') + ' (' + (peer.status || 'connected') + ')';
-        info.appendChild(meta);
-
-        const btn = document.createElement('button');
-        btn.textContent = 'Remove';
-        btn.style.cssText = 'background:#d32f2f; color:#fff; border:none; border-radius:3px; padding:3px 10px; font-size:11px; cursor:pointer;';
-        btn.onclick = () => removeSharePeer(peer.email);
-
-        row.appendChild(info);
-        row.appendChild(btn);
-        list.appendChild(row);
+        const cleanFilename = decodeURIComponent(filename).split('?')[0];
+        pywebview.api.open_in_app_browser('http://localhost:5050/ftp_player', cleanFilename);
     });
 }
 
-function addShareFolder() {
-    pywebview.api.browse_folder().then(path => {
-        if (!path) return;
-        if (shareHubFolders.includes(path)) return;
-        shareHubFolders.push(path);
-        pywebview.api.share_set_folders(shareHubFolders).then(res => {
-            if (res.status === 'success') renderShareFolders(res.shared_folders || []);
-        });
-    });
-}
-
-function removeShareFolder(path) {
-    shareHubFolders = shareHubFolders.filter(p => p !== path);
-    pywebview.api.share_set_folders(shareHubFolders).then(res => {
-        if (res.status === 'success') renderShareFolders(res.shared_folders || []);
-    });
-}
-
-function renderShareFolders(folders) {
-    shareHubFolders = folders || [];
-    const list = document.getElementById('share-folder-list');
-    if (!list) return;
-    list.innerHTML = '';
-
-    if (!shareHubFolders.length) {
-        list.innerHTML = '<div style="font-size:12px; color:#6c7086;">No folders shared. Your collections are shared automatically.</div>';
-        return;
+function ftpApplyGridColumns(grid) {
+    if (!grid) return;
+    const cols = document.getElementById('ftp-cols-select')?.value || '6';
+    if (cols === 'auto') {
+        grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;';
+    } else {
+        grid.style.cssText = `display:grid;grid-template-columns:repeat(${cols},1fr);gap:8px;`;
     }
+}
 
-    shareHubFolders.forEach(path => {
-        const row = document.createElement('div');
-        row.style.cssText = 'display:flex; justify-content:space-between; align-items:center; gap:8px; padding:4px 0; font-size:12px; word-break:break-all;';
+function ftpChangeCols(val) {
+    const grid = document.getElementById('ftp-file-grid');
+    if (grid) {
+        ftpApplyGridColumns(grid);
+    }
+}
 
-        const label = document.createElement('span');
-        label.textContent = path;
+let topAudioPlaylist = [];
+let topAudioIndex = -1;
 
-        const btn = document.createElement('button');
-        btn.textContent = 'Remove';
-        btn.style.cssText = 'background:#45475a; color:#cdd6f4; border:none; border-radius:3px; padding:3px 10px; font-size:11px; cursor:pointer; flex-shrink:0;';
-        btn.onclick = () => removeShareFolder(path);
+function playTopAudio(playlist, index) {
+    topAudioPlaylist = playlist;
+    topAudioIndex = index;
+    
+    const bar = document.getElementById('top-audio-bar');
+    const audio = document.getElementById('top-audio-element');
+    const nameEl = document.getElementById('top-audio-name');
+    const playBtn = document.getElementById('top-audio-play-btn');
+    
+    if (!bar || !audio || !nameEl || !playBtn) return;
+    
+    const item = playlist[index];
+    if (!item) return;
+    
+    nameEl.textContent = decodeURIComponent(item.name);
+    nameEl.title = decodeURIComponent(item.name);
+    
+    audio.src = item.url;
+    audio.play();
+    
+    playBtn.innerHTML = '<i class="fa-solid fa-pause"></i>';
+    bar.style.display = 'flex';
+    
+    audio.onended = () => {
+        topAudioNext();
+    };
+}
 
-        row.appendChild(label);
-        row.appendChild(btn);
-        list.appendChild(row);
+function topAudioTogglePlay() {
+    const audio = document.getElementById('top-audio-element');
+    const playBtn = document.getElementById('top-audio-play-btn');
+    if (!audio || !playBtn) return;
+    
+    if (audio.paused) {
+        audio.play();
+        playBtn.innerHTML = '<i class="fa-solid fa-pause"></i>';
+    } else {
+        audio.pause();
+        playBtn.innerHTML = '<i class="fa-solid fa-play"></i>';
+    }
+}
+
+function topAudioNext() {
+    if (topAudioPlaylist.length === 0) return;
+    topAudioIndex = (topAudioIndex + 1) % topAudioPlaylist.length;
+    playTopAudio(topAudioPlaylist, topAudioIndex);
+}
+
+function topAudioPrev() {
+    if (topAudioPlaylist.length === 0) return;
+    topAudioIndex = (topAudioIndex - 1 + topAudioPlaylist.length) % topAudioPlaylist.length;
+    playTopAudio(topAudioPlaylist, topAudioIndex);
+}
+
+function topAudioClose() {
+    const bar = document.getElementById('top-audio-bar');
+    const audio = document.getElementById('top-audio-element');
+    if (audio) {
+        audio.pause();
+        audio.src = '';
+    }
+    if (bar) {
+        bar.style.display = 'none';
+    }
+}
+
+function initSplitResizer() {
+    const resizer = document.getElementById('split-resizer');
+    const leftPane = document.getElementById('left-split-pane');
+    const rightPane = document.getElementById('right-split-pane');
+    const container = document.getElementById('media-container');
+
+    if (!resizer || !leftPane || !rightPane || !container) return;
+
+    let isResizing = false;
+
+    resizer.addEventListener('mousedown', (e) => {
+        isResizing = true;
+        document.body.style.cursor = 'col-resize';
+        const overlay = document.createElement('div');
+        overlay.id = 'resize-overlay';
+        overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;cursor:col-resize;';
+        document.body.appendChild(overlay);
+        e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!isResizing) return;
+        
+        const containerRect = container.getBoundingClientRect();
+        const offsetLeft = e.clientX - containerRect.left;
+        let percentage = (offsetLeft / containerRect.width) * 100;
+        
+        if (percentage < 10) percentage = 10;
+        if (percentage > 90) percentage = 90;
+        
+        leftPane.style.setProperty('width', `${percentage}%`, 'important');
+        rightPane.style.setProperty('width', `${100 - percentage}%`, 'important');
+    });
+
+    document.addEventListener('mouseup', () => {
+        if (isResizing) {
+            isResizing = false;
+            document.body.style.cursor = '';
+            const overlay = document.getElementById('resize-overlay');
+            if (overlay) overlay.remove();
+        }
     });
 }
