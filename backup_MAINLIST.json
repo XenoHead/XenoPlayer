@@ -1,0 +1,62 @@
+{
+    "collection_sites": [
+        {
+            "id": "nhentai",
+            "name": "NHentai",
+            "domain": "nhentai.net",
+            "notes": ""
+        },
+        {
+            "id": "danbooru",
+            "name": "Danbooru",
+            "domain": "danbooru.donmai.us",
+            "notes": ""
+        },
+        {
+            "id": "hentaiyoga",
+            "name": "Hentai.yoga",
+            "domain": "hentai.yoga",
+            "notes": "Built-in tag search & download. Supports image/video/all media types."
+        },
+        {
+            "id": "rule34art",
+            "name": "Rule34.art",
+            "domain": "rule34.art",
+            "notes": "Built-in tag search & comic download via HTML scraping."
+        },
+        {
+            "id": "ehentai",
+            "name": "E-Hentai",
+            "domain": "e-hentai.org",
+            "notes": "Built-in tag search via HTML scraping. No public tag API; uses curated tag list."
+        },
+        {
+            "id": "porcore",
+            "name": "Porcore",
+            "domain": "https://porcore.com",
+            "notes": "{\"parser\":\"generic_html\",\"search_url\":\"https://porcore.com/video/2951/the-first-kiss/\",\"base_url\":\"https://porcore.com\",\"results_selector\":\"div.videoparams\",\"title_selector\":\"\",\"url_selector\":\"\",\"author_selector\":\"\",\"summary_selector\":\"\"}"
+        }
+    ],
+    "audio_sites": [
+        {
+            "id": "liltsome1",
+            "name": "liltsome",
+            "domain": "liltsome.yerf.org",
+            "notes": ""
+        }
+    ],
+    "story_sites": [
+        {
+            "id": "archiveofourown",
+            "name": "archiveofourown",
+            "domain": "https://archiveofourown.org/",
+            "notes": "{\"parser\": \"ao3\"}"
+        },
+        {
+            "id": "royal_road",
+            "name": "Royal Road",
+            "domain": "https://www.royalroad.com",
+            "notes": "{\"parser\":\"generic_html\", \"search_url\":\"https://www.royalroad.com/fictions/search?title={query}\", \"base_url\":\"https://www.royalroad.com\", \"results_selector\":\".fiction-list-item\", \"title_selector\":\"h2.fiction-title a\", \"author_selector\":\"span.author a\", \"summary_selector\":\".fiction-description\", \"url_selector\":\"h2.fiction-title a\"}"
+        }
+    ]
+}

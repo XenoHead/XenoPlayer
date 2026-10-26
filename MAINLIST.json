@@ -1,0 +1,73 @@
+{
+    "collection_sites": [
+        {
+            "id": "nhentai",
+            "name": "NHentai",
+            "domain": "nhentai.net",
+            "notes": ""
+        },
+        {
+            "id": "danbooru",
+            "name": "Danbooru",
+            "domain": "danbooru.donmai.us",
+            "notes": ""
+        },
+        {
+            "id": "hentaiyoga",
+            "name": "Hentai.yoga",
+            "domain": "hentai.yoga",
+            "notes": "Built-in tag search & download. Supports image/video/all media types."
+        },
+        {
+            "id": "rule34art",
+            "name": "Rule34.art",
+            "domain": "rule34.art",
+            "notes": "Built-in tag search & comic download via HTML scraping."
+        },
+        {
+            "id": "ehentai",
+            "name": "E-Hentai",
+            "domain": "e-hentai.org",
+            "notes": "Built-in tag search via HTML scraping. No public tag API; uses curated tag list."
+        },
+        {
+            "id": "porcore",
+            "name": "Porcore",
+            "domain": "https://porcore.com",
+            "notes": "{\"parser\":\"generic_html\",\"search_url\":\"https://porcore.com/video/2951/the-first-kiss/\",\"base_url\":\"https://porcore.com\",\"results_selector\":\"div.videoparams\",\"title_selector\":\"\",\"url_selector\":\"\",\"author_selector\":\"\",\"summary_selector\":\"\"}"
+        },
+        {
+            "id": "2e_hentai",
+            "name": "2E-hentai",
+            "domain": "https://e-hentai.org",
+            "notes": "{\"parser\":\"generic_html\",\"search_url\":\"https://e-hentai.org/s/4dfb114266/3673116-19\",\"base_url\":\"https://e-hentai.org\",\"results_selector\":\"div\",\"title_selector\":\"\",\"url_selector\":\"\",\"author_selector\":\"\",\"summary_selector\":\"\"}"
+        },
+        {
+            "id": "hentai_moon",
+            "name": "Hentai-moon",
+            "domain": "https://hentai-moon.com",
+            "notes": "{\"parser\":\"generic_html\",\"search_url\":\"https://hentai-moon.com/videos/991/cherry-gal-s-ep-2-d1\",\"base_url\":\"https://hentai-moon.com\",\"results_selector\":\"div.wrap\",\"title_selector\":\"\",\"url_selector\":\"\",\"author_selector\":\"\",\"summary_selector\":\"\"}"
+        },
+        {
+            "id": "xgame9",
+            "name": "Xgame9",
+            "domain": "https://xgame9.com",
+            "notes": "{\"parser\":\"generic_html\",\"search_url\":\"https://xgame9.com/developer/dumb-koala-games/\",\"base_url\":\"https://xgame9.com\",\"results_selector\":\"article.gx-card\",\"title_selector\":\"a\",\"url_selector\":\"a\",\"author_selector\":\"\",\"summary_selector\":\"\"}"
+        },
+        {
+            "id": "pixiv",
+            "name": "Pixiv",
+            "domain": "https://www.pixiv.net",
+            "notes": "{\"parser\":\"generic_html\",\"search_url\":\"https://www.pixiv.net/search?q=nude%20girl&s_mode=tag&type=manga&r=1\",\"base_url\":\"https://www.pixiv.net\",\"results_selector\":\"div\",\"title_selector\":\"\",\"url_selector\":\"\",\"author_selector\":\"\",\"summary_selector\":\"\"}"
+        }
+    ],
+    "audio_sites": [
+        {
+            "id": "liltsome1",
+            "name": "liltsome",
+            "domain": "liltsome.yerf.org",
+            "notes": ""
+        }
+    ],
+    "story_sites": []
+}
