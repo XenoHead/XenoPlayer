@@ -20,6 +20,7 @@ Beyond standard playback, XenoPlayer is packed with advanced features including 
 * **Favorites System:** Keep track of your favorite files. Play exclusively your favorites or filter them out to watch only unfavorited content.
 * **Live Thumbnails:** The playlist dynamically generates previews for your videos and images on the fly.
 * **Sharing Hub:** Share your library with friends over your network. Friends connect with their own email address — only `@xenohead.com` addresses are accepted.
+* **Direct File Transfer:** Send files or folders to friends, or receive uploads, over Tor using OnionShare. Sends are packed into a password-protected 7z archive (7-Zip required); recipients open the address in Tor Browser. Use **Encrypt for Upload** to make a password-protected 7z locally before uploading to a friend's receive page.
 
 ## 🎬 Supported Formats
 
@@ -32,6 +33,8 @@ Beyond standard playback, XenoPlayer is packed with advanced features including 
 2. **Run:** Double-click the executable to launch the app. No complex setup or dependencies required!
 3. **Play:** Drag and drop a file, or click "Load Folder/File" to start watching or reading.
 *(Note: The AI translation model may download a small, one-time update on its very first run).*
+
+For **Direct File Transfer**, install [OnionShare](https://onionshare.org) (the Windows installer includes both `onionshare-cli.exe` and Tor) and [7-Zip](https://www.7-zip.org/), then open **Share Files** in XenoPlayer. If either tool is not detected automatically, use **Locate CLI** / **Locate 7z.exe**. Sends are encrypted into a password-protected `.7z` archive; the archive password is set in the Share Files window and must be sent to the recipient separately.
 
 ## Keyboard & Mouse Shortcuts
 

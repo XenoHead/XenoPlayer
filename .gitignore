@@ -27,3 +27,4 @@ web_settings.json
 .env
 web/node_modules/
 .wrangler/
+MAINLIST.json

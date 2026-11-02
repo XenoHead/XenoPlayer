@@ -72,6 +72,10 @@
                     style="background-color: #a6e3a1; color: #11111b; font-weight: bold; margin-top: 10px;"><i
                         class="fa-solid fa-folder-tree"></i>
                     FTP Browser</button>
+                <button id="onion-share-btn" onclick="openOnionShareModal()"
+                    style="background-color: #cba6f7; color: #11111b; font-weight: bold; margin-top: 10px;"><i
+                        class="fa-solid fa-share-nodes"></i>
+                    Share Files</button>
             </div>
 
             <div id="split-tabs-container" style="display:none; margin: 10px; border-bottom: 2px solid #313244;">
@@ -225,6 +229,7 @@
                     </div>
                     <div class="pane-content" style="flex:1; position:relative; display:flex; justify-content:center; align-items:center; height: 100%; overflow:hidden;">
                         <video id="video-player" style="display:none;" autoplay></video>
+                        <audio id="audio-player" style="display:none;" autoplay></audio>
                     </div>
                 </div>
 
@@ -548,6 +553,163 @@
         </div>
     </div>
     <!-- Hotkeys Modal -->
+    <!-- OnionShare File Transfer Modal -->
+    <div id="onionshare-modal" class="modal"
+        style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:#1e1e2e; color:#cdd6f4; padding:20px; z-index:1000; width:680px; max-width:92vw; height:auto; max-height:90vh; overflow-y:auto; border-radius:8px; border:1px solid #45475a; box-sizing:border-box;">
+        <span class="close" onclick="closeModals()" style="color:#cdd6f4;">&times;</span>
+        <h2 style="margin-top:0; color:#cba6f7;"><i class="fa-solid fa-share-nodes"></i> Share Files</h2>
+        <p style="font-size:12px; color:#a0a0b0; margin-top:0;">Direct friend-to-friend transfer over Tor. No account, no cloud storage. Your friend needs Tor Browser.</p>
+
+        <div id="onion-missing" style="display:none; background:#45272f; border:1px solid #f38ba8; border-radius:5px; padding:12px; margin-bottom:12px;">
+            <div style="color:#f38ba8; font-weight:bold; margin-bottom:6px;"><i class="fa-solid fa-triangle-exclamation"></i> OnionShare CLI not found</div>
+            <div style="font-size:12px; line-height:1.5;">Install OnionShare for Windows, then locate its <b>onionshare-cli.exe</b>. The installer includes the Tor binaries the CLI needs.</div>
+            <div style="display:flex; gap:8px; margin-top:10px;">
+                <button onclick="pywebview.api.open_external_url('https://onionshare.org')" style="background:#89b4fa; color:#11111b; font-weight:bold;">Download OnionShare</button>
+                <button onclick="onionLocateCli()" style="background:#45475a; color:#cdd6f4;">Locate CLI</button>
+            </div>
+        </div>
+
+        <div id="onion-setup">
+            <div style="display:flex; border-bottom:2px solid #313244; margin-bottom:14px;">
+                <button id="onion-tab-share" onclick="switchOnionMode('share')" style="flex:1; background:#cba6f7; color:#11111b; border:none; padding:9px; cursor:pointer; font-weight:bold; border-radius:4px 4px 0 0;"><i class="fa-solid fa-arrow-up-from-bracket"></i> Send to Friends</button>
+                <button id="onion-tab-receive" onclick="switchOnionMode('receive')" style="flex:1; background:#313244; color:#cdd6f4; border:none; padding:9px; cursor:pointer; font-weight:bold; border-radius:4px 4px 0 0;"><i class="fa-solid fa-arrow-down-to-bracket"></i> Receive from Friends</button>
+                <button id="onion-tab-encrypt" onclick="switchOnionMode('encrypt')" style="flex:1; background:#313244; color:#cdd6f4; border:none; padding:9px; cursor:pointer; font-weight:bold; border-radius:4px 4px 0 0;"><i class="fa-solid fa-lock"></i> Encrypt for Upload</button>
+            </div>
+
+            <div id="onion-panel-share">
+                <div style="display:flex; gap:8px; margin-bottom:10px;">
+                    <button onclick="onionAddFiles()" style="background:#89b4fa; color:#11111b; font-weight:bold; flex:1;"><i class="fa-solid fa-file-circle-plus"></i> Add Files</button>
+                    <button onclick="onionAddFolder()" style="background:#a6e3a1; color:#11111b; font-weight:bold; flex:1;"><i class="fa-solid fa-folder-plus"></i> Add Folder</button>
+                    <button onclick="onionAddSelected()" style="background:#f9e2af; color:#11111b; font-weight:bold; flex:1;"><i class="fa-solid fa-list-check"></i> Add Selected</button>
+                    <button onclick="onionAddCurrentFolder()" style="background:#cba6f7; color:#11111b; font-weight:bold; flex:1;"><i class="fa-solid fa-photo-film"></i> Current Folder</button>
+                </div>
+                <div id="onion-path-list" style="max-height:180px; overflow-y:auto; background:#11111b; border:1px solid #313244; border-radius:5px; padding:8px; font-size:12px; color:#a0a0b0;">No files or folders selected.</div>
+
+                <div id="onion-7z-missing" style="display:none; background:#45272f; border:1px solid #f9e2af; border-radius:5px; padding:10px; margin-top:10px;">
+                    <div style="color:#f9e2af; font-weight:bold; margin-bottom:4px;"><i class="fa-solid fa-triangle-exclamation"></i> 7-Zip not found</div>
+                    <div style="font-size:11px; line-height:1.4;">7-Zip is required to encrypt the files you send.</div>
+                    <div style="display:flex; gap:8px; margin-top:8px;">
+                        <button onclick="pywebview.api.open_external_url('https://www.7-zip.org/download.html')" style="background:#89b4fa; color:#11111b; font-weight:bold;">Download 7-Zip</button>
+                        <button onclick="onionLocate7z()" style="background:#45475a; color:#cdd6f4;">Locate 7z.exe</button>
+                    </div>
+                </div>
+
+                <div style="margin-top:12px;">
+                    <label for="onion-password" style="display:block; font-size:12px; color:#a0a0b0; margin-bottom:5px;">Archive password <span style="color:#f38ba8;">*</span></label>
+                    <div style="display:flex; gap:6px;">
+                        <input id="onion-password" type="password" minlength="6" maxlength="128" autocomplete="new-password" spellcheck="false" placeholder="At least 6 characters" style="flex:1; background:#11111b; border:1px solid #45475a; color:#cdd6f4; border-radius:4px; padding:8px;">
+                        <button id="onion-password-toggle" onclick="onionTogglePassword()" style="background:#45475a; color:#cdd6f4;">Show</button>
+                    </div>
+                    <p style="font-size:11px; color:#f9e2af; margin:6px 0 0 0;">Use a strong password (at least 6 characters). Files are packed into an AES-encrypted .7z with hidden file names. Send this password separately. A temporary archive needs free disk space roughly equal to the selection.</p>
+                </div>
+            </div>
+
+            <div id="onion-panel-receive" style="display:none;">
+                <label style="display:block; font-size:12px; color:#a0a0b0; margin-bottom:5px;">Save received files to</label>
+                <div style="display:flex; gap:8px;">
+                    <input type="text" id="onion-receive-dir" readonly style="flex:1; background:#11111b; border:1px solid #45475a; color:#cdd6f4; border-radius:4px; padding:8px;">
+                    <button onclick="onionBrowseReceive()" style="background:#45475a; color:#cdd6f4;">Browse</button>
+                    <button onclick="onionOpenReceive()" style="background:#a6e3a1; color:#11111b; font-weight:bold;">Open</button>
+                </div>
+                <p style="font-size:11px; color:#f9e2af; margin:8px 0 0 0;">Only accept files from people you trust, and scan them before opening.</p>
+            </div>
+
+            <div id="onion-panel-encrypt" style="display:none;">
+                <div style="display:flex; gap:8px; margin-bottom:10px;">
+                    <button onclick="onionAddFiles()" style="background:#89b4fa; color:#11111b; font-weight:bold; flex:1;"><i class="fa-solid fa-file-circle-plus"></i> Add Files</button>
+                    <button onclick="onionAddFolder()" style="background:#a6e3a1; color:#11111b; font-weight:bold; flex:1;"><i class="fa-solid fa-folder-plus"></i> Add Folder</button>
+                    <button onclick="onionAddSelected()" style="background:#f9e2af; color:#11111b; font-weight:bold; flex:1;"><i class="fa-solid fa-list-check"></i> Add Selected</button>
+                </div>
+                <div id="onion-encrypt-path-list" style="max-height:180px; overflow-y:auto; background:#11111b; border:1px solid #313244; border-radius:5px; padding:8px; font-size:12px; color:#a0a0b0;">No files or folders selected.</div>
+
+                <div id="onion-encrypt-7z-missing" style="display:none; background:#45272f; border:1px solid #f9e2af; border-radius:5px; padding:10px; margin-top:10px;">
+                    <div style="color:#f9e2af; font-weight:bold; margin-bottom:4px;"><i class="fa-solid fa-triangle-exclamation"></i> 7-Zip not found</div>
+                    <div style="font-size:11px; line-height:1.4;">7-Zip is required to encrypt files.</div>
+                    <div style="display:flex; gap:8px; margin-top:8px;">
+                        <button onclick="pywebview.api.open_external_url('https://www.7-zip.org/download.html')" style="background:#89b4fa; color:#11111b; font-weight:bold;">Download 7-Zip</button>
+                        <button onclick="onionLocate7z()" style="background:#45475a; color:#cdd6f4;">Locate 7z.exe</button>
+                    </div>
+                </div>
+
+                <div style="margin-top:12px;">
+                    <label for="onion-encrypt-password" style="display:block; font-size:12px; color:#a0a0b0; margin-bottom:5px;">Archive password <span style="color:#f38ba8;">*</span></label>
+                    <div style="display:flex; gap:6px;">
+                        <input id="onion-encrypt-password" type="password" minlength="6" maxlength="128" autocomplete="new-password" spellcheck="false" placeholder="At least 6 characters" style="flex:1; background:#11111b; border:1px solid #45475a; color:#cdd6f4; border-radius:4px; padding:8px;">
+                        <button onclick="onionToggleEncryptPassword()" style="background:#45475a; color:#cdd6f4;">Show</button>
+                    </div>
+                </div>
+
+                <label style="display:block; font-size:12px; color:#a0a0b0; margin-top:12px; margin-bottom:5px;">Save archive to</label>
+                <div style="display:flex; gap:6px;">
+                    <input type="text" id="onion-encrypt-dir" readonly style="flex:1; background:#11111b; border:1px solid #45475a; color:#cdd6f4; border-radius:4px; padding:8px;">
+                    <button onclick="onionBrowseEncryptOutput()" style="background:#45475a; color:#cdd6f4;">Browse</button>
+                </div>
+
+                <button id="onion-encrypt-btn" onclick="onionEncrypt()" style="width:100%; margin-top:14px; background:#a6e3a1; color:#11111b; font-weight:bold; padding:10px; border-radius:5px; border:none; cursor:pointer;"><i class="fa-solid fa-lock"></i> Create Encrypted Archive</button>
+
+                <div id="onion-encrypt-status" style="margin-top:12px;"></div>
+            </div>
+
+            <div id="onion-shared-options" style="display:flex; align-items:center; gap:18px; flex-wrap:wrap; margin-top:14px; padding:10px; background:#181825; border-radius:5px;">
+                <label style="display:flex; align-items:center; gap:6px; font-size:12px; cursor:pointer;">
+                    <input type="checkbox" id="onion-private" checked style="width:14px; height:14px; cursor:pointer;">
+                    Require private key (recommended)
+                </label>
+                <label style="display:flex; align-items:center; gap:6px; font-size:12px;">
+                    Stop after
+                    <input type="number" id="onion-auto-stop" min="0" max="1440" value="0" style="width:60px; background:#11111b; border:1px solid #45475a; color:#cdd6f4; border-radius:3px; padding:3px;">
+                    minutes <span style="color:#6c7086;">(0 = never)</span>
+                </label>
+            </div>
+
+            <div id="onion-error" style="display:none; color:#f38ba8; background:#45272f; border:1px solid #f38ba8; border-radius:5px; padding:8px; margin-top:12px; font-size:12px; white-space:pre-wrap; max-height:150px; overflow:auto;"></div>
+
+            <button id="onion-start-btn" onclick="onionStart()" style="width:100%; margin-top:14px; background:#cba6f7; color:#11111b; font-weight:bold; padding:10px; border-radius:5px; border:none; cursor:pointer; display:none;"><i class="fa-solid fa-tower-broadcast"></i> Start Transfer</button>
+        </div>
+
+        <div id="onion-active" style="display:none;">
+            <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
+                <i id="onion-status-icon" class="fa-solid fa-circle-notch fa-spin" style="color:#f9e2af; font-size:18px;"></i>
+                <div style="flex:1;">
+                    <div id="onion-status-text" style="font-weight:bold;">Starting Tor...</div>
+                    <div id="onion-status-sub" style="font-size:11px; color:#a0a0b0;">This can take up to two minutes.</div>
+                </div>
+                <button onclick="onionStop()" style="background:#f38ba8; color:#11111b; font-weight:bold; border:none; border-radius:4px; padding:6px 12px; cursor:pointer;"><i class="fa-solid fa-stop"></i> Stop</button>
+            </div>
+
+            <div id="onion-ready" style="display:none;">
+                <label style="display:block; font-size:11px; color:#a0a0b0; margin-bottom:4px;">Onion address</label>
+                <div style="display:flex; gap:6px; margin-bottom:10px;">
+                    <input id="onion-url" type="text" readonly style="flex:1; background:#11111b; border:1px solid #45475a; color:#a6e3a1; border-radius:4px; padding:8px; font-family:monospace; font-size:12px;">
+                    <button onclick="onionCopy('onion-url')" style="background:#45475a; color:#cdd6f4;">Copy</button>
+                </div>
+
+                <div id="onion-key-row">
+                    <label style="display:block; font-size:11px; color:#a0a0b0; margin-bottom:4px;">Private key</label>
+                    <div style="display:flex; gap:6px; margin-bottom:10px;">
+                        <input id="onion-key" type="text" readonly style="flex:1; background:#11111b; border:1px solid #45475a; color:#f9e2af; border-radius:4px; padding:8px; font-family:monospace; font-size:12px;">
+                        <button onclick="onionCopy('onion-key')" style="background:#45475a; color:#cdd6f4;">Copy</button>
+                    </div>
+                </div>
+
+                <div id="onion-instructions" style="background:#181825; border-left:3px solid #cba6f7; padding:10px; font-size:12px; line-height:1.5; margin-bottom:12px;"></div>
+                <div id="onion-archive-note" style="display:none; background:#181825; border-left:3px solid #a6e3a1; padding:8px; font-size:11px; line-height:1.4; margin-bottom:10px;">Password-protected .7z archive. Send the archive password separately from the onion link.</div>
+
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                    <button onclick="onionCopyInvite()" style="flex:1; background:#89b4fa; color:#11111b; font-weight:bold;"><i class="fa-solid fa-copy"></i> Copy Invite</button>
+                    <button id="onion-copy-password" onclick="onionCopyPassword()" style="flex:1; background:#f9e2af; color:#11111b; font-weight:bold; display:none;"><i class="fa-solid fa-key"></i> Copy Password</button>
+                    <button id="onion-open-receive" onclick="onionOpenReceive()" style="flex:1; background:#a6e3a1; color:#11111b; font-weight:bold; display:none;"><i class="fa-solid fa-folder-open"></i> Open Received Folder</button>
+                    <button onclick="pywebview.api.open_external_url('https://www.torproject.org/download/')" style="flex:1; background:#45475a; color:#cdd6f4; font-weight:bold;"><i class="fa-solid fa-globe"></i> Get Tor Browser</button>
+                </div>
+            </div>
+
+            <details style="margin-top:14px;">
+                <summary style="cursor:pointer; font-size:11px; color:#6c7086;">Connection log</summary>
+                <pre id="onion-log" style="max-height:140px; overflow:auto; background:#11111b; color:#6c7086; font-size:10px; padding:8px; border-radius:4px; white-space:pre-wrap;"></pre>
+            </details>
+        </div>
+    </div>
+
     <div id="hotkeys-modal" class="modal"
         style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:#333; padding:20px; z-index:1000; width:600px; border-radius: 8px; max-height:90vh; overflow-y:auto;">
         <h2 style="margin-top:0;">Edit Hotkeys</h2>

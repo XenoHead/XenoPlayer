@@ -15,6 +15,13 @@ import shutil
 import hashlib
 import urllib.parse
 import zipfile
+import subprocess
+import signal
+import uuid
+import platform
+import urllib.request
+import urllib.error
+from datetime import datetime
 from flask import Flask, request, send_file, Response
 
 class DummyWriter:
@@ -102,6 +109,19 @@ class Api:
         self._cbz_temp_dir = None
         self._cbz_root = None
         self._cbz_archive_path = None
+        self.onion_proc = None
+        self.onion_pack_proc = None
+        self.onion_session_dir = None
+        self.onion_persistent_file = None
+        self.onion_generation = 0
+        self.onion_lock = threading.Lock()
+        self.encrypt_proc = None
+        self.encrypt_generation = 0
+        self.encrypt_state = {"state": "idle", "archive_path": None, "error": None}
+        self.onion_state = {
+            "state": "stopped", "mode": None, "url": None, "key": None,
+            "public": False, "error": None, "log": [], "auto_stop_minutes": 0
+        }
 
     def get_startup_info(self):
         art_path = resource_path('XenoHead_art.png')
@@ -171,6 +191,744 @@ class Api:
         result = self._window.create_file_dialog(webview.FileDialog.OPEN, directory=last_dir, allow_multiple=False, file_types=('Executables (*.exe)', 'All files (*.*)'))
         if result and len(result) > 0: return result[0]
         return None
+
+    # --- ONIONSHARE FILE TRANSFER ---
+
+    def _onion_default_receive_dir(self):
+        saved = self.settings.get("onion_receive_dir")
+        if saved: return saved
+        downloads = os.path.join(os.path.expanduser("~"), "Downloads")
+        base = downloads if os.path.isdir(downloads) else os.path.expanduser("~")
+        return os.path.join(base, "XenoPlayer Drop")
+
+    def _find_onionshare_cli(self):
+        exe = "onionshare-cli.exe" if os.name == "nt" else "onionshare-cli"
+        configured = self.settings.get("onionshare_cli_path")
+        candidates = []
+        if configured: candidates.append(configured)
+        candidates.extend([
+            os.path.join(app_dir, exe),
+            os.path.join(os.path.dirname(sys.executable), exe),
+            os.path.join(app_dir, "onionshare", exe),
+        ])
+        for env in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
+            base = os.environ.get(env)
+            if base: candidates.append(os.path.join(base, "OnionShare", exe))
+        local = os.environ.get("LOCALAPPDATA")
+        if local: candidates.append(os.path.join(local, "Programs", "OnionShare", exe))
+        found = shutil.which(exe) or shutil.which("onionshare-cli")
+        if found: candidates.append(found)
+        for path in candidates:
+            if path and os.path.isfile(path):
+                return path
+        return None
+
+    def _find_seven_zip(self):
+        names = ("7z.exe", "7za.exe", "7zz.exe") if os.name == "nt" else ("7z", "7zz", "7za")
+        configured = self.settings.get("seven_zip_path")
+        candidates = []
+        if configured: candidates.append(configured)
+        for name in names:
+            candidates.extend([
+                os.path.join(app_dir, name),
+                os.path.join(os.path.dirname(sys.executable), name),
+            ])
+            # Non-system Program Files dirs on any fixed drive (e.g. D:\Program Files)
+            for drive in self._windows_drive_roots():
+                candidates.append(os.path.join(drive, "Program Files", "7-Zip", name))
+                candidates.append(os.path.join(drive, "Program Files (x86)", "7-Zip", name))
+            for env in ("ProgramFiles", "ProgramFiles(x86)"):
+                base = os.environ.get(env)
+                if base: candidates.append(os.path.join(base, "7-Zip", name))
+            local = os.environ.get("LOCALAPPDATA")
+            if local:
+                candidates.append(os.path.join(local, "Programs", "7-Zip", name))
+                candidates.append(os.path.join(local, "7-Zip", name))
+            program_data = os.environ.get("ProgramData")
+            if program_data:
+                candidates.append(os.path.join(program_data, "chocolatey", "tools", name))
+                candidates.append(os.path.join(program_data, "chocolatey", "bin", name))
+            found = shutil.which(name)
+            if found: candidates.append(found)
+        for path in candidates:
+            if path and os.path.isfile(path):
+                return path
+        return None
+
+    @staticmethod
+    def _windows_drive_roots():
+        if os.name != "nt":
+            return []
+        import string
+        roots = []
+        for letter in string.ascii_uppercase:
+            root = letter + ":\\"
+            try:
+                if os.path.isdir(root):
+                    roots.append(root)
+            except Exception:
+                pass
+        return roots
+
+    # --- LOCAL ENCRYPTION (7-ZIP) ---
+
+    def _validate_encrypt_paths(self, paths):
+        paths = [os.path.abspath(p) for p in (paths or []) if p]
+        if not paths:
+            return None, "Add at least one file or folder."
+        missing = [p for p in paths if not os.path.exists(p)]
+        if missing:
+            return None, f"Not found: {missing[0]}"
+        if any("\n" in p or "\r" in p for p in paths):
+            return None, "File names containing line breaks are not supported."
+        norm = [os.path.normcase(p) for p in paths]
+        filtered = []
+        for path, normalized in zip(paths, norm):
+            nested = False
+            for other in norm:
+                if normalized == other: continue
+                if normalized.startswith(other.rstrip("\\/") + os.sep):
+                    nested = True
+                    break
+            if not nested and path not in filtered:
+                filtered.append(path)
+        names = [os.path.basename(p.rstrip("\\/")).lower() for p in filtered]
+        if len(set(names)) != len(names):
+            return None, "Selected items have duplicate names. Rename them or select their parent folder."
+        return filtered, None
+
+    def _validate_encrypt_password(self, password):
+        password = str(password or "")
+        if len(password) < 6:
+            return None, "Enter an archive password with at least 6 characters."
+        if len(password) > 128:
+            return None, "Archive password must be 128 characters or fewer."
+        if not password.strip():
+            return None, "Archive password cannot be only spaces."
+        if any(c in password for c in ('"', "\r", "\n", "\x00")):
+            return None, "Password cannot contain double quotes or line breaks."
+        return password, None
+
+    def get_encrypt_status(self):
+        with self.onion_lock:
+            state = dict(self.encrypt_state)
+        return {"ok": state["state"] != "error", "state": state["state"],
+                "archive_path": state["archive_path"], "error": state["error"]}
+
+    def _run_encrypt_files(self, seven_zip, archive_path, paths, password, output_dir, generation):
+        list_path = os.path.join(output_dir, f".xeno_list_{uuid.uuid4().hex}.txt")
+        try:
+            with open(list_path, "w", encoding="utf-8") as f:
+                for path in paths:
+                    f.write(path + "\n")
+        except Exception as e:
+            with self.onion_lock:
+                if self.encrypt_generation == generation:
+                    self.encrypt_state = {"state": "error", "archive_path": None, "error": f"Could not prepare the file list: {e}"}
+            return
+        cmd = [
+            seven_zip, "a", "-t7z", f"-p{password}", "-mhe=on",
+            "-mx=1", "-y", "-bd", "-spd", "-scsUTF-8",
+            archive_path, f"@{list_path}"
+        ]
+        kwargs = {}
+        if os.name == "nt":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            kwargs["start_new_session"] = True
+        proc = None
+        try:
+            proc = subprocess.Popen(
+                cmd, cwd=app_dir, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", **kwargs
+            )
+            with self.onion_lock:
+                if self.encrypt_generation != generation:
+                    self._kill_process_tree(proc)
+                    return
+                self.encrypt_proc = proc
+            output, _ = proc.communicate(timeout=3600)
+            returncode = proc.returncode
+        except subprocess.TimeoutExpired:
+            self._kill_process_tree(proc)
+            try: output, _ = proc.communicate(timeout=5)
+            except Exception: pass
+            with self.onion_lock:
+                if self.encrypt_generation == generation:
+                    self.encrypt_state = {"state": "error", "archive_path": None, "error": "Compression timed out after 60 minutes."}
+            return
+        except Exception as e:
+            with self.onion_lock:
+                if self.encrypt_generation == generation:
+                    self.encrypt_state = {"state": "error", "archive_path": None, "error": f"Could not run 7-Zip: {e}"}
+            return
+        finally:
+            with self.onion_lock:
+                if self.encrypt_proc is proc:
+                    self.encrypt_proc = None
+            try:
+                if os.path.exists(list_path): os.remove(list_path)
+            except Exception: pass
+        if returncode != 0:
+            lines = [line for line in (output or "").splitlines() if line.strip()]
+            detail = " / ".join(lines[-4:]) if lines else f"7-Zip exited with code {returncode}."
+            if password: detail = detail.replace(password, "[hidden]")
+            with self.onion_lock:
+                if self.encrypt_generation == generation:
+                    self.encrypt_state = {"state": "error", "archive_path": None, "error": f"Compression failed: {detail}"}
+            return
+        if not os.path.isfile(archive_path) or os.path.getsize(archive_path) == 0:
+            with self.onion_lock:
+                if self.encrypt_generation == generation:
+                    self.encrypt_state = {"state": "error", "archive_path": None, "error": "7-Zip did not create the archive."}
+            return
+        with self.onion_lock:
+            if self.encrypt_generation == generation:
+                self.encrypt_state = {"state": "done", "archive_path": archive_path, "error": None}
+
+    def encrypt_files(self, paths, password, output_dir=None):
+        with self.onion_lock:
+            busy = self.encrypt_proc is not None or self.encrypt_state["state"] == "packing"
+        if busy:
+            return self.get_encrypt_status()
+        filtered, error = self._validate_encrypt_paths(paths)
+        if error:
+            return {"ok": False, "state": "idle", "archive_path": None, "error": error}
+        password, error = self._validate_encrypt_password(password)
+        if error:
+            return {"ok": False, "state": "idle", "archive_path": None, "error": error}
+        seven_zip = self._find_seven_zip()
+        if not seven_zip:
+            return {"ok": False, "state": "idle", "archive_path": None, "error": "7-Zip not found. Install 7-Zip, then click Locate 7z.exe."}
+        output_dir = os.path.abspath(output_dir or self.settings.get("onion_receive_dir") or self._onion_default_receive_dir())
+        try:
+            os.makedirs(output_dir, exist_ok=True)
+        except Exception as e:
+            return {"ok": False, "state": "idle", "archive_path": None, "error": f"Cannot use output folder: {e}"}
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        archive_path = os.path.join(output_dir, f"XenoShare_{stamp}.7z")
+        base, ext = os.path.splitext(archive_path)
+        counter = 1
+        while os.path.exists(archive_path):
+            archive_path = f"{base}_{counter}{ext}"
+            counter += 1
+        with self.onion_lock:
+            self.encrypt_generation += 1
+            generation = self.encrypt_generation
+            self.encrypt_state = {"state": "packing", "archive_path": archive_path, "error": None}
+        threading.Thread(target=self._run_encrypt_files, args=(seven_zip, archive_path, filtered, password, output_dir, generation), daemon=True).start()
+        return self.get_encrypt_status()
+
+    def cancel_encrypt(self):
+        with self.onion_lock:
+            self.encrypt_generation += 1
+            proc = self.encrypt_proc
+            if self.encrypt_state["state"] == "packing":
+                self.encrypt_state = {"state": "idle", "archive_path": None, "error": None}
+        self._kill_process_tree(proc)
+        with self.onion_lock:
+            if self.encrypt_proc is proc:
+                self.encrypt_proc = None
+        return self.get_encrypt_status()
+
+    def open_encrypt_output(self, archive_path):
+        if not archive_path:
+            return {"status": "error", "msg": "No archive available."}
+        try:
+            self.open_folder_location(archive_path)
+            return {"status": "ok"}
+        except Exception as e:
+            return {"status": "error", "msg": str(e)}
+
+    def browse_encrypt_output(self):
+        return self.browse_folder()
+
+    def _onion_payload(self, extra=None):
+        cli = self._find_onionshare_cli()
+        seven_zip = self._find_seven_zip()
+        with self.onion_lock:
+            payload = dict(self.onion_state)
+            payload["log"] = list(self.onion_state["log"][-12:])
+        payload["available"] = bool(cli)
+        payload["cli_path"] = cli
+        payload["seven_zip_available"] = bool(seven_zip)
+        payload["seven_zip_path"] = seven_zip
+        payload["receive_dir"] = self._onion_default_receive_dir()
+        if extra: payload.update(extra)
+        return payload
+
+    def _append_onion_log(self, line, proc=None):
+        line = (line or "").strip()
+        if not line: return
+        line = re.sub(r"\x1b\[[0-9;]*m", "", line)
+        with self.onion_lock:
+            if proc is not None and self.onion_proc is not proc: return
+            log = self.onion_state["log"]
+            log.append(re.sub(r"(Private key:\s*)\S+", r"\1[hidden]", line))
+            if len(log) > 60: del log[:-60]
+            if not self.onion_state["url"] and self.onion_state["state"] in ("starting", "running"):
+                match = re.search(r"http://([a-z2-7]{56})\.onion", line)
+                if match:
+                    self.onion_state["url"] = match.group(0)
+                    self.onion_state["state"] = "running"
+            match = re.match(r"Private key:\s*(\S+)", line)
+            if match:
+                self.onion_state["key"] = match.group(1)
+
+    def _refresh_onion_state(self):
+        with self.onion_lock:
+            path = self.onion_persistent_file
+            state = self.onion_state["state"]
+        if not path or state not in ("starting", "running") or not os.path.exists(path):
+            return
+        try:
+            if os.name != "nt":
+                try: os.chmod(path, 0o600)
+                except Exception: pass
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            return
+        general = data.get("general") or {}
+        onion = data.get("onion") or {}
+        service_id = general.get("service_id")
+        if service_id: service_id = str(service_id).removesuffix(".onion")
+        key = onion.get("client_auth_priv_key")
+        public = bool(general.get("public", False))
+        if service_id:
+            with self.onion_lock:
+                if self.onion_state["state"] in ("starting", "running"):
+                    self.onion_state["state"] = "running"
+                    self.onion_state["url"] = f"http://{service_id}.onion"
+                    self.onion_state["public"] = public
+                    if key: self.onion_state["key"] = key
+                    self.onion_state["error"] = None
+        elif key:
+            with self.onion_lock:
+                self.onion_state["key"] = key
+
+    def _kill_process_tree(self, proc):
+        if not proc or proc.poll() is not None: return
+        try:
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    creationflags=subprocess.CREATE_NO_WINDOW
+                )
+            else:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        except Exception:
+            try: proc.terminate()
+            except Exception: pass
+        try: proc.wait(timeout=8)
+        except Exception:
+            try: proc.kill()
+            except Exception: pass
+
+    def _cleanup_onion_session(self, session_dir=None):
+        with self.onion_lock:
+            if session_dir is None: session_dir = self.onion_session_dir
+            if self.onion_session_dir == session_dir:
+                self.onion_session_dir = None
+                self.onion_persistent_file = None
+        if session_dir and os.path.isdir(session_dir):
+            shutil.rmtree(session_dir, ignore_errors=True)
+
+    def _abort_onion_start(self, session_dir):
+        with self.onion_lock:
+            if self.onion_session_dir in (session_dir, None) and self.onion_state["state"] in ("packing", "starting"):
+                self.onion_state["state"] = "stopped"
+        self._cleanup_onion_session(session_dir)
+
+    def _read_onion_output(self, proc):
+        try:
+            for line in iter(proc.stdout.readline, ""):
+                self._append_onion_log(line, proc)
+        except Exception:
+            pass
+        finally:
+            try: proc.stdout.close()
+            except Exception: pass
+
+    def _wait_onion_process(self, proc, session_dir, reader):
+        returncode = proc.wait()
+        try: reader.join(timeout=1.5)
+        except Exception: pass
+        with self.onion_lock:
+            is_current = self.onion_proc is proc
+            if is_current:
+                self.onion_proc = None
+                if self.onion_state["state"] in ("starting", "running"):
+                    if returncode == 0:
+                        self.onion_state["state"] = "stopped"
+                    else:
+                        self.onion_state["state"] = "error"
+                        details = " / ".join(self.onion_state["log"][-3:])
+                        self.onion_state["error"] = details or f"OnionShare exited with code {returncode}."
+        self._cleanup_onion_session(session_dir)
+
+    def _pack_share_archive(self, seven_zip, session_dir, archive_path, paths, password, generation):
+        with self.onion_lock:
+            if (
+                self.onion_generation != generation
+                or self.onion_session_dir != session_dir
+                or self.onion_state["state"] != "packing"
+            ):
+                return False, "Transfer cancelled."
+        list_path = os.path.join(session_dir, "files.txt")
+        try:
+            with open(list_path, "w", encoding="utf-8") as f:
+                for path in paths:
+                    f.write(path + "\n")
+        except Exception as e:
+            return False, f"Could not prepare the file list: {e}"
+        cmd = [
+            seven_zip, "a", "-t7z", f"-p{password}", "-mhe=on",
+            "-mx=1", "-y", "-bd", "-spd", "-scsUTF-8",
+            archive_path, f"@{list_path}"
+        ]
+        kwargs = {}
+        if os.name == "nt":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            kwargs["start_new_session"] = True
+        proc = None
+        output = ""
+        try:
+            proc = subprocess.Popen(
+                cmd, cwd=app_dir, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                errors="replace", **kwargs
+            )
+            with self.onion_lock:
+                cancel = (
+                    self.onion_generation != generation
+                    or self.onion_session_dir != session_dir
+                    or self.onion_state["state"] != "packing"
+                )
+                if not cancel:
+                    self.onion_pack_proc = proc
+            if cancel:
+                self._kill_process_tree(proc)
+                return False, "Transfer cancelled."
+            output, _ = proc.communicate(timeout=3600)
+            returncode = proc.returncode
+        except subprocess.TimeoutExpired:
+            self._kill_process_tree(proc)
+            try: output, _ = proc.communicate(timeout=5)
+            except Exception: pass
+            return False, "Compression timed out after 60 minutes."
+        except Exception as e:
+            return False, f"Could not run 7-Zip: {e}"
+        finally:
+            with self.onion_lock:
+                if self.onion_pack_proc is proc:
+                    self.onion_pack_proc = None
+        if returncode != 0:
+            lines = [line for line in (output or "").splitlines() if line.strip()]
+            detail = " / ".join(lines[-4:]) if lines else f"7-Zip exited with code {returncode}."
+            if password:
+                detail = detail.replace(password, "[hidden]")
+            return False, f"Compression failed: {detail}"
+        if not os.path.isfile(archive_path) or os.path.getsize(archive_path) == 0:
+            return False, "7-Zip did not create the archive."
+        return True, None
+
+    def _fail_onion_start(self, session_dir, error):
+        with self.onion_lock:
+            if self.onion_session_dir == session_dir and self.onion_state["state"] != "stopped":
+                self.onion_state["state"] = "error"
+                self.onion_state["error"] = error
+        self._cleanup_onion_session(session_dir)
+
+    def _run_onion_transfer(self, cli, mode, paths, receive_dir, public, minutes, password, seven_zip, generation, session_dir, persistent_file):
+        proc = None
+        try:
+            expected_state = "packing" if mode == "share" else "starting"
+            with self.onion_lock:
+                cancelled = (
+                    self.onion_generation != generation
+                    or self.onion_session_dir != session_dir
+                    or self.onion_state["state"] != expected_state
+                )
+            if cancelled:
+                self._abort_onion_start(session_dir)
+                return
+            if mode == "share":
+                stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                archive_path = os.path.join(session_dir, f"XenoShare_{stamp}.7z")
+                ok, error = self._pack_share_archive(seven_zip, session_dir, archive_path, paths, password, generation)
+                with self.onion_lock:
+                    cancelled = (
+                        self.onion_generation != generation
+                        or self.onion_session_dir != session_dir
+                        or self.onion_state["state"] != "packing"
+                    )
+                if cancelled:
+                    self._abort_onion_start(session_dir)
+                    return
+                if not ok:
+                    self._fail_onion_start(session_dir, error)
+                    return
+                with self.onion_lock:
+                    cancelled = (
+                        self.onion_generation != generation
+                        or self.onion_session_dir != session_dir
+                        or self.onion_state["state"] != "packing"
+                    )
+                    if not cancelled:
+                        self.onion_state["state"] = "starting"
+                if cancelled:
+                    self._abort_onion_start(session_dir)
+                    return
+                cmd = [cli, "--persistent", persistent_file, "--title", "XenoPlayer", "--auto-stop-timer", str(minutes * 60)]
+                if public: cmd.append("--public")
+                cmd.append("--no-autostop-sharing")
+                cmd.append(archive_path)
+            else:
+                cmd = [cli, "--persistent", persistent_file, "--title", "XenoPlayer", "--auto-stop-timer", str(minutes * 60)]
+                if public: cmd.append("--public")
+                cmd.extend(["--receive", "--disable-text", "--data-dir", receive_dir, "--max-upload-size", "0"])
+
+            with self.onion_lock:
+                cancelled = (
+                    self.onion_generation != generation
+                    or self.onion_session_dir != session_dir
+                    or self.onion_state["state"] != "starting"
+                )
+            if cancelled:
+                self._abort_onion_start(session_dir)
+                return
+
+            env = os.environ.copy()
+            env["PYTHONUNBUFFERED"] = "1"
+            kwargs = {}
+            if os.name == "nt":
+                kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+            else:
+                kwargs["start_new_session"] = True
+            try:
+                proc = subprocess.Popen(
+                    cmd, cwd=app_dir, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, encoding="utf-8", errors="replace", bufsize=1, **kwargs
+                )
+            except Exception as e:
+                self._fail_onion_start(session_dir, f"Could not start OnionShare: {e}")
+                return
+
+            with self.onion_lock:
+                cancelled = (
+                    self.onion_generation != generation
+                    or self.onion_session_dir != session_dir
+                    or self.onion_state["state"] not in ("starting", "running")
+                )
+                if not cancelled:
+                    self.onion_proc = proc
+                    self.onion_persistent_file = persistent_file
+            if cancelled:
+                self._kill_process_tree(proc)
+                self._abort_onion_start(session_dir)
+                return
+            reader = threading.Thread(target=self._read_onion_output, args=(proc,), daemon=True)
+            reader.start()
+            threading.Thread(target=self._wait_onion_process, args=(proc, session_dir, reader), daemon=True).start()
+        except Exception as e:
+            if proc:
+                self._kill_process_tree(proc)
+                with self.onion_lock:
+                    if self.onion_proc is proc:
+                        self.onion_proc = None
+            self._fail_onion_start(session_dir, f"Transfer setup failed: {e}")
+
+    def get_onion_status(self):
+        self._refresh_onion_state()
+        return self._onion_payload()
+
+    def start_onion_share(self, mode, paths=None, receive_dir=None, public=False, auto_stop_minutes=0, password=None):
+        if mode not in ("share", "receive"):
+            return self._onion_payload({"ok": False, "error": "Unknown transfer mode."})
+        cli = self._find_onionshare_cli()
+        if not cli:
+            return self._onion_payload({"ok": False, "error": "OnionShare CLI not found. Install OnionShare, then click Locate CLI."})
+        with self.onion_lock:
+            generation = self.onion_generation
+            running = (
+                self.onion_proc is not None
+                or self.onion_pack_proc is not None
+                or self.onion_state["state"] in ("packing", "starting", "running")
+            )
+        if running:
+            return self._onion_payload({"ok": False, "error": "A transfer is already running."})
+
+        with self.onion_lock:
+            stale_session = self.onion_session_dir
+        if stale_session:
+            self._cleanup_onion_session(stale_session)
+
+        if isinstance(paths, str): paths = [paths]
+        paths = [os.path.abspath(p) for p in (paths or []) if p]
+        if mode == "share":
+            if not paths:
+                return self._onion_payload({"ok": False, "error": "Add at least one file or folder to send."})
+            missing = [p for p in paths if not os.path.exists(p)]
+            if missing:
+                return self._onion_payload({"ok": False, "error": f"Not found: {missing[0]}"})
+            if any("\n" in p or "\r" in p for p in paths):
+                return self._onion_payload({"ok": False, "error": "File names containing line breaks are not supported."})
+            norm = [os.path.normcase(p) for p in paths]
+            filtered = []
+            for path, normalized in zip(paths, norm):
+                nested = False
+                for other in norm:
+                    if normalized == other: continue
+                    if normalized.startswith(other.rstrip("\\/") + os.sep):
+                        nested = True
+                        break
+                if not nested and path not in filtered:
+                    filtered.append(path)
+            paths = filtered
+            names = [os.path.basename(p.rstrip("\\/")).lower() for p in paths]
+            if len(set(names)) != len(names):
+                return self._onion_payload({"ok": False, "error": "Selected items have duplicate names. Rename them or select their parent folder."})
+            password = str(password or "")
+            if len(password) < 6:
+                return self._onion_payload({"ok": False, "error": "Enter an archive password with at least 6 characters."})
+            if len(password) > 128:
+                return self._onion_payload({"ok": False, "error": "Archive password must be 128 characters or fewer."})
+            if not password.strip():
+                return self._onion_payload({"ok": False, "error": "Archive password cannot be only spaces."})
+            if any(c in password for c in ('"', "\r", "\n", "\x00")):
+                return self._onion_payload({"ok": False, "error": "Password cannot contain double quotes or line breaks."})
+            seven_zip = self._find_seven_zip()
+            if not seven_zip:
+                return self._onion_payload({"ok": False, "error": "7-Zip not found. Install 7-Zip, then click Locate 7z.exe."})
+        else:
+            receive_dir = os.path.abspath(receive_dir or self._onion_default_receive_dir())
+            try:
+                os.makedirs(receive_dir, exist_ok=True)
+            except Exception as e:
+                return self._onion_payload({"ok": False, "error": f"Cannot use receive folder: {e}"})
+            self.settings["onion_receive_dir"] = receive_dir
+            save_settings(self.settings)
+
+        try: minutes = max(0, int(auto_stop_minutes or 0))
+        except Exception: minutes = 0
+
+        with self.onion_lock:
+            cancelled = self.onion_generation != generation
+        if cancelled:
+            return self._onion_payload({"ok": False, "error": "Transfer cancelled."})
+
+        session_dir = os.path.join(tempfile.gettempdir(), f"xenoplayer-share-{uuid.uuid4().hex}")
+        try:
+            os.makedirs(session_dir, mode=0o700, exist_ok=False)
+        except Exception as e:
+            return self._onion_payload({"ok": False, "error": f"Could not create temporary folder: {e}"})
+        persistent_file = os.path.join(session_dir, "session.json")
+
+        if mode == "share":
+            for path in paths:
+                try:
+                    if os.path.commonpath([os.path.abspath(path), session_dir]) == os.path.abspath(path):
+                        self._cleanup_onion_session(session_dir)
+                        return self._onion_payload({"ok": False, "error": "Selected folder contains XenoPlayer's temporary staging area. Choose a different folder."})
+                except ValueError:
+                    pass
+
+        with self.onion_lock:
+            self.onion_session_dir = session_dir
+            self.onion_persistent_file = None
+            self.onion_state = {
+                "state": "packing" if mode == "share" else "starting",
+                "mode": mode, "url": None, "key": None,
+                "public": bool(public), "error": None, "log": [],
+                "auto_stop_minutes": minutes
+            }
+            cancelled = self.onion_generation != generation
+        if cancelled:
+            self._abort_onion_start(session_dir)
+            return self._onion_payload({"ok": False, "error": "Transfer cancelled."})
+
+        transfer_args = (
+            cli, mode, paths, receive_dir, public, minutes, password,
+            seven_zip if mode == "share" else None, generation, session_dir, persistent_file
+        )
+        try:
+            threading.Thread(target=self._run_onion_transfer, args=transfer_args, daemon=True).start()
+        except Exception as e:
+            self._fail_onion_start(session_dir, f"Could not start transfer thread: {e}")
+            return self._onion_payload({"ok": False, "error": f"Could not start transfer thread: {e}"})
+        return self._onion_payload({"ok": True})
+
+    def stop_onion_share(self):
+        with self.onion_lock:
+            self.onion_generation += 1
+            proc = self.onion_proc
+            pack_proc = self.onion_pack_proc
+            session_dir = self.onion_session_dir
+            if self.onion_state["state"] in ("packing", "starting", "running"):
+                self.onion_state["state"] = "stopped"
+        self._kill_process_tree(pack_proc)
+        self._kill_process_tree(proc)
+        if (proc and proc.poll() is None) or (pack_proc and pack_proc.poll() is None):
+            with self.onion_lock:
+                self.onion_state["state"] = "error"
+                self.onion_state["error"] = "Could not stop the transfer process. Close it manually from Task Manager."
+        with self.onion_lock:
+            if self.onion_proc is proc: self.onion_proc = None
+            if self.onion_pack_proc is pack_proc: self.onion_pack_proc = None
+            if self.onion_session_dir == session_dir:
+                self.onion_session_dir = None
+                self.onion_persistent_file = None
+        if session_dir:
+            self._cleanup_onion_session(session_dir)
+        return self._onion_payload({"ok": True})
+
+    def browse_share_files(self):
+        result = self._window.create_file_dialog(
+            webview.FileDialog.OPEN, allow_multiple=True, file_types=('All files (*.*)',)
+        )
+        if not result: return []
+        if isinstance(result, str): return [result]
+        return list(result)
+
+    def browse_share_folder(self):
+        return self.browse_folder()
+
+    def browse_receive_folder(self):
+        return self.browse_folder()
+
+    def browse_onionshare_cli(self):
+        path = self.browse_exe_dialog()
+        if path:
+            name = os.path.basename(path).lower()
+            if name not in ("onionshare-cli.exe", "onionshare-cli"):
+                return self._onion_payload({"ok": False, "error": "Select onionshare-cli.exe, not the OnionShare GUI."})
+            self.settings["onionshare_cli_path"] = path
+            save_settings(self.settings)
+        return self._onion_payload({"ok": True})
+
+    def browse_seven_zip(self):
+        path = self.browse_exe_dialog()
+        if path:
+            name = os.path.basename(path).lower()
+            if name not in ("7z.exe", "7za.exe", "7zz.exe", "7z", "7za", "7zz"):
+                return self._onion_payload({"ok": False, "error": "Select 7z.exe, not the 7-Zip File Manager."})
+            self.settings["seven_zip_path"] = path
+            save_settings(self.settings)
+        return self._onion_payload({"ok": True})
+
+    def open_receive_folder(self, path=None):
+        try:
+            path = os.path.abspath(path or self._onion_default_receive_dir())
+            os.makedirs(path, exist_ok=True)
+            if os.name == "nt": os.startfile(path)
+            elif sys.platform == "darwin": subprocess.Popen(["open", path])
+            else: subprocess.Popen(["xdg-open", path])
+            return {"status": "ok"}
+        except Exception as e:
+            return {"status": "error", "msg": str(e)}
 
     def apply_filter(self, current_filepath=None):
         if not current_filepath and 0 <= self.current_index < len(self.playlist):
@@ -2870,6 +3628,8 @@ class Api:
             pass
 
     def exit_app(self):
+        self.cancel_encrypt()
+        self.stop_onion_share()
         self.save_window_state()
         self._window.destroy()
 
@@ -3157,7 +3917,170 @@ def run_server():
     logging.getLogger('werkzeug').setLevel(logging.ERROR)
     app.run(port=5050, debug=False, use_reloader=False)
 
+# --- REGISTRATION KEY SECURITY (Cloudflare-backed) ---
+
+REG_KEY_CACHE_FILE = os.path.join(app_dir, "reg_cache.json")
+REG_KEY_TTL_DAYS = 30
+
+
+def _sha256_hex(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def machine_fingerprint():
+    parts = []
+    try:
+        parts.append(str(uuid.getnode()))
+    except Exception:
+        pass
+    parts.append(platform.node())
+    parts.append(platform.machine())
+    parts.append(platform.processor())
+    parts.append(platform.system())
+    parts.append(platform.release())
+    return _sha256_hex("|".join(parts))
+
+
+def reg_key_validate_url():
+    return os.environ.get("REG_KEY_VALIDATE_URL", "").strip()
+
+
+def load_reg_cache():
+    try:
+        if os.path.exists(REG_KEY_CACHE_FILE):
+            with open(REG_KEY_CACHE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def save_reg_cache(data):
+    try:
+        with open(REG_KEY_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
+    except Exception:
+        pass
+
+
+def is_reg_unlocked():
+    cache = load_reg_cache()
+    if not cache:
+        return False
+    if cache.get("machine_id") != machine_fingerprint():
+        return False
+    validated_at = cache.get("validated_at")
+    if not validated_at:
+        return False
+    try:
+        v = datetime.fromisoformat(validated_at)
+    except Exception:
+        return False
+    return (datetime.now() - v).days <= REG_KEY_TTL_DAYS
+
+
+def validate_reg_key_online(key):
+    url = reg_key_validate_url()
+    if not url:
+        return False, "Reg key validation URL not configured. Set REG_KEY_VALIDATE_URL in .env."
+    key = key.strip()
+    if not key:
+        return False, "Please enter a registration key."
+    key_hash = _sha256_hex(key)
+    payload = json.dumps({
+        "key": key,
+        "key_hash": key_hash,
+        "machine_id": machine_fingerprint(),
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            body = resp.read().decode("utf-8")
+            if resp.status == 200:
+                data = json.loads(body)
+                if data.get("ok"):
+                    return True, None
+                return False, data.get("error", "Invalid registration key.")
+            return False, f"Validation failed (HTTP {resp.status})."
+    except urllib.error.HTTPError as e:
+        try:
+            data = json.loads(e.read().decode("utf-8"))
+            return False, data.get("error", f"Validation failed (HTTP {e.code}).")
+        except Exception:
+            return False, f"Validation failed (HTTP {e.code})."
+    except Exception as e:
+        return False, f"Could not reach validation server: {e}"
+
+
+class RegKeyDialog:
+    def __init__(self):
+        self.result = None
+
+    def run(self):
+        import tkinter as tk
+        from tkinter import simpledialog, messagebox
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+
+        try:
+            while self.result is None:
+                key = simpledialog.askstring(
+                    "XenoPlayer - Registration",
+                    "Enter your registration key to unlock XenoPlayer:",
+                    parent=root,
+                )
+                if key is None:
+                    self.result = False
+                    break
+                key = key.strip()
+                if not key:
+                    messagebox.showwarning(
+                        "XenoPlayer - Registration",
+                        "Please enter a registration key.",
+                        parent=root,
+                    )
+                    continue
+                ok, msg = validate_reg_key_online(key)
+                if ok:
+                    save_reg_cache({
+                        "key_hash": _sha256_hex(key),
+                        "machine_id": machine_fingerprint(),
+                        "validated_at": datetime.now().isoformat(),
+                        "ttl_days": REG_KEY_TTL_DAYS,
+                    })
+                    messagebox.showinfo(
+                        "XenoPlayer - Registration",
+                        "Registration key accepted. Welcome to XenoPlayer.",
+                        parent=root,
+                    )
+                    self.result = True
+                else:
+                    messagebox.showerror(
+                        "XenoPlayer - Registration",
+                        f"Invalid key: {msg}",
+                        parent=root,
+                    )
+        finally:
+            try:
+                root.destroy()
+            except Exception:
+                pass
+        return self.result
+
+
 if __name__ == '__main__':
+    # --- Registration key gate (keys stored/validated on Cloudflare) ---
+    if not is_reg_unlocked():
+        _dialog = RegKeyDialog()
+        if not _dialog.run():
+            sys.exit(1)
+
     threading.Thread(target=run_server, daemon=True).start()
     html_path = resource_path(os.path.join('web', 'index.html'))
     
@@ -3174,4 +4097,5 @@ if __name__ == '__main__':
         
     api._window = window
     window.events.closing += api.save_window_state
+    window.events.closing += api.stop_onion_share
     webview.start(debug=False)

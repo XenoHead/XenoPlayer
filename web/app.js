@@ -1,8 +1,11 @@
-let videoPlayer, imageViewer, playlistContainer, fileNameDisplay, playBtn, prevBtn, nextBtn, cm, mlCm, omCm, mediaContainer, selectionBox, transContainer, loadingOverlay, observer;
+let videoPlayer, audioPlayer, imageViewer, playlistContainer, fileNameDisplay, playBtn, prevBtn, nextBtn, cm, mlCm, omCm, mediaContainer, selectionBox, transContainer, loadingOverlay, observer;
+let currentIsAudio = false;
 let normBtn, thresholdSlider, gainSlider, normContainer;
 
 videoPlayer = document.getElementById('video-player');
 if (videoPlayer) videoPlayer.crossOrigin = "anonymous";
+audioPlayer = document.getElementById('audio-player');
+if (audioPlayer) audioPlayer.crossOrigin = "anonymous";
 imageViewer = document.getElementById('image-viewer');
 playlistContainer = document.getElementById('playlist');
 fileNameDisplay = document.getElementById('current-file-name');
@@ -389,6 +392,10 @@ window.addEventListener('pywebviewready', function () {
     makeDraggable(document.getElementById('translate-settings-window'), document.getElementById('translate-settings-header'));
 });
 
+function activeMedia() {
+    return currentIsAudio ? audioPlayer : videoPlayer;
+}
+
 function loadMedia(path, index) {
     // Remove splash view class if it exists
     mediaContainer.classList.remove('splash-view');
@@ -434,6 +441,9 @@ function loadMedia(path, index) {
 
         videoPlayer.style.display = 'none';
         videoPlayer.pause();
+        audioPlayer.style.display = 'none';
+        audioPlayer.pause();
+        currentIsAudio = false;
         imageViewer.style.display = 'block';
         imageViewer.src = mediaUrl;
 
@@ -446,14 +456,21 @@ function loadMedia(path, index) {
         });
         updateImageTimer();
     } else {
-        // Single view video
+        // Single view video or audio
+        const isAudio = ['mp3', 'wav', 'wave'].includes(ext);
+        currentIsAudio = isAudio;
+        const mediaEl = isAudio ? audioPlayer : videoPlayer;
+        const otherEl = isAudio ? videoPlayer : audioPlayer;
+
         document.getElementById('left-split-pane').style.display = 'flex';
         document.getElementById('right-split-pane').style.display = 'none';
 
         imageViewer.style.display = 'none';
-        videoPlayer.style.display = 'block';
-        videoPlayer.src = mediaUrl;
-        videoPlayer.play();
+        otherEl.style.display = 'none';
+        otherEl.pause();
+        mediaEl.style.display = 'block';
+        mediaEl.src = mediaUrl;
+        mediaEl.play();
         playBtn.innerHTML = '<i class="fa-solid fa-pause"></i>';
         document.getElementById('translations-container').innerHTML = '';
         if (imageTimerInterval) {
@@ -462,7 +479,7 @@ function loadMedia(path, index) {
         }
         if (appState.saved_volumes && appState.saved_volumes[path] !== undefined) {
             const savedVol = appState.saved_volumes[path];
-            videoPlayer.volume = savedVol / 100.0;
+            mediaEl.volume = savedVol / 100.0;
             // Auto-update volume slider visually if it exists
             const volSlider = document.querySelector('input[type="range"][onchange*="changeVolume"]') || document.querySelector('input[oninput*="changeVolume"]');
             if (volSlider) volSlider.value = savedVol;
@@ -966,7 +983,667 @@ function closeModals() {
         stopListening(listeningInput);
     }
     document.querySelectorAll('.modal').forEach(m => m.style.display = 'none');
+    stopOnionPolling();
+    stopOnionEncryptPolling();
+    if (onionStatus && (onionStatus.state === 'packing' || onionStatus.state === 'starting' || onionStatus.state === 'running')) {
+        startOnionBackgroundPolling();
+    }
 }
+
+let onionMode = 'share';
+let onionSelectedPaths = [];
+let onionPollTimer = null;
+let onionBackgroundTimer = null;
+let onionStatus = null;
+let onionActivePassword = '';
+let onionStartPending = false;
+let onionStartToken = 0;
+let onionEncryptStatus = null;
+let onionEncryptPollTimer = null;
+
+function openOnionShareModal() {
+    if (onionBackgroundTimer) {
+        clearInterval(onionBackgroundTimer);
+        onionBackgroundTimer = null;
+    }
+    const passwordInput = document.getElementById('onion-password');
+    const passwordToggle = document.getElementById('onion-password-toggle');
+    if (passwordInput) passwordInput.type = 'password';
+    if (passwordToggle) passwordToggle.textContent = 'Show';
+    document.getElementById('onionshare-modal').style.display = 'block';
+    document.getElementById('onion-error').style.display = 'none';
+    renderOnionPaths();
+    switchOnionMode('share');
+    renderEncryptOutputDir();
+    renderEncryptStatus(onionEncryptStatus);
+    refreshOnionStatus();
+    startOnionPolling();
+}
+
+function startOnionPolling() {
+    stopOnionPolling();
+    onionPollTimer = setInterval(refreshOnionStatus, 1000);
+}
+
+function stopOnionPolling() {
+    if (onionPollTimer) clearInterval(onionPollTimer);
+    onionPollTimer = null;
+}
+
+function startOnionBackgroundPolling() {
+    if (onionBackgroundTimer) return;
+    onionBackgroundTimer = setInterval(() => {
+        if (!window.pywebview || !pywebview.api) return;
+        pywebview.api.get_onion_status().then(s => {
+            onionStatus = s;
+            updateOnionSidebar(s);
+            if (s.state === 'stopped' || s.state === 'error') {
+                clearInterval(onionBackgroundTimer);
+                onionBackgroundTimer = null;
+            }
+        }).catch(() => {});
+    }, 5000);
+}
+
+function refreshOnionStatus() {
+    if (!window.pywebview || !pywebview.api) return;
+    pywebview.api.get_onion_status().then(s => {
+        onionStatus = s;
+        renderOnionStatus(s);
+    }).catch(() => {});
+}
+
+function updateOnionSidebar(s) {
+    const btn = document.getElementById('onion-share-btn');
+    if (!btn) return;
+    if (s.state === 'packing' || s.state === 'starting' || s.state === 'running') {
+        btn.innerHTML = '<i class="fa-solid fa-share-nodes"></i> Sharing...';
+        btn.style.background = '#a6e3a1';
+    } else {
+        btn.innerHTML = '<i class="fa-solid fa-share-nodes"></i> Share Files';
+        btn.style.background = '#cba6f7';
+    }
+}
+
+function updateOnionStartState() {
+    const s = onionStatus || {};
+    const btn = document.getElementById('onion-start-btn');
+    if (!btn) return;
+    const busy = s.state === 'packing' || s.state === 'starting' || s.state === 'running';
+    const ready = !!s.available && (onionMode === 'receive' || !!s.seven_zip_available) && !busy;
+    btn.disabled = !ready;
+    btn.style.opacity = ready ? '1' : '0.5';
+}
+
+function updateEncryptButtonState() {
+    const s = onionStatus || {};
+    const btn = document.getElementById('onion-encrypt-btn');
+    if (!btn) return;
+    const encryptBusy = onionEncryptStatus && onionEncryptStatus.state === 'packing';
+    const ready = !!s.seven_zip_available && !encryptBusy;
+    btn.disabled = !ready;
+    btn.style.opacity = ready ? '1' : '0.5';
+}
+
+function onionShowError(msg) {
+    const el = document.getElementById('onion-error');
+    el.textContent = msg;
+    el.style.display = msg ? 'block' : 'none';
+}
+
+function renderOnionStatus(s) {
+    if (onionStartPending && (s.state === 'stopped' || s.state === 'error')) return;
+    updateOnionSidebar(s);
+    const setup = document.getElementById('onion-setup');
+    const active = document.getElementById('onion-active');
+    const missing = document.getElementById('onion-missing');
+    const receiveInput = document.getElementById('onion-receive-dir');
+    if (receiveInput && s.receive_dir && !receiveInput.value) receiveInput.value = s.receive_dir;
+    if (receiveInput && s.receive_dir && (s.state === 'starting' || s.state === 'running')) {
+        receiveInput.value = s.receive_dir;
+    }
+
+    missing.style.display = s.available ? 'none' : 'block';
+    const sevenMissing = document.getElementById('onion-7z-missing');
+    sevenMissing.style.display = (!s.seven_zip_available && onionMode === 'share') ? 'block' : 'none';
+    const encryptSevenMissing = document.getElementById('onion-encrypt-7z-missing');
+    if (encryptSevenMissing) {
+        encryptSevenMissing.style.display = (!s.seven_zip_available && onionMode === 'encrypt') ? 'block' : 'none';
+    }
+    updateOnionStartState();
+    updateEncryptButtonState();
+
+    const busy = s.state === 'packing' || s.state === 'starting' || s.state === 'running';
+    setup.style.display = busy ? 'none' : 'block';
+    active.style.display = busy ? 'block' : 'none';
+
+    const icon = document.getElementById('onion-status-icon');
+    const text = document.getElementById('onion-status-text');
+    const sub = document.getElementById('onion-status-sub');
+    const ready = document.getElementById('onion-ready');
+    const urlInput = document.getElementById('onion-url');
+    const keyInput = document.getElementById('onion-key');
+    const keyRow = document.getElementById('onion-key-row');
+    const instructions = document.getElementById('onion-instructions');
+    const openReceive = document.getElementById('onion-open-receive');
+    const archiveNote = document.getElementById('onion-archive-note');
+    const copyPassword = document.getElementById('onion-copy-password');
+    const log = document.getElementById('onion-log');
+
+    if (s.state === 'packing') {
+        icon.className = 'fa-solid fa-circle-notch fa-spin';
+        icon.style.color = '#f9e2af';
+        text.textContent = 'Encrypting archive...';
+        sub.textContent = 'Packing the selected files into a password-protected .7z. Large selections may take a while.';
+        ready.style.display = 'none';
+    } else if (s.state === 'starting') {
+        icon.className = 'fa-solid fa-circle-notch fa-spin';
+        icon.style.color = '#f9e2af';
+        text.textContent = 'Starting Tor...';
+        sub.textContent = 'Publishing the onion address. This can take up to two minutes.';
+        ready.style.display = 'none';
+    } else if (s.state === 'running') {
+        icon.className = 'fa-solid fa-circle-check';
+        icon.style.color = '#a6e3a1';
+        text.textContent = s.mode === 'receive' ? 'Ready to receive files' : 'Ready to send files';
+        sub.textContent = s.auto_stop_minutes > 0
+            ? `Stops automatically after ${s.auto_stop_minutes} minute(s).`
+            : 'Active until you press Stop.';
+        ready.style.display = 'block';
+        urlInput.value = s.url || '';
+        keyInput.value = s.key || '';
+        keyRow.style.display = s.public ? 'none' : 'block';
+        openReceive.style.display = s.mode === 'receive' ? 'inline-block' : 'none';
+        const isShare = s.mode === 'share';
+        archiveNote.style.display = isShare ? 'block' : 'none';
+        copyPassword.style.display = isShare && onionActivePassword ? 'inline-block' : 'none';
+        const how = s.public ? 'Send this address' : 'Send this address and private key';
+        instructions.innerHTML = isShare
+            ? `${how} to your friend. In <b>Tor Browser</b>, they download the encrypted .7z archive. Send the archive password separately; they will need 7-Zip or a compatible extractor.`
+            : `${how} to your friend. In <b>Tor Browser</b>, they open the address and upload the files.`;
+    }
+
+    if (s.state === 'error') {
+        const detail = (s.log || []).slice(-8).join('\n');
+        onionShowError(s.error ? `${s.error}\n${detail}` : (detail || 'OnionShare stopped before the transfer became ready.'));
+    } else {
+        onionShowError(s.error || '');
+    }
+    log.textContent = (s.log || []).join('\n');
+    if (s.state === 'stopped' || s.state === 'error') {
+        onionActivePassword = '';
+        stopOnionPolling();
+    }
+}
+
+function switchOnionMode(mode) {
+    onionMode = mode;
+    const shareTab = document.getElementById('onion-tab-share');
+    const receiveTab = document.getElementById('onion-tab-receive');
+    const encryptTab = document.getElementById('onion-tab-encrypt');
+    const sharePanel = document.getElementById('onion-panel-share');
+    const receivePanel = document.getElementById('onion-panel-receive');
+    const encryptPanel = document.getElementById('onion-panel-encrypt');
+    const sharedOptions = document.getElementById('onion-shared-options');
+    const errorBox = document.getElementById('onion-error');
+    const startBtn = document.getElementById('onion-start-btn');
+    const isShare = mode === 'share';
+    const isReceive = mode === 'receive';
+    const isEncrypt = mode === 'encrypt';
+
+    sharePanel.style.display = isShare ? 'block' : 'none';
+    receivePanel.style.display = isReceive ? 'block' : 'none';
+    encryptPanel.style.display = isEncrypt ? 'block' : 'none';
+    if (sharedOptions) sharedOptions.style.display = isEncrypt ? 'none' : 'flex';
+    if (errorBox) errorBox.style.display = 'none';
+    if (startBtn) startBtn.style.display = isEncrypt ? 'none' : 'block';
+
+    const setTab = (tab, active, color) => {
+        if (!tab) return;
+        tab.style.background = active ? color : '#313244';
+        tab.style.color = active ? '#11111b' : '#cdd6f4';
+    };
+    setTab(shareTab, isShare, '#cba6f7');
+    setTab(receiveTab, isReceive, '#cba6f7');
+    setTab(encryptTab, isEncrypt, '#a6e3a1');
+
+    const sevenMissing = document.getElementById('onion-7z-missing');
+    if (sevenMissing) sevenMissing.style.display = 'none';
+    const encryptSevenMissing = document.getElementById('onion-encrypt-7z-missing');
+    if (encryptSevenMissing) encryptSevenMissing.style.display = (onionStatus && !onionStatus.seven_zip_available && isEncrypt) ? 'block' : 'none';
+
+    updateOnionStartState();
+    updateEncryptButtonState();
+
+    if (startBtn) {
+        startBtn.innerHTML = isShare
+            ? '<i class="fa-solid fa-tower-broadcast"></i> Start Sending'
+            : '<i class="fa-solid fa-tower-broadcast"></i> Start Receiving';
+    }
+    onionShowError('');
+    if (!isShare && !isEncrypt && onionStatus && onionStatus.receive_dir) {
+        document.getElementById('onion-receive-dir').value = onionStatus.receive_dir;
+    }
+    if (isEncrypt) {
+        renderOnionPaths();
+        renderEncryptOutputDir();
+        renderEncryptStatus(onionEncryptStatus);
+    }
+}
+
+function renderOnionPaths() {
+    renderOnionPathList('onion-path-list');
+    renderOnionPathList('onion-encrypt-path-list');
+}
+
+function renderOnionPathList(listId) {
+    const list = document.getElementById(listId);
+    if (!list) return;
+    list.innerHTML = '';
+    if (onionSelectedPaths.length === 0) {
+        list.textContent = 'No files or folders selected.';
+        list.style.color = '#a0a0b0';
+        return;
+    }
+    list.style.color = '#cdd6f4';
+    onionSelectedPaths.forEach((path, index) => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex; align-items:center; gap:8px; padding:4px 0; border-bottom:1px solid #1e1e2e;';
+        const name = document.createElement('span');
+        name.textContent = path.split(/[\\/]/).filter(Boolean).pop() || path;
+        name.title = path;
+        name.style.cssText = 'flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
+        const remove = document.createElement('button');
+        remove.textContent = '×';
+        remove.style.cssText = 'background:#45272f; color:#f38ba8; border:none; border-radius:3px; padding:1px 7px; cursor:pointer;';
+        remove.onclick = () => { onionSelectedPaths.splice(index, 1); renderOnionPaths(); };
+        row.appendChild(name);
+        row.appendChild(remove);
+        list.appendChild(row);
+    });
+}
+
+function onionAddFiles() {
+    pywebview.api.browse_share_files().then(paths => {
+        (paths || []).forEach(p => { if (!onionSelectedPaths.includes(p)) onionSelectedPaths.push(p); });
+        renderOnionPaths();
+        onionShowError('');
+    }).catch(err => onionShowError(String(err)));
+}
+
+function onionAddFolder() {
+    pywebview.api.browse_share_folder().then(path => {
+        if (path && !onionSelectedPaths.includes(path)) onionSelectedPaths.push(path);
+        renderOnionPaths();
+        onionShowError('');
+    }).catch(err => onionShowError(String(err)));
+}
+
+function onionAddCurrentFolder() {
+    const current = appState.current_path || (playlist[currentIndex] && playlist[currentIndex].path);
+    if (!current || /^https?:/i.test(current)) {
+        onionShowError('Open a local file first.');
+        return;
+    }
+    const clean = current.split('?')[0];
+    const cut = Math.max(clean.lastIndexOf('\\'), clean.lastIndexOf('/'));
+    if (cut > 0) {
+        let folder = clean.slice(0, cut);
+        if (/^[A-Za-z]:$/.test(folder)) folder += '\\';
+        if (!onionSelectedPaths.includes(folder)) onionSelectedPaths.push(folder);
+        renderOnionPaths();
+        onionShowError('');
+    }
+}
+
+function onionAddSelected() {
+    const selected = [];
+    const hadSelection = typeof selectedIndices !== 'undefined' && selectedIndices.size > 0;
+    if (hadSelection) {
+        selectedIndices.forEach(index => {
+            const item = playlist[index];
+            if (item && item.path && !/^https?:/i.test(item.path)) selected.push(item.path);
+        });
+    }
+    if (!selected.length && !hadSelection && currentIndex >= 0 && playlist[currentIndex] && playlist[currentIndex].path) {
+        const current = playlist[currentIndex].path;
+        if (!/^https?:/i.test(current)) selected.push(current);
+    }
+    if (!selected.length) {
+        onionShowError('Select local files in the playlist first.');
+        return;
+    }
+    selected.forEach(path => { if (!onionSelectedPaths.includes(path)) onionSelectedPaths.push(path); });
+    renderOnionPaths();
+    onionShowError('');
+}
+
+function onionBrowseReceive() {
+    pywebview.api.browse_receive_folder().then(path => {
+        if (path) document.getElementById('onion-receive-dir').value = path;
+    }).catch(err => onionShowError(String(err)));
+}
+
+function onionOpenReceive() {
+    const dir = document.getElementById('onion-receive-dir').value;
+    pywebview.api.open_receive_folder(dir).catch(err => onionShowError(String(err)));
+}
+
+function onionStart() {
+    if (!window.pywebview || !pywebview.api) return;
+    const requestMode = onionMode;
+    onionShowError('');
+    const passwordInput = document.getElementById('onion-password');
+    const password = passwordInput.value || '';
+    passwordInput.type = 'password';
+    const passwordToggle = document.getElementById('onion-password-toggle');
+    if (passwordToggle) passwordToggle.textContent = 'Show';
+    if (!onionStatus || !onionStatus.available) {
+        onionShowError('OnionShare CLI not found. Install OnionShare, then click Locate CLI.');
+        return;
+    }
+    if (onionStatus.state === 'packing' || onionStatus.state === 'starting' || onionStatus.state === 'running') {
+        onionShowError('A transfer is already running.');
+        return;
+    }
+    if (requestMode === 'share' && onionSelectedPaths.length === 0) {
+        onionShowError('Add at least one file or folder to send.');
+        return;
+    }
+    if (requestMode === 'share') {
+        if (password.length < 6 || !password.trim()) {
+            onionShowError('Enter an archive password with at least 6 characters.');
+            return;
+        }
+        if (password.length > 128) {
+            onionShowError('Archive password must be 128 characters or fewer.');
+            return;
+        }
+        if (/["\r\n]/.test(password)) {
+            onionShowError('Password cannot contain double quotes or line breaks.');
+            return;
+        }
+        if (!onionStatus || !onionStatus.seven_zip_available) {
+            onionShowError('7-Zip not found. Install 7-Zip, then click Locate 7z.exe.');
+            return;
+        }
+    }
+    const publicKey = !document.getElementById('onion-private').checked;
+    const minutes = parseInt(document.getElementById('onion-auto-stop').value || '0', 10) || 0;
+    const receiveDir = document.getElementById('onion-receive-dir').value;
+    const btn = document.getElementById('onion-start-btn');
+    const requestToken = ++onionStartToken;
+    onionStartPending = true;
+
+    onionStatus = Object.assign({}, onionStatus || {}, {
+        state: requestMode === 'share' ? 'packing' : 'starting',
+        mode: requestMode,
+        url: null,
+        key: null,
+        error: null,
+        log: []
+    });
+    renderOnionStatus(onionStatus);
+    startOnionPolling();
+    btn.disabled = true;
+    btn.innerHTML = requestMode === 'share'
+        ? '<i class="fa-solid fa-circle-notch fa-spin"></i> Encrypting...'
+        : '<i class="fa-solid fa-circle-notch fa-spin"></i> Starting...';
+
+    pywebview.api.start_onion_share(requestMode, onionSelectedPaths, receiveDir, publicKey, minutes, password).then(s => {
+        if (requestToken !== onionStartToken) return;
+        onionStartPending = false;
+        onionStatus = s;
+        if (s.ok !== false && requestMode === 'share' && (s.state === 'packing' || s.state === 'starting' || s.state === 'running')) {
+            onionActivePassword = password;
+        } else if (requestMode === 'receive') {
+            onionActivePassword = '';
+        }
+        renderOnionStatus(s);
+        if (s.ok === false) {
+            if (s.state === 'stopped' || s.state === 'error') {
+                onionActivePassword = '';
+                if (s.error === 'Transfer cancelled.') {
+                    onionShowError('');
+                } else if (!s.error) {
+                    onionShowError('Could not start the transfer.');
+                }
+            }
+        }
+        if (s.state === 'packing' || s.state === 'starting' || s.state === 'running') {
+            startOnionPolling();
+            startOnionBackgroundPolling();
+        }
+        btn.innerHTML = requestMode === 'share'
+            ? '<i class="fa-solid fa-tower-broadcast"></i> Start Sending'
+            : '<i class="fa-solid fa-tower-broadcast"></i> Start Receiving';
+    }).catch(err => {
+        if (requestToken !== onionStartToken) return;
+        onionStartPending = false;
+        onionActivePassword = '';
+        const failed = Object.assign({}, onionStatus || {}, {state: 'stopped', error: String(err)});
+        onionStatus = failed;
+        renderOnionStatus(failed);
+        onionShowError(String(err));
+        btn.innerHTML = requestMode === 'share'
+            ? '<i class="fa-solid fa-tower-broadcast"></i> Start Sending'
+            : '<i class="fa-solid fa-tower-broadcast"></i> Start Receiving';
+    });
+}
+
+function onionStop() {
+    onionStartToken++;
+    onionStartPending = false;
+    onionActivePassword = '';
+    const startBtn = document.getElementById('onion-start-btn');
+    if (startBtn) {
+        startBtn.innerHTML = onionMode === 'share'
+            ? '<i class="fa-solid fa-tower-broadcast"></i> Start Sending'
+            : '<i class="fa-solid fa-tower-broadcast"></i> Start Receiving';
+    }
+    const passwordInput = document.getElementById('onion-password');
+    const passwordToggle = document.getElementById('onion-password-toggle');
+    if (passwordInput) passwordInput.type = 'password';
+    if (passwordToggle) passwordToggle.textContent = 'Show';
+    const copyPassword = document.getElementById('onion-copy-password');
+    if (copyPassword) copyPassword.style.display = 'none';
+    pywebview.api.stop_onion_share().then(s => {
+        onionStatus = s;
+        renderOnionStatus(s);
+        if (onionBackgroundTimer) {
+            clearInterval(onionBackgroundTimer);
+            onionBackgroundTimer = null;
+        }
+    }).catch(err => {
+        const failed = Object.assign({}, onionStatus || {}, {state: 'error', error: String(err)});
+        onionStatus = failed;
+        renderOnionStatus(failed);
+    });
+}
+
+function onionTogglePassword() {
+    const input = document.getElementById('onion-password');
+    const btn = document.getElementById('onion-password-toggle');
+    if (!input || !btn) return;
+    if (input.type === 'password') {
+        input.type = 'text';
+        btn.textContent = 'Hide';
+    } else {
+        input.type = 'password';
+        btn.textContent = 'Show';
+    }
+}
+
+function onionCopyPassword() {
+    if (!onionActivePassword) {
+        alert('The archive password is not available. Stop and start a new transfer to set it again.');
+        return;
+    }
+    copyText(onionActivePassword);
+}
+
+function onionLocate7z() {
+    pywebview.api.browse_seven_zip().then(s => {
+        onionStatus = s;
+        renderOnionStatus(s);
+        updateEncryptButtonState();
+        if (s.ok === false) onionShowError(s.error || 'Select 7z.exe.');
+    }).catch(err => onionShowError(String(err)));
+}
+
+function onionToggleEncryptPassword() {
+    const input = document.getElementById('onion-encrypt-password');
+    const btn = document.querySelector('#onion-panel-encrypt button[onclick="onionToggleEncryptPassword()"]');
+    if (!input) return;
+    if (input.type === 'password') {
+        input.type = 'text';
+        if (btn) btn.textContent = 'Hide';
+    } else {
+        input.type = 'password';
+        if (btn) btn.textContent = 'Show';
+    }
+}
+
+function renderEncryptOutputDir() {
+    const input = document.getElementById('onion-encrypt-dir');
+    if (!input || input.value) return;
+    if (onionStatus && onionStatus.receive_dir) input.value = onionStatus.receive_dir;
+    else if (onionStatus && onionStatus.default_encrypt_dir) input.value = onionStatus.default_encrypt_dir;
+}
+
+function onionBrowseEncryptOutput() {
+    pywebview.api.browse_encrypt_output().then(path => {
+        if (path) document.getElementById('onion-encrypt-dir').value = path;
+    }).catch(err => onionShowError(String(err)));
+}
+
+function renderEncryptStatus(st) {
+    const box = document.getElementById('onion-encrypt-status');
+    if (!box) return;
+    box.innerHTML = '';
+    if (!st) {
+        updateEncryptButtonState();
+        return;
+    }
+    if (st.state === 'packing') {
+        box.innerHTML = '<div style="background:#181825; border-left:3px solid #f9e2af; padding:10px; font-size:12px;"><i class="fa-solid fa-circle-notch fa-spin" style="color:#f9e2af;"></i> Encrypting archive...</div>';
+    } else if (st.state === 'done' && st.archive_path) {
+        box.innerHTML = '<div style="background:#181825; border-left:3px solid #a6e3a1; padding:10px; font-size:12px;">'
+            + '<div style="color:#a6e3a1; font-weight:bold; margin-bottom:4px;"><i class="fa-solid fa-circle-check"></i> Archive created</div>'
+            + '<div style="word-break:break-all; color:#cdd6f4; margin-bottom:8px;">' + (st.archive_path || '') + '</div>'
+            + '<div style="display:flex; gap:6px;">'
+            + '<button onclick="onionOpenEncryptOutput()" style="background:#a6e3a1; color:#11111b; font-weight:bold;">Open Folder</button>'
+            + '<button onclick="copyText(\'' + (st.archive_path || '').replace(/\\/g, '\\\\').replace(/'/g, '\\\'') + '\')" style="background:#45475a; color:#cdd6f4;">Copy Path</button>'
+            + '</div></div>';
+    } else if (st.state === 'error') {
+        box.innerHTML = '<div style="background:#45272f; border:1px solid #f38ba8; border-radius:5px; padding:10px; font-size:12px; color:#f38ba8;">' + (st.error || 'Encryption failed.') + '</div>';
+    }
+    updateEncryptButtonState();
+}
+
+function onionEncrypt() {
+    if (!window.pywebview || !pywebview.api) return;
+    onionShowError('');
+    const password = document.getElementById('onion-encrypt-password').value || '';
+    if (password.length < 6 || !password.trim()) {
+        renderEncryptStatus({ state: 'error', error: 'Enter an archive password with at least 6 characters.' });
+        return;
+    }
+    if (!onionSelectedPaths.length) {
+        renderEncryptStatus({ state: 'error', error: 'Add at least one file or folder.' });
+        return;
+    }
+    const outputDir = document.getElementById('onion-encrypt-dir').value;
+    const btn = document.getElementById('onion-encrypt-btn');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Encrypting...';
+    pywebview.api.encrypt_files(onionSelectedPaths, password, outputDir).then(st => {
+        onionEncryptStatus = st;
+        renderEncryptStatus(st);
+        btn.innerHTML = '<i class="fa-solid fa-lock"></i> Create Encrypted Archive';
+        if (st.state === 'packing') {
+            startOnionEncryptPolling();
+        }
+    }).catch(err => {
+        onionEncryptStatus = { state: 'error', error: String(err) };
+        renderEncryptStatus(onionEncryptStatus);
+        btn.innerHTML = '<i class="fa-solid fa-lock"></i> Create Encrypted Archive';
+    });
+}
+
+function startOnionEncryptPolling() {
+    stopOnionEncryptPolling();
+    onionEncryptPollTimer = setInterval(() => {
+        pywebview.api.get_encrypt_status().then(st => {
+            onionEncryptStatus = st;
+            renderEncryptStatus(st);
+            if (st.state !== 'packing') stopOnionEncryptPolling();
+        }).catch(() => stopOnionEncryptPolling());
+    }, 1000);
+}
+
+function stopOnionEncryptPolling() {
+    if (onionEncryptPollTimer) clearInterval(onionEncryptPollTimer);
+    onionEncryptPollTimer = null;
+}
+
+function onionOpenEncryptOutput() {
+    const path = onionEncryptStatus && onionEncryptStatus.archive_path;
+    if (path) pywebview.api.open_encrypt_output(path).catch(err => onionShowError(String(err)));
+}
+
+function onionCopy(id) {
+    const el = document.getElementById(id);
+    if (el && el.value) copyText(el.value);
+}
+
+function onionCopyInvite() {
+    if (!onionStatus || !onionStatus.url) return;
+    if (!onionStatus.public && !onionStatus.key) {
+        alert('The private key is still being generated. Try again in a moment.');
+        return;
+    }
+    const isShare = onionStatus.mode === 'share';
+    const lines = [
+        isShare
+            ? 'Download my password-protected archive using Tor Browser:'
+            : 'Upload files to me using Tor Browser:',
+        '',
+        `Address: ${onionStatus.url}`
+    ];
+    if (!onionStatus.public && onionStatus.key) lines.push(`Private key: ${onionStatus.key}`);
+    if (isShare) {
+        lines.push('', 'The archive is password-protected. I will send the password separately.');
+        lines.push('Extract with 7-Zip: https://www.7-zip.org/');
+    }
+    lines.push('', 'Tor Browser: https://www.torproject.org/download/');
+    copyText(lines.join('\n'));
+}
+
+function copyText(text) {
+    const fallback = () => {
+        const area = document.createElement('textarea');
+        area.value = text;
+        document.body.appendChild(area);
+        area.select();
+        try { document.execCommand('copy'); } catch (e) {}
+        area.remove();
+        return Promise.resolve();
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        return navigator.clipboard.writeText(text).catch(fallback);
+    }
+    return fallback();
+}
+
+function onionLocateCli() {
+    pywebview.api.browse_onionshare_cli().then(s => {
+        onionStatus = s;
+        renderOnionStatus(s);
+        if (s.ok === false) onionShowError(s.error || 'Select onionshare-cli.exe.');
+    }).catch(err => onionShowError(String(err)));
+}
+
 
 function toggleTagsSidebar() {
     const sidebar = document.getElementById('tags-sidebar');
@@ -1807,19 +2484,21 @@ function cmMoveTo(target) {
 }
 
 function togglePlay() {
-    if (splitScreenActive || videoPlayer.style.display !== 'none') {
-        if (videoPlayer.paused) {
-            videoPlayer.play();
+    const el = splitScreenActive ? videoPlayer : activeMedia();
+    if (el.style.display !== 'none') {
+        if (el.paused) {
+            el.play();
             playBtn.innerHTML = '<i class="fa-solid fa-pause"></i>';
         } else {
-            videoPlayer.pause();
+            el.pause();
             playBtn.innerHTML = '<i class="fa-solid fa-play"></i>';
         }
     }
 }
 
 function changeVolume(val) {
-    videoPlayer.volume = val / 100.0;
+    const el = splitScreenActive ? videoPlayer : activeMedia();
+    el.volume = val / 100.0;
     if (splitScreenActive) {
         if (leftPlaylist[leftCurrentIndex]) {
             pywebview.api.save_volume(leftPlaylist[leftCurrentIndex].path, val);
@@ -1847,71 +2526,88 @@ function formatTime(seconds) {
     return m + ":" + (s < 10 ? "0" : "") + s;
 }
 
-videoPlayer.addEventListener('timeupdate', () => {
+function onTimeUpdate() {
+    const el = activeMedia();
     const progressSlider = document.getElementById('progress-slider');
     const currentTimeDisplay = document.getElementById('current-time');
 
-    if (videoPlayer.duration) {
-        progressSlider.value = (videoPlayer.currentTime / videoPlayer.duration) * 100;
-        currentTimeDisplay.textContent = formatTime(videoPlayer.currentTime);
+    if (el.duration) {
+        progressSlider.value = (el.currentTime / el.duration) * 100;
+        currentTimeDisplay.textContent = formatTime(el.currentTime);
     }
-});
+}
 
-videoPlayer.addEventListener('loadedmetadata', () => {
+videoPlayer.addEventListener('timeupdate', onTimeUpdate);
+audioPlayer.addEventListener('timeupdate', onTimeUpdate);
+
+function onLoadedMetadata() {
+    const el = activeMedia();
     const progressSlider = document.getElementById('progress-slider');
     const totalTimeDisplay = document.getElementById('total-time');
     const currentTimeDisplay = document.getElementById('current-time');
 
-    totalTimeDisplay.textContent = formatTime(videoPlayer.duration);
+    totalTimeDisplay.textContent = formatTime(el.duration);
     progressSlider.value = 0;
     currentTimeDisplay.textContent = "0:00";
-    
-    updateMediaDimensions();
-    
-    // Only run the repaint fix on the very first load.
-    if (currentIndex === 0 && !videoPlayer.dataset.initialLoadDone) {
-        videoPlayer.dataset.initialLoadDone = 'true';
-        imageViewer.dataset.initialLoadDone = 'true'; // Sync the flag
-        applyMediaStyles(); // Apply the correct styles first.
-        setTimeout(() => {
-            const originalZoom = currentZoom;
-            setMediaZoom('double'); // Force a repaint by changing zoom
-            setMediaZoom(originalZoom); // Immediately revert
-        }, 10);
+
+    if (!currentIsAudio) {
+        updateMediaDimensions();
+
+        // Only run the repaint fix on the very first load.
+        if (currentIndex === 0 && !videoPlayer.dataset.initialLoadDone) {
+            videoPlayer.dataset.initialLoadDone = 'true';
+            imageViewer.dataset.initialLoadDone = 'true'; // Sync the flag
+            applyMediaStyles(); // Apply the correct styles first.
+            setTimeout(() => {
+                const originalZoom = currentZoom;
+                setMediaZoom('double'); // Force a repaint by changing zoom
+                setMediaZoom(originalZoom); // Immediately revert
+            }, 10);
+        } else {
+            applyMediaStyles();
+        }
     } else {
         applyMediaStyles();
     }
-});
+}
+
+videoPlayer.addEventListener('loadedmetadata', onLoadedMetadata);
+audioPlayer.addEventListener('loadedmetadata', onLoadedMetadata);
 
 document.addEventListener('DOMContentLoaded', () => {
     initSplitResizer();
     const progressSlider = document.getElementById('progress-slider');
     if (progressSlider) {
         progressSlider.addEventListener('input', () => {
-            if (videoPlayer.duration) {
-                videoPlayer.currentTime = (progressSlider.value / 100) * videoPlayer.duration;
+            const el = activeMedia();
+            if (el.duration) {
+                el.currentTime = (progressSlider.value / 100) * el.duration;
             }
         });
     }
 });
 
-videoPlayer.addEventListener('ended', () => {
+function onEnded() {
+    const el = activeMedia();
     const loopEnabled = document.getElementById('loop-checkbox').checked;
     const maxLoops = parseInt(document.getElementById('loop-count').value, 10) || 1;
 
     if (loopEnabled) {
         currentPlayCount++;
         if (currentPlayCount < maxLoops) {
-            // Replay the current video
-            videoPlayer.currentTime = 0;
-            videoPlayer.play();
+            // Replay the current media
+            el.currentTime = 0;
+            el.play();
             return;
         }
     }
 
     // Done looping or loop disabled -> go to next
     handleNextMedia();
-});
+}
+
+videoPlayer.addEventListener('ended', onEnded);
+audioPlayer.addEventListener('ended', onEnded);
 
 let imageTimerInterval = null;
 
@@ -1987,8 +2683,9 @@ window.addEventListener('keydown', e => {
 
     // Mute Audio
     if (muteKeys.includes(e.code) || muteKeys.includes(e.key) || e.code === 'KeyM') {
-        if (videoPlayer) {
-            videoPlayer.muted = !videoPlayer.muted;
+        const el = splitScreenActive ? videoPlayer : activeMedia();
+        if (el) {
+            el.muted = !el.muted;
         }
         e.preventDefault();
         return;

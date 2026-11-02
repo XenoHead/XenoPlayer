@@ -303,6 +303,33 @@ async function login(request, env) {
     return json({ user: publicUser(row), ...session });
 }
 
+async function validateRegKey(request, env) {
+    if (!env.DB) throw new HttpError(503, "Registration key validation is not configured yet.");
+    const body = await readJson(request);
+    const key = typeof body.key === "string" ? body.key.trim() : "";
+    const keyHash = typeof body.key_hash === "string" && body.key_hash ? body.key_hash : (key ? await sha256(key) : "");
+    const machineId = typeof body.machine_id === "string" ? body.machine_id : "";
+    if (!keyHash) throw new HttpError(400, "A registration key is required.");
+
+    const row = await env.DB.prepare(
+        `SELECT id, label, machine_id, active FROM reg_keys WHERE key_hash = ?`
+    ).bind(keyHash).first();
+    if (!row || !row.active) throw new HttpError(401, "Invalid registration key.");
+    if (row.machine_id && row.machine_id !== machineId) {
+        throw new HttpError(403, "This registration key is bound to a different machine.");
+    }
+    const now = new Date().toISOString();
+    if (!row.machine_id) {
+        await env.DB.prepare(
+            `UPDATE reg_keys SET machine_id = ?, last_used_at = ? WHERE id = ?`
+        ).bind(machineId, now, row.id).run();
+    } else {
+        await env.DB.prepare(`UPDATE reg_keys SET last_used_at = ? WHERE id = ?`)
+            .bind(now, row.id).run();
+    }
+    return json({ ok: true, keyId: row.id, label: row.label });
+}
+
 async function getShares(env, userId) {
     const results = await env.DB.prepare(
         `SELECT id, kind, title, file_name, recipient_email, mime_type, size_bytes, created_at
@@ -454,6 +481,7 @@ async function route(request, env) {
     if (path === "/api/email/code" && request.method === "POST") return requestEmailCode(request, env);
     if (path === "/api/register" && request.method === "POST") return register(request, env);
     if (path === "/api/login" && request.method === "POST") return login(request, env);
+    if (path === "/api/reg-key/validate" && request.method === "POST") return validateRegKey(request, env);
     if (path.startsWith("/s/") && request.method === "GET") {
         const id = path.slice(3);
         if (!/^[0-9a-f-]{36}$/i.test(id)) throw new HttpError(404, "This share link does not exist.");

@@ -49,12 +49,6 @@
             "notes": "{\"parser\":\"generic_html\",\"search_url\":\"https://hentai-moon.com/videos/991/cherry-gal-s-ep-2-d1\",\"base_url\":\"https://hentai-moon.com\",\"results_selector\":\"div.wrap\",\"title_selector\":\"\",\"url_selector\":\"\",\"author_selector\":\"\",\"summary_selector\":\"\"}"
         },
         {
-            "id": "xgame9",
-            "name": "Xgame9",
-            "domain": "https://xgame9.com",
-            "notes": "{\"parser\":\"generic_html\",\"search_url\":\"https://xgame9.com/developer/dumb-koala-games/\",\"base_url\":\"https://xgame9.com\",\"results_selector\":\"article.gx-card\",\"title_selector\":\"a\",\"url_selector\":\"a\",\"author_selector\":\"\",\"summary_selector\":\"\"}"
-        },
-        {
             "id": "pixiv",
             "name": "Pixiv",
             "domain": "https://www.pixiv.net",
@@ -69,5 +63,24 @@
             "notes": ""
         }
     ],
-    "story_sites": []
+    "story_sites": [
+        {
+            "id": "nifty",
+            "name": "Nifty",
+            "domain": "https://www.nifty.org",
+            "notes": "{\"parser\":\"generic_html\",\"search_url\":\"https://www.nifty.org/nifty/lesbian/incest/\",\"base_url\":\"https://www.nifty.org\",\"results_selector\":\"tr\",\"title_selector\":\"\",\"url_selector\":\"\",\"author_selector\":\"\",\"summary_selector\":\"\"}"
+        },
+        {
+            "id": "sexstories",
+            "name": "Sexstories",
+            "domain": "https://www.sexstories.com",
+            "notes": "{\"parser\":\"generic_html\",\"search_url\":\"https://www.sexstories.com/themes/107/Young\",\"base_url\":\"https://www.sexstories.com\",\"results_selector\":\"h4\",\"title_selector\":\"a\",\"url_selector\":\"a\",\"author_selector\":\"\",\"summary_selector\":\"\"}"
+        },
+        {
+            "id": "nifty",
+            "name": "Nifty-2",
+            "domain": "https://www.nifty.org",
+            "notes": "{\"parser\":\"generic_html\",\"search_url\":\"https://www.nifty.org/nifty/gay/incest/a-boys-lustful-desires/\",\"base_url\":\"https://www.nifty.org\",\"results_selector\":\"tr\",\"title_selector\":\"\",\"url_selector\":\"\",\"author_selector\":\"\",\"summary_selector\":\"\"}"
+        }
+    ]
 }

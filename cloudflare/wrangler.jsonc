@@ -13,14 +13,8 @@
     {
       "binding": "DB",
       "database_name": "xenoplayer-sharing-hub",
-      "database_id": "REPLACE_WITH_EXISTING_D1_DATABASE_ID",
+      "database_id": "d06fe9bd-e7f1-40dc-a72a-1dd1d6c7738c",
       "migrations_dir": "migrations"
-    }
-  ],
-  "r2_buckets": [
-    {
-      "binding": "FILES",
-      "bucket_name": "REPLACE_WITH_EXISTING_R2_BUCKET_NAME"
     }
   ],
   "send_email": [
