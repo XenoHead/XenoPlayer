@@ -12,6 +12,8 @@ flask
 SpeechRecognition
 PyAudio
 cloudscraper
+edge-tts
+aiohttp
 tensorboard
 transformers
 argostranslate

@@ -7,11 +7,15 @@ Beyond standard playback, XenoPlayer is packed with advanced features including 
 ## ✨ Key Features
 
 * **Folder-based Playback:** Open a single file and instantly access a playlist of all media in that folder. Seamlessly transitions between playing videos and viewing images/GIFs.
+* **Image & Video CBZ Bundles:** Use **File → Create Image CBZ...** to pack a folder of JPG/PNG/WebP/GIF pages into a comic-style `.cbz`, or **File → Create Video CBZ...** to pack MP4/WebM/OGG clips into one playable archive. Files are numbered in natural-sort order (including nested chapter folders), so the sequence is preserved. XenoPlayer opens either bundle like a comic archive and steps through it — one portable file, no loose folders.
 * **Manga Reading & Live Translation:**
   * Draw a box over foreign text in the Manga Viewer to automatically recognize and translate it to English (or other languages) using built-in AI.
   * **Burn Translations:** Optionally burn translated text directly into the image file using ImageMagick.
   * **Interactive Translations:** Move, resize, edit, or delete saved translations directly on the page.
 * **Online Manga Integration:** Browse popular tags, search, and download galleries directly from your favorite online sources using the built-in downloader.
+* **Online Story Reader & TTS:** Click a story result to read it in a fitted in-app reader. TTS uses Microsoft Edge Neural voices by default (requires `edge-tts` and internet) with system voices as a fallback, plus voice selection, speed control, pause/stop, and paragraph highlighting.
+* **Collections:** Mark folders or comic archives as collections. Image-only collections open in the page reader, while collections containing videos open in the main player. The Collection Library shows image and video counts plus a thumbnail (including a video frame).
+* **Online Audio:** Browse audio sites, filter the loaded tracks, or search the source site for new tracks. Tracks stream in the built-in pop-up player and download to the active folder (or a folder you choose on first download).
 * **Advanced File Management:**
   * Instantly move files to pre-configured "Move Target" folders.
   * Smart duplicate deletion—automatically finds and removes identical files to save space.
@@ -26,6 +30,16 @@ Beyond standard playback, XenoPlayer is packed with advanced features including 
 
 * **Video:** `.mp4`, `.avi`, `.mkv`, `.mov`, `.wmv`, `.flv`, `.webm`, `.mpg`, `.mpeg`, `.ogg`
 * **Image:** `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`
+* **Archives:** `.cbz` comic archives and `.zip` archives containing images or playable video clips. Both are listed in the playlist and can be filtered with the ZIP/CBZ options. Image CBZ creation uses `.jpg`, `.jpeg`, `.png`, `.webp`, and `.gif`; video CBZ creation uses `.mp4`, `.webm`, and `.ogg`.
+  * Playback inside XenoPlayer's built-in viewer requires codecs WebView2 can decode (typically H.264/AAC MP4, VP8/VP9 WebM, and Theora/Vorbis OGG).
+
+## 📁 Application Data
+
+By default, XenoPlayer reads and writes its data files (`web_settings.json`, `MAINLIST.json`, `reg_cache.json`, and `.env`) in the application's current working directory — the folder the app is launched from. If that folder is not writable, it falls back to the program folder. Existing files in the program folder are still read so settings aren't lost; the first save creates a copy in the working directory. Set the `XENO_DATA_DIR` environment variable to force a specific data folder.
+
+## 🔄 Update Checks
+
+**Check for Updates** compares your local build against `origin/main` on GitHub. When running from a Git checkout, it uses `git fetch` and your existing Git credentials. Packaged builds bundle `build_info.json` with their version and commit. For a private repository outside a Git checkout, add `GITHUB_TOKEN` (or `GH_TOKEN`) to `.env` so the GitHub API can be queried.
 
 ## 🚀 Installation & Usage
 

@@ -19,6 +19,7 @@ import subprocess
 import signal
 import uuid
 import platform
+import time
 import urllib.request
 import urllib.error
 from datetime import datetime
@@ -50,7 +51,54 @@ if getattr(sys, 'frozen', False):
     app_dir = os.path.dirname(sys.executable)
 else:
     app_dir = os.path.dirname(os.path.abspath(__file__))
-SETTINGS_FILE = os.path.join(app_dir, "web_settings.json")
+
+def _pick_app_pwd():
+    """Pick the directory used for read/write application data.
+
+    Defaults to the application's current working directory (the folder the
+    app was launched from). Falls back to the executable/script folder if the
+    PWD is not writable. Set XENO_DATA_DIR to override both.
+    """
+    candidates = []
+    override = os.environ.get("XENO_DATA_DIR")
+    if override:
+        try:
+            os.makedirs(override, exist_ok=True)
+        except OSError:
+            pass
+        candidates.append(override)
+    candidates.extend([os.getcwd(), app_dir])
+    seen = set()
+    for candidate in candidates:
+        candidate = os.path.abspath(os.path.expanduser(candidate))
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        try:
+            with tempfile.TemporaryFile(dir=candidate):
+                pass
+            return candidate
+        except OSError:
+            continue
+    return os.path.abspath(os.getcwd())
+
+APP_PWD = _pick_app_pwd()
+
+def app_data_read_paths(filename):
+    """Where to look for an existing data file, newest location first."""
+    paths = [os.path.join(APP_PWD, filename)]
+    for candidate in (os.path.join(app_dir, filename), resource_path(filename)):
+        if candidate not in paths:
+            paths.append(candidate)
+    return paths
+
+def find_app_data_file(filename):
+    for path in app_data_read_paths(filename):
+        if os.path.exists(path):
+            return path
+    return None
+
+SETTINGS_FILE = os.path.join(APP_PWD, "web_settings.json")
 
 def load_settings():
     settings = {"favorites": [], "last_video": None, "max_volume": 100, "move_targets": {}, 
@@ -58,17 +106,19 @@ def load_settings():
 {"next": ["ArrowRight", "Space", "", "", ""], "prev": ["ArrowLeft", "", "", "", ""], 
 "pause": ["KeyP", "", "", "", ""], "mute": ["KeyM", "", "", "", ""], 
 "split_next_video": ["KeyD", "", "", "", ""], "split_next_image": ["KeyE", "", "", "", ""]}, "saved_volumes": {}, 
-"favs_mode": "folder", "collection_sites": [], "audio_sites": [], "online_playlists": {}}
-    if os.path.exists(SETTINGS_FILE):
+"favs_mode": "folder", "collection_sites": [], "audio_sites": [], "online_playlists": {},
+"ffmpeg_path": "", "ffprobe_path": "", "video_cache_dir": "", "video_cache_max_gb": 5,
+"github_token": "", "story_tts_engine": "edge",
+"story_tts_voice": "en-US-AriaNeural", "story_tts_rate": 1.0}
+    settings_file = find_app_data_file("web_settings.json")
+    if settings_file:
         try:
-            with open(SETTINGS_FILE, "r") as f:
+            with open(settings_file, "r") as f:
                 settings.update(json.load(f))
         except: pass
     
-    online_src_file = os.path.join(app_dir, "MAINLIST.json")
-    if not os.path.exists(online_src_file):
-        online_src_file = resource_path("MAINLIST.json")
-    if os.path.exists(online_src_file):
+    online_src_file = find_app_data_file("MAINLIST.json")
+    if online_src_file:
         try:
             with open(online_src_file, "r", encoding="utf-8") as f:
                 online_settings = json.load(f)
@@ -85,6 +135,24 @@ def save_settings(s):
 
 def natural_sort_key(s):
     return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', os.path.basename(s))]
+
+def natural_sort_path_key(s):
+    return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', os.path.normpath(s))]
+
+# Formats Chromium/WebView2 can play directly. Other containers are intentionally
+# not bundled because they would open to a black video element.
+VIDEO_BUNDLE_EXTS = {'.mp4', '.webm', '.ogg'}
+IMAGE_BUNDLE_EXTS = {'.jpg', '.jpeg', '.png', '.webp', '.gif'}
+AUDIO_BUNDLE_EXTS = {
+    '.mp3', '.m4a', '.m4b', '.wav', '.ogg', '.oga', '.opus',
+    '.flac', '.aac', '.webm', '.mp4',
+}
+NATIVE_VIDEO_EXTS = {'.mp4', '.webm', '.ogg'}
+CONVERTIBLE_VIDEO_EXTS = {
+    '.avi', '.wmv', '.mkv', '.mov', '.flv', '.mpg', '.mpeg', '.m4v', '.ts',
+}
+GITHUB_REPO = "XenoHead/XenoPlayer"
+GITHUB_REPO_URL = f"https://github.com/{GITHUB_REPO}"
 
 def clean_filename(name):
     import string
@@ -122,12 +190,295 @@ class Api:
             "state": "stopped", "mode": None, "url": None, "key": None,
             "public": False, "error": None, "log": [], "auto_stop_minutes": 0
         }
+        self._video_conversion_lock = threading.Lock()
+        self._video_conversion_token = 0
+        self._video_conversion_cancel = None
+        self._video_conversion_process = None
+        self._video_conversion_source = ""
+        try:
+            self._prune_video_cache()
+        except Exception:
+            pass
 
     def get_startup_info(self):
         art_path = resource_path('XenoHead_art.png')
         if os.path.exists(art_path):
             return {"art_path": art_path}
         return {"art_path": None}
+
+    def _git_run(self, args, cwd, timeout=20):
+        git = shutil.which("git")
+        if not git:
+            return None
+        env = os.environ.copy()
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        env["GCM_INTERACTIVE"] = "never"
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+        try:
+            return subprocess.run(
+                [git, "-C", cwd] + args,
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=timeout, env=env,
+                creationflags=creationflags,
+            )
+        except Exception:
+            return None
+
+    def _local_version_info(self):
+        info = {}
+        for filename in ("version.json", "build_info.json"):
+            path = find_app_data_file(filename) or resource_path(filename)
+            if not path or not os.path.exists(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    for key, value in data.items():
+                        if value not in (None, ""):
+                            info[key] = value
+            except Exception:
+                pass
+
+        repo_dir = os.path.dirname(os.path.abspath(__file__))
+        if os.path.isdir(os.path.join(repo_dir, ".git")):
+            commit = self._git_run(["rev-parse", "HEAD"], repo_dir, timeout=5)
+            if commit and commit.returncode == 0:
+                info["commit"] = commit.stdout.strip()
+            date = self._git_run(["log", "-1", "--format=%cI"], repo_dir, timeout=5)
+            if date and date.returncode == 0:
+                info["commit_date"] = date.stdout.strip()
+            subject = self._git_run(["log", "-1", "--format=%s"], repo_dir, timeout=5)
+            if subject and subject.returncode == 0:
+                info["commit_subject"] = subject.stdout.strip()
+        return info
+
+    def _github_api(self, path):
+        import requests
+        token = (
+            os.environ.get("GITHUB_TOKEN")
+            or os.environ.get("GH_TOKEN")
+            or self._get_env_var("GITHUB_TOKEN", "GH_TOKEN")
+            or (self.settings.get("github_token") or "").strip()
+        )
+        headers = {
+            "User-Agent": "XenoPlayer-UpdateCheck",
+            "Accept": "application/vnd.github+json",
+        }
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        try:
+            response = requests.get(
+                f"https://api.github.com/repos/{GITHUB_REPO}{path}",
+                headers=headers, timeout=15,
+            )
+        except Exception as e:
+            return None, f"Could not reach GitHub: {e}"
+        if response.status_code == 200:
+            try:
+                return response.json(), None
+            except Exception as e:
+                return None, f"GitHub returned invalid JSON: {e}"
+        if response.status_code in (401, 403, 404):
+            return None, "Repository not found or private (GitHub token required)."
+        return None, f"GitHub returned HTTP {response.status_code}."
+
+    @staticmethod
+    def _version_tuple(value):
+        import re
+        parts = re.findall(r"\d+", value or "")
+        return tuple(int(part) for part in parts[:4]) if parts else ()
+
+    def check_for_updates(self):
+        local = self._local_version_info()
+        local_version = str(local.get("version") or "0.0.0").strip()
+        local_commit = str(local.get("commit") or "").strip()
+        repo_dir = os.path.dirname(os.path.abspath(__file__))
+        has_git_checkout = (
+            os.path.isdir(os.path.join(repo_dir, ".git"))
+            and bool(shutil.which("git"))
+        )
+
+        if has_git_checkout:
+            fetch = self._git_run(
+                ["fetch", "--quiet", "origin", "main"], repo_dir, timeout=30
+            )
+            if fetch is not None and fetch.returncode == 0:
+                counts = self._git_run(
+                    ["rev-list", "--left-right", "--count", "HEAD...origin/main"],
+                    repo_dir, timeout=10,
+                )
+                if counts is not None and counts.returncode == 0:
+                    try:
+                        ahead, behind = (int(part) for part in counts.stdout.split()[:2])
+                    except Exception:
+                        ahead = behind = 0
+
+                    remote_sha_result = self._git_run(
+                        ["rev-parse", "origin/main"], repo_dir, timeout=5
+                    )
+                    remote_sha = (
+                        remote_sha_result.stdout.strip()
+                        if remote_sha_result and remote_sha_result.returncode == 0
+                        else ""
+                    )
+                    subject_result = self._git_run(
+                        ["log", "-1", "--format=%s", "origin/main"], repo_dir, timeout=5
+                    )
+                    remote_subject = (
+                        subject_result.stdout.strip()
+                        if subject_result and subject_result.returncode == 0
+                        else ""
+                    )
+                    date_result = self._git_run(
+                        ["log", "-1", "--format=%cI", "origin/main"], repo_dir, timeout=5
+                    )
+                    remote_date = (
+                        date_result.stdout.strip()
+                        if date_result and date_result.returncode == 0
+                        else ""
+                    )
+
+                    if behind > 0:
+                        compare_url = (
+                            f"{GITHUB_REPO_URL}/compare/{local_commit}...{remote_sha}"
+                            if local_commit and remote_sha
+                            else f"{GITHUB_REPO_URL}/commits/main"
+                        )
+                        return {
+                            "status": "update_available",
+                            "version": remote_sha[:7] or "new commit",
+                            "commit": remote_sha,
+                            "current": local_commit[:7] or local_version,
+                            "latest": remote_sha[:7],
+                            "date": remote_date,
+                            "notes": remote_subject,
+                            "ahead": ahead,
+                            "behind": behind,
+                            "url": compare_url,
+                        }
+
+                    return {
+                        "status": "up_to_date",
+                        "version": local_version,
+                        "commit": local_commit[:7],
+                        "latest": remote_sha[:7],
+                        "date": remote_date,
+                        "ahead": ahead,
+                        "behind": behind,
+                    }
+
+        # Packaged build: compare the live remote main SHA against the SHA
+        # recorded when the app was built.
+        build_remote = str(local.get("remote_main") or "").strip()
+        if not has_git_checkout and build_remote and shutil.which("git"):
+            ls_remote = self._git_run(
+                ["ls-remote", GITHUB_REPO_URL, "refs/heads/main"],
+                os.getcwd(), timeout=20,
+            )
+            if ls_remote is not None and ls_remote.returncode == 0:
+                parts = ls_remote.stdout.split()
+                remote_sha = parts[0] if parts else ""
+                if remote_sha:
+                    if remote_sha.lower() == build_remote.lower():
+                        return {
+                            "status": "up_to_date",
+                            "version": local_version,
+                            "commit": local_commit[:7],
+                            "latest": remote_sha[:7],
+                        }
+                    return {
+                        "status": "update_available",
+                        "version": remote_sha[:7],
+                        "commit": remote_sha,
+                        "current": local_commit[:7] or local_version,
+                        "latest": remote_sha[:7],
+                        "url": (
+                            f"{GITHUB_REPO_URL}/compare/{local_commit}...{remote_sha}"
+                            if local_commit
+                            else f"{GITHUB_REPO_URL}/commits/main"
+                        ),
+                    }
+
+        # Fallback for packaged builds or machines without a usable Git checkout.
+        release, release_error = self._github_api("/releases/latest")
+        if release:
+            tag = str(release.get("tag_name") or "").strip()
+            latest_version = tag.lstrip("vV") or local_version
+            if self._version_tuple(latest_version) > self._version_tuple(local_version):
+                return {
+                    "status": "update_available",
+                    "version": latest_version,
+                    "current": local_version,
+                    "date": release.get("published_at", ""),
+                    "notes": (release.get("name") or release.get("body") or "")[:500],
+                    "url": release.get("html_url") or f"{GITHUB_REPO_URL}/releases",
+                }
+            return {
+                "status": "up_to_date",
+                "version": local_version,
+                "latest": latest_version,
+            }
+
+        commit, commit_error = self._github_api("/commits/main")
+        if commit:
+            sha = str(commit.get("sha") or "")
+            commit_info = commit.get("commit") or {}
+            author = commit_info.get("author") or {}
+            remote_date = str(author.get("date") or "")
+            message = str(commit_info.get("message") or "").splitlines()[0]
+            if local_commit and sha:
+                if sha.lower() == local_commit.lower():
+                    return {
+                        "status": "up_to_date",
+                        "version": local_version,
+                        "commit": local_commit[:7],
+                        "latest": sha[:7],
+                    }
+                return {
+                    "status": "update_available",
+                    "version": sha[:7],
+                    "commit": sha,
+                    "current": local_commit[:7],
+                    "latest": sha[:7],
+                    "date": remote_date,
+                    "notes": message,
+                    "url": f"{GITHUB_REPO_URL}/compare/{local_commit}...{sha}",
+                }
+
+            local_date = str(
+                local.get("build_date")
+                or local.get("commit_date")
+                or local.get("last_updated")
+                or ""
+            )
+            if remote_date and local_date and remote_date > local_date:
+                return {
+                    "status": "update_available",
+                    "version": sha[:7],
+                    "commit": sha,
+                    "current": local_version,
+                    "latest": sha[:7],
+                    "date": remote_date,
+                    "notes": message,
+                    "url": f"{GITHUB_REPO_URL}/commits/main",
+                }
+            return {
+                "status": "up_to_date",
+                "version": local_version,
+                "latest": sha[:7],
+                "date": remote_date,
+            }
+
+        detail = release_error or commit_error or "Git is not available."
+        return {
+            "status": "error",
+            "msg": (
+                "Could not check Git for updates. Run XenoPlayer from a Git checkout "
+                "with credentials, or add GITHUB_TOKEN to .env for a private "
+                f"repository. ({detail})"
+            ),
+        }
 
     def init(self):
         if len(sys.argv) > 1 and os.path.exists(sys.argv[1]):
@@ -142,7 +493,7 @@ class Api:
             if def_folder and os.path.isdir(def_folder):
                 self._current_directory = def_folder
                 try:
-                    supported = {'.mp4', '.webm', '.ogg', '.mp3', '.wav', '.wave', '.jpg', '.jpeg', '.png', '.webp', '.gif', '.txt', '.md', '.json', '.csv'}
+                    supported = {'.mp4', '.webm', '.ogg', '.avi', '.wmv', '.mkv', '.mov', '.flv', '.mpg', '.mpeg', '.m4v', '.ts', '.zip', '.cbz', '.mp3', '.wav', '.wave', '.m4a', '.m4b', '.aac', '.flac', '.oga', '.opus', '.jpg', '.jpeg', '.png', '.webp', '.gif', '.txt', '.md', '.json', '.csv'}
                     if self.settings.get("recursive_load", False):
                         first_file = None
                         for root, dirs, files in os.walk(def_folder):
@@ -169,7 +520,7 @@ class Api:
     def open_dialog(self):
         last_dir = self.settings.get("last_opened_dir", "")
         if last_dir and not os.path.exists(last_dir): last_dir = ""
-        result = self._window.create_file_dialog(webview.FileDialog.OPEN, directory=last_dir, allow_multiple=False, file_types=('Media Files (*.mp4;*.webm;*.ogg;*.mp3;*.wav;*.wave;*.jpg;*.png;*.gif;*.webp;*.cbz)', 'All files (*.*)'))
+        result = self._window.create_file_dialog(webview.FileDialog.OPEN, directory=last_dir, allow_multiple=False, file_types=('Media Files (*.mp4;*.webm;*.ogg;*.avi;*.wmv;*.mkv;*.mov;*.flv;*.mpg;*.mpeg;*.m4v;*.ts;*.mp3;*.wav;*.wave;*.m4a;*.m4b;*.aac;*.flac;*.oga;*.opus;*.jpg;*.png;*.gif;*.webp;*.cbz;*.zip)', 'All files (*.*)'))
         if result and len(result) > 0:
             self.settings["last_opened_dir"] = os.path.dirname(result[0])
             save_settings(self.settings)
@@ -960,18 +1311,20 @@ class Api:
     def load_directory(self, filepath, play=True):
         filepath = os.path.abspath(filepath)
         if not os.path.isfile(filepath): return
-        if os.path.splitext(filepath)[1].lower() == '.cbz':
+        if os.path.splitext(filepath)[1].lower() in ('.cbz', '.zip'):
             self.open_cbz_archive(filepath)
             return
         directory = os.path.dirname(filepath)
         self._current_directory = directory
         
-        supported = {'.mp4', '.webm', '.ogg', '.mp3', '.wav', '.wave', '.jpg', '.jpeg', '.png', '.webp', '.gif', '.txt', '.md', '.json', '.csv'}
+        supported = {'.mp4', '.webm', '.ogg', '.avi', '.wmv', '.mkv', '.mov', '.flv', '.mpg', '.mpeg', '.m4v', '.ts', '.zip', '.cbz', '.mp3', '.wav', '.wave', '.m4a', '.m4b', '.aac', '.flac', '.oga', '.opus', '.jpg', '.jpeg', '.png', '.webp', '.gif', '.txt', '.md', '.json', '.csv'}
         
         if self.settings.get("recursive_load", False):
             full_playlist = []
             for root, dirs, files in os.walk(directory):
                 for f in files:
+                    if f.lower() == "collection_info.json":
+                        continue
                     if os.path.splitext(f)[1].lower() in supported:
                         full_playlist.append(os.path.join(root, f))
             self.full_playlist = full_playlist
@@ -979,7 +1332,7 @@ class Api:
             try:
                 files = os.listdir(directory)
             except: return
-            self.full_playlist = [os.path.join(directory, f) for f in files if os.path.splitext(f)[1].lower() in supported]
+            self.full_playlist = [os.path.join(directory, f) for f in files if f.lower() != "collection_info.json" and os.path.splitext(f)[1].lower() in supported]
             
         self.full_playlist.sort(key=natural_sort_key)
         
@@ -992,7 +1345,7 @@ class Api:
         if play:
             self.play_current()
 
-    def load_selected_directory(self, directory_path):
+    def load_selected_directory(self, directory_path, recursive=None):
         directory_path = os.path.abspath(directory_path)
         if not os.path.isdir(directory_path):
             return {"status": "error", "msg": "Folder does not exist."}
@@ -1005,12 +1358,16 @@ class Api:
                 self._cleanup_cbz_archive()
         self._current_directory = directory_path
         
-        supported = {'.mp4', '.webm', '.ogg', '.mp3', '.wav', '.wave', '.jpg', '.jpeg', '.png', '.webp', '.gif', '.txt', '.md', '.json', '.csv'}
+        supported = {'.mp4', '.webm', '.ogg', '.avi', '.wmv', '.mkv', '.mov', '.flv', '.mpg', '.mpeg', '.m4v', '.ts', '.zip', '.cbz', '.mp3', '.wav', '.wave', '.m4a', '.m4b', '.aac', '.flac', '.oga', '.opus', '.jpg', '.jpeg', '.png', '.webp', '.gif', '.txt', '.md', '.json', '.csv'}
         
-        if self.settings.get("recursive_load", False):
+        if recursive is None:
+            recursive = self.settings.get("recursive_load", False)
+        if recursive:
             full_playlist = []
             for root, dirs, files in os.walk(directory_path):
                 for f in files:
+                    if f.lower() == "collection_info.json":
+                        continue
                     if os.path.splitext(f)[1].lower() in supported:
                         full_playlist.append(os.path.join(root, f))
             self.full_playlist = full_playlist
@@ -1018,7 +1375,7 @@ class Api:
             try:
                 files = os.listdir(directory_path)
             except: return
-            self.full_playlist = [os.path.join(directory_path, f) for f in files if os.path.splitext(f)[1].lower() in supported]
+            self.full_playlist = [os.path.join(directory_path, f) for f in files if f.lower() != "collection_info.json" and os.path.splitext(f)[1].lower() in supported]
             
         self.full_playlist.sort(key=natural_sort_key)
         
@@ -1037,15 +1394,372 @@ class Api:
 
     def _cleanup_cbz_archive(self):
         if self._cbz_temp_dir:
-            self._cbz_temp_dir.cleanup()
+            try:
+                self._cbz_temp_dir.cleanup()
+            except Exception:
+                # WebView2 can briefly hold the currently playing video open.
+                # Let TemporaryDirectory retry when the object is collected.
+                pass
         self._cbz_temp_dir = None
         self._cbz_root = None
         self._cbz_archive_path = None
 
+    def _video_js(self, script):
+        try:
+            if self._window:
+                self._window.evaluate_js(script)
+        except Exception:
+            pass
+
+    def _find_ffmpeg(self):
+        override = (self.settings.get("ffmpeg_path") or "").strip()
+        exe = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+        candidates = []
+        if override:
+            candidates.append(override)
+            if os.path.isdir(override):
+                candidates.append(os.path.join(override, exe))
+        candidates.extend([
+            os.path.join(app_dir, exe),
+            os.path.join(app_dir, "bin", exe),
+            os.path.join(app_dir, "ffmpeg", "bin", exe),
+        ])
+        which = shutil.which("ffmpeg")
+        if which:
+            candidates.append(which)
+        if os.name == "nt":
+            candidates.extend([
+                os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "ffmpeg", "bin", exe),
+                os.path.join(os.environ.get("ProgramFiles", ""), "ffmpeg", "bin", exe),
+                r"C:\ffmpeg\bin\ffmpeg.exe",
+                r"D:\Tools\ffmpeg\bin\ffmpeg.exe",
+            ])
+        for candidate in candidates:
+            if candidate and os.path.isfile(candidate):
+                return candidate
+        return ""
+
+    def _find_ffprobe(self):
+        override = (self.settings.get("ffprobe_path") or "").strip()
+        if override and os.path.isfile(override):
+            return override
+        ffmpeg = self._find_ffmpeg()
+        if ffmpeg:
+            exe = "ffprobe.exe" if os.name == "nt" else "ffprobe"
+            candidate = os.path.join(os.path.dirname(ffmpeg), exe)
+            if os.path.isfile(candidate):
+                return candidate
+        return shutil.which("ffprobe") or ""
+
+    def _video_cache_dir(self):
+        configured = (self.settings.get("video_cache_dir") or "").strip()
+        cache = os.path.abspath(configured) if configured else os.path.join(APP_PWD, ".video_cache")
+        try:
+            os.makedirs(cache, exist_ok=True)
+            return cache
+        except OSError:
+            fallback = os.path.join(tempfile.gettempdir(), "XenoPlayer_video_cache")
+            os.makedirs(fallback, exist_ok=True)
+            return fallback
+
+    def _video_cache_path(self, path):
+        stat = os.stat(path)
+        key = hashlib.sha256(
+            f"{os.path.abspath(path)}|{stat.st_mtime_ns}|{stat.st_size}|v1".encode("utf-8")
+        ).hexdigest()[:32]
+        return os.path.join(self._video_cache_dir(), f"{key}.mp4")
+
+    def _prune_video_cache(self, keep_path=None):
+        cache = self._video_cache_dir()
+        try:
+            max_gb = float(self.settings.get("video_cache_max_gb", 5) or 5)
+        except (TypeError, ValueError):
+            max_gb = 5
+        max_bytes = max(0.5, max_gb) * 1024 ** 3
+        now = time.time()
+        entries = []
+        total = 0
+        try:
+            names = os.listdir(cache)
+        except OSError:
+            return
+        for name in names:
+            path = os.path.join(cache, name)
+            if not os.path.isfile(path):
+                continue
+            try:
+                stat = os.stat(path)
+            except OSError:
+                continue
+            if name.endswith(".part"):
+                if now - stat.st_mtime > 3600:
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+                continue
+            if not name.lower().endswith(".mp4"):
+                continue
+            if now - stat.st_mtime > 30 * 86400:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+                continue
+            entries.append((stat.st_mtime, path))
+            total += stat.st_size
+
+        if total <= max_bytes:
+            return
+        entries.sort(key=lambda row: row[0])
+        for _mtime, path in entries:
+            if total <= max_bytes:
+                break
+            if keep_path and os.path.normpath(path) == os.path.normpath(keep_path):
+                continue
+            try:
+                size = os.path.getsize(path)
+                os.remove(path)
+                total -= size
+            except OSError:
+                pass
+
+    def _probe_video(self, ffprobe, path):
+        try:
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+            result = subprocess.run(
+                [
+                    ffprobe, "-v", "error", "-print_format", "json",
+                    "-show_streams", "-show_format", path,
+                ],
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=30, creationflags=creationflags,
+            )
+            data = json.loads(result.stdout or "{}")
+            streams = data.get("streams", [])
+            video = next((s for s in streams if s.get("codec_type") == "video"), {})
+            audio = next((s for s in streams if s.get("codec_type") == "audio"), {})
+            duration = data.get("format", {}).get("duration") or video.get("duration") or 0
+            try:
+                duration = float(duration)
+            except (TypeError, ValueError):
+                duration = 0.0
+            return {
+                "video_codec": (video.get("codec_name") or "").lower(),
+                "audio_codec": (audio.get("codec_name") or "").lower(),
+                "duration": duration,
+            }
+        except Exception:
+            return {}
+
+    def prepare_video_for_playback(self, path):
+        try:
+            if not path:
+                return {"status": "error", "msg": "No video file provided."}
+            path = os.path.abspath(path)
+            if not os.path.isfile(path):
+                return {"status": "error", "msg": "Video file not found."}
+
+            ext = os.path.splitext(path)[1].lower()
+            if ext in NATIVE_VIDEO_EXTS:
+                return {"status": "native", "path": path}
+            if ext not in CONVERTIBLE_VIDEO_EXTS:
+                return {
+                    "status": "error",
+                    "msg": f"{ext or 'This file'} is not a video format XenoPlayer can open.",
+                }
+
+            cache_path = self._video_cache_path(path)
+            if os.path.isfile(cache_path) and os.path.getsize(cache_path) > 1024:
+                return {
+                    "status": "ready", "path": cache_path,
+                    "source": path, "cached": True,
+                }
+
+            if not self._find_ffmpeg():
+                return {
+                    "status": "no_ffmpeg",
+                    "source": path,
+                    "msg": (
+                        "AVI/WMV playback needs ffmpeg. Install ffmpeg and make sure "
+                        "it is on PATH, or set ffmpeg_path in web_settings.json."
+                    ),
+                }
+
+            with self._video_conversion_lock:
+                self._video_conversion_token += 1
+                token = self._video_conversion_token
+                old_cancel = self._video_conversion_cancel
+                cancel_event = threading.Event()
+                self._video_conversion_cancel = cancel_event
+                self._video_conversion_source = path
+            if old_cancel is not None:
+                old_cancel.set()
+            process = self._video_conversion_process
+            if process is not None and process.poll() is None:
+                try:
+                    process.terminate()
+                except Exception:
+                    pass
+
+            threading.Thread(
+                target=self._convert_video_worker,
+                args=(path, cache_path, token, cancel_event),
+                daemon=True,
+            ).start()
+            return {
+                "status": "converting",
+                "token": token,
+                "source": path,
+                "name": os.path.basename(path),
+            }
+        except Exception as e:
+            return {"status": "error", "msg": str(e)}
+
+    def cancel_video_conversion(self):
+        with self._video_conversion_lock:
+            event = self._video_conversion_cancel
+            process = self._video_conversion_process
+            if event is not None:
+                event.set()
+        if process is not None and process.poll() is None:
+            try:
+                process.terminate()
+            except Exception:
+                pass
+        return {"status": "ok"}
+
+    def _convert_video_worker(self, source, cache_path, token, cancel_event):
+        process = None
+        temp_path = ""
+        try:
+            ffmpeg = self._find_ffmpeg()
+            ffprobe = self._find_ffprobe()
+            info = self._probe_video(ffprobe, source) if ffprobe else {}
+            duration = info.get("duration", 0.0)
+            video_codec = info.get("video_codec", "")
+            audio_codec = info.get("audio_codec", "")
+            remux = video_codec == "h264" and (
+                not audio_codec or audio_codec in ("aac", "mp3")
+            )
+
+            cache_dir = self._video_cache_dir()
+            temp_path = os.path.join(
+                cache_dir, f".{token}_{int(time.time() * 1000)}.part"
+            )
+            command = [
+                ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+                "-progress", "pipe:1", "-nostats", "-i", source,
+            ]
+            if remux:
+                command += [
+                    "-map", "0:v:0", "-map", "0:a:0?",
+                    "-c", "copy", "-movflags", "+faststart",
+                ]
+            else:
+                command += [
+                    "-map", "0:v:0", "-map", "0:a:0?",
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                    "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k",
+                    "-movflags", "+faststart",
+                ]
+            command += ["-f", "mp4", temp_path]
+
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                creationflags=creationflags,
+            )
+            self._video_conversion_process = process
+            last_error = ""
+            for line in process.stdout:
+                if cancel_event.is_set():
+                    try:
+                        process.terminate()
+                    except Exception:
+                        pass
+                    break
+                line = line.strip()
+                if line.startswith(("out_time_us=", "out_time_ms=")):
+                    try:
+                        microseconds = int(line.split("=", 1)[1])
+                        seconds = microseconds / 1_000_000.0
+                        percent = int(min(99, max(0, seconds / duration * 100))) if duration > 0 else -1
+                        self._video_js(
+                            "updateVideoConvertProgress("
+                            f"{percent}, {json.dumps(os.path.basename(source))})"
+                        )
+                    except Exception:
+                        pass
+                elif line and "=" not in line:
+                    last_error = line
+            process.wait()
+            self._video_conversion_process = None
+
+            if cancel_event.is_set():
+                self._video_js(
+                    f"videoConvertFailed({json.dumps(token)}, {json.dumps('Cancelled')})"
+                )
+                return
+            if (
+                process.returncode != 0
+                or not os.path.exists(temp_path)
+                or os.path.getsize(temp_path) < 1024
+            ):
+                message = last_error or f"ffmpeg failed (exit code {process.returncode})."
+                self._video_js(
+                    f"videoConvertFailed({json.dumps(token)}, {json.dumps(message)})"
+                )
+                return
+
+            os.replace(temp_path, cache_path)
+            self._prune_video_cache(keep_path=cache_path)
+            self._video_js(
+                "videoConvertFinished("
+                f"{json.dumps(token)}, {json.dumps(cache_path)}, {json.dumps(source)})"
+            )
+        except Exception as error:
+            self._video_js(
+                f"videoConvertFailed({json.dumps(token)}, {json.dumps(str(error))})"
+            )
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+            if process is not None:
+                try:
+                    if process.poll() is None:
+                        process.kill()
+                except Exception:
+                    pass
+            self._video_conversion_process = None
+
+    def open_path_external(self, path):
+        try:
+            if not path or not os.path.exists(path):
+                return {"status": "error", "msg": "File not found."}
+            if os.name == "nt":
+                os.startfile(path)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+            return {"status": "success"}
+        except Exception as e:
+            return {"status": "error", "msg": str(e)}
+
     def open_cbz_archive(self, archive_path):
         archive_path = os.path.abspath(archive_path)
-        if not os.path.isfile(archive_path) or os.path.splitext(archive_path)[1].lower() != '.cbz':
-            return {"status": "error", "msg": "The selected file is not a CBZ archive."}
+        ext = os.path.splitext(archive_path)[1].lower()
+        if not os.path.isfile(archive_path) or ext not in ('.cbz', '.zip'):
+            return {"status": "error", "msg": "The selected file is not a CBZ or ZIP archive."}
 
         self._cleanup_cbz_archive()
         temp_dir = tempfile.TemporaryDirectory(prefix="XenoPlayer_cbz_")
@@ -1079,6 +1793,124 @@ class Api:
         self._cleanup_cbz_archive()
         self.load_selected_directory(parent_directory)
         return {"status": "success"}
+
+    def _collect_bundle_media(self, folder, extensions):
+        media = []
+        if self.settings.get("recursive_load", False):
+            for root, dirs, files in os.walk(folder):
+                dirs[:] = [d for d in dirs if not d.startswith('.')]
+                for name in files:
+                    if name.startswith('.'):
+                        continue
+                    if os.path.splitext(name)[1].lower() in extensions:
+                        media.append(os.path.join(root, name))
+        else:
+            try:
+                names = os.listdir(folder)
+            except OSError:
+                return []
+            for name in names:
+                path = os.path.join(folder, name)
+                if name.startswith('.') or not os.path.isfile(path):
+                    continue
+                if os.path.splitext(name)[1].lower() in extensions:
+                    media.append(path)
+        media.sort(key=lambda path: natural_sort_path_key(os.path.relpath(path, folder)))
+        return media
+
+    def _write_media_cbz(self, media_files, archive_path, compress):
+        # Flatten nested files into the archive root so they play even when
+        # recursive loading is disabled. Number every entry so chapter folders
+        # and duplicate page names keep their exact collected order.
+        entries = []
+        width = max(4, len(str(len(media_files))))
+        for index, media_file in enumerate(media_files, start=1):
+            name = os.path.basename(media_file)
+            arcname = f"{index:0{width}d}_{name}"
+            entries.append((media_file, arcname))
+
+        compression = zipfile.ZIP_DEFLATED if compress else zipfile.ZIP_STORED
+        temp_path = f"{archive_path}.part"
+        try:
+            with zipfile.ZipFile(
+                temp_path, "w", compression=compression, allowZip64=True
+            ) as archive:
+                for media_file, arcname in entries:
+                    archive.write(media_file, arcname=arcname)
+            os.replace(temp_path, archive_path)
+        except Exception:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+            raise
+        return len(entries)
+
+    def _create_media_cbz(self, kind):
+        if kind == "image":
+            extensions = IMAGE_BUNDLE_EXTS
+            bundle_label = "Image"
+            default_name = "ImageBundle"
+            empty_msg = ("No supported image files were found in that folder.\n\n"
+                         "Image CBZ bundles support JPG, JPEG, PNG, WebP, and GIF.")
+            compress = True
+        else:
+            extensions = VIDEO_BUNDLE_EXTS
+            bundle_label = "Video"
+            default_name = "VideoBundle"
+            empty_msg = ("No playable video files were found in that folder.\n\n"
+                         "Video CBZ bundles support MP4, WebM, and OGG clips.")
+            compress = False
+
+        last_dir = self.settings.get("last_opened_dir") or self._current_directory
+        if not last_dir or not os.path.isdir(last_dir):
+            last_dir = os.path.expanduser("~")
+
+        result = self._window.create_file_dialog(webview.FileDialog.FOLDER, directory=last_dir)
+        if not result:
+            return {"status": "cancelled"}
+        folder = result[0] if isinstance(result, (list, tuple)) else result
+        folder = os.path.abspath(folder)
+
+        media_files = self._collect_bundle_media(folder, extensions)
+        if not media_files:
+            return {"status": "error", "msg": empty_msg}
+
+        bundle_name = os.path.basename(os.path.normpath(folder)) or default_name
+        save_result = self._window.create_file_dialog(
+            webview.FileDialog.SAVE,
+            directory=folder,
+            save_filename=f"{bundle_name}.cbz",
+            file_types=('Comic Book Archive (*.cbz)', 'All files (*.*)')
+        )
+        if not save_result:
+            return {"status": "cancelled"}
+        archive_path = save_result[0] if isinstance(save_result, (list, tuple)) else save_result
+        archive_path = os.path.abspath(archive_path)
+        if not archive_path.lower().endswith('.cbz'):
+            archive_path += '.cbz'
+
+        try:
+            count = self._write_media_cbz(media_files, archive_path, compress)
+        except Exception as e:
+            return {"status": "error", "msg": f"Could not create the CBZ: {e}"}
+
+        self.settings["last_opened_dir"] = folder
+        save_settings(self.settings)
+        return {
+            "status": "success",
+            "path": archive_path,
+            "count": count,
+            "folder": folder,
+            "kind": kind,
+            "label": bundle_label
+        }
+
+    def create_image_cbz(self):
+        return self._create_media_cbz("image")
+
+    def create_video_cbz(self):
+        return self._create_media_cbz("video")
 
     def refresh_current_directory(self):
         current_path = self.playlist[self.current_index] if (0 <= self.current_index < len(self.playlist)) else None
@@ -1223,7 +2055,10 @@ class Api:
             "playlist_sort": self.settings.get("playlist_sort", "name"),
             "sort_asc": self.settings.get("sort_asc", True),
             "view_mode": self.settings.get("view_mode", "medium"),
-            "gemini_api_key": self.settings.get("gemini_api_key", "")
+            "gemini_api_key": self.settings.get("gemini_api_key", ""),
+            "story_tts_engine": self.settings.get("story_tts_engine", "edge"),
+            "story_tts_voice": self.settings.get("story_tts_voice", "en-US-AriaNeural"),
+            "story_tts_rate": self.settings.get("story_tts_rate", 1.0)
         }
 
         return state
@@ -1242,7 +2077,7 @@ class Api:
         self.settings["story_sites"] = story_sites
         save_settings(self.settings)
         try:
-            src_path = os.path.join(app_dir, 'MAINLIST.json')
+            src_path = os.path.join(APP_PWD, 'MAINLIST.json')
             with open(src_path, 'w', encoding='utf-8') as f:
                 json.dump({
                     "collection_sites": collection_sites,
@@ -1257,7 +2092,7 @@ class Api:
         try:
             result = self._window.create_file_dialog(
                 webview.FileDialog.SAVE,
-                directory=os.path.expanduser('~'),
+                directory=APP_PWD,
                 save_filename='MAINLIST.json',
                 file_types=('JSON Files (*.json)', 'All files (*.*)')
             )
@@ -1278,7 +2113,7 @@ class Api:
         try:
             result = self._window.create_file_dialog(
                 webview.FileDialog.OPEN,
-                directory=os.path.expanduser('~'),
+                directory=APP_PWD,
                 allow_multiple=False,
                 file_types=('JSON Files (*.json)', 'All files (*.*)')
             )
@@ -1306,7 +2141,7 @@ class Api:
             dirs = [{"name": d.get("href","").rstrip('/'), "href": d.get("href",""), "files": d.get("tags",{}).get(".files",0), "sz": d.get("sz",0)} for d in data.get("dirs", [])]
             image_exts = {'.jpg','.jpeg','.png','.webp','.gif','.bmp','.tiff','.avif'}
             video_exts = {'.mp4','.webm','.ogg','.mkv','.avi','.mov','.flv','.wmv','.m4v','.ts'}
-            audio_exts = {'.mp3','.wav','.wave','.flac','.aac','.ogg','.m4a','.opus','.wma'}
+            audio_exts = {'.mp3','.wav','.wave','.flac','.aac','.ogg','.oga','.m4a','.m4b','.opus','.wma'}
             archive_exts = {'.zip','.rar','.7z','.tar','.gz','.cbz','.cbr','.cb7'}
             manga_exts = {'.cbz','.cbr','.cb7','.cbt'}
             doc_exts = {'.pdf','.txt','.md','.epub','.mobi'}
@@ -1363,7 +2198,7 @@ class Api:
                 cbz_files.extend(
                     os.path.normpath(os.path.join(root, name))
                     for name in files
-                    if os.path.splitext(name)[1].lower() == '.cbz'
+                    if os.path.splitext(name)[1].lower() in ('.cbz', '.zip')
                 )
         except:
             pass
@@ -1586,6 +2421,15 @@ class Api:
             self._write_collection_meta(sidecar, meta)
         except Exception as e:
             return {"status": "error", "msg": str(e)}
+        try:
+            archive_dirs = self.settings.get("known_collection_archive_dirs", [])
+            parent_dir = os.path.dirname(final_path)
+            if parent_dir and parent_dir not in archive_dirs:
+                archive_dirs.append(parent_dir)
+                self.settings["known_collection_archive_dirs"] = archive_dirs
+                save_settings(self.settings)
+        except Exception:
+            pass
         return self.get_state()
 
     def unmark_as_collection(self, path=None):
@@ -1658,168 +2502,523 @@ class Api:
         except Exception as e: return {"status": "error", "msg": str(e)}
 
     def play_online_playlist(self, tracks, start_index=0):
-        # tracks is a list of {"name": name, "url": url}
-        self.playlist = [t["url"] for t in tracks]
-        self.online_names = {t["url"]: t["name"] for t in tracks}
-        self.current_index = start_index
-        self.filter_mode = "all"
-        self._window.evaluate_js('updatePlaylist()')
-        self.play_current()
-        return {"status": "ok"}
+        # Online audio URLs often have no file extension (for example
+        # /media/12345), so the main media player cannot tell they are audio.
+        # Use the dedicated top audio bar instead of guessing from extensions.
+        try:
+            safe_tracks = [
+                {
+                    "name": track.get("name") or "Audio track",
+                    "url": track.get("url") or "",
+                }
+                for track in (tracks or [])
+                if track.get("url")
+            ]
+            if not safe_tracks:
+                return {"status": "error", "msg": "This playlist has no playable tracks."}
+            start_index = max(0, min(int(start_index or 0), len(safe_tracks) - 1))
+            self._window.evaluate_js(
+                f"playTopAudio({json.dumps(safe_tracks)}, {start_index}); null;"
+            )
+            return {"status": "ok"}
+        except Exception as e:
+            return {"status": "error", "msg": str(e)}
 
     def save_online_playlists(self, playlists):
         self.settings["online_playlists"] = playlists
         save_settings(self.settings)
         return self.get_state()
 
-    def download_online_track(self, url, name):
+    def _audio_filename_from_response(self, response, url, name):
+        """Choose a safe filename using Content-Disposition, URL, or MIME type."""
+        import re
+        import urllib.parse
+
+        disposition = response.headers.get("content-disposition", "") or ""
+        match = re.search(r"filename\*?=(?:UTF-8'')?\"?([^\";]+)\"?", disposition, re.I)
+        source_name = urllib.parse.unquote(match.group(1).strip()) if match else ""
+        if not source_name:
+            source_name = os.path.basename(urllib.parse.urlsplit(url).path)
+
+        _, ext = os.path.splitext(os.path.basename(source_name))
+        if not ext:
+            content_type = (response.headers.get("content-type") or "").split(";")[0].strip().lower()
+            ext = {
+                "audio/mp4": ".m4a", "audio/x-m4a": ".m4a", "audio/mpeg": ".mp3",
+                "audio/ogg": ".ogg", "audio/wav": ".wav", "audio/x-wav": ".wav",
+                "audio/webm": ".webm", "audio/flac": ".flac", "audio/aac": ".aac",
+                "audio/opus": ".opus", "video/mp4": ".mp4",
+            }.get(content_type, ".mp3")
+
+        # Prefer the readable track title over the server's internal filename.
+        stem = clean_filename(name)[:150].strip()
+        if not stem or stem.lower() in ("audio", "audio track", "track", "unknown"):
+            disposition_stem = os.path.splitext(os.path.basename(source_name))[0]
+            stem = clean_filename(disposition_stem)[:150].strip() or "audio"
+        return f"{stem}{ext.lower()}"
+
+    def download_online_track(self, url, name, download_url=None):
         try:
             import requests
-            import string
-            
-            # Find the active folder directory
+            import urllib.parse
+
+            if not url:
+                return {"status": "error", "msg": "No track URL provided."}
+            download_url = (download_url or url).strip()
+            name = (name or "audio").strip() or "audio"
+
+            # Prefer the folder containing the current local media. Otherwise
+            # use the remembered audio download folder, or ask once.
+            active_dir = ""
             if self.playlist and 0 <= self.current_index < len(self.playlist):
                 active_path = self.playlist[self.current_index]
-                if active_path.startswith('http://') or active_path.startswith('https://'):
-                    dir_path = self.settings.get("last_opened_dir", "")
-                else:
-                    dir_path = os.path.dirname(active_path)
-            else:
-                dir_path = self.settings.get("last_opened_dir", "")
-                
-            if not dir_path or not os.path.exists(dir_path):
-                return {"status": "error", "msg": "No active folder loaded. Load a folder first."}
-                
-            parsed_url = urllib.parse.urlparse(url)
-            ext = os.path.splitext(parsed_url.path)[1].lower()
-            if not ext:
-                ext = ".mp3"
-                
-            cleaned_name = clean_filename(name)
-            filename = f"{cleaned_name}{ext}"
-            dest_path = os.path.join(dir_path, filename)
-            
+                if not active_path.startswith(("http://", "https://")):
+                    candidate = os.path.dirname(active_path)
+                    if os.path.isdir(candidate):
+                        active_dir = candidate
+            dir_path = active_dir or self.settings.get("audio_download_dir", "")
+            if not dir_path or not os.path.isdir(dir_path):
+                last_dir = self.settings.get("last_opened_dir") or APP_PWD
+                if not os.path.isdir(last_dir):
+                    last_dir = APP_PWD
+                result = self._window.create_file_dialog(
+                    webview.FileDialog.FOLDER, directory=last_dir
+                )
+                if not result:
+                    return {"status": "cancelled"}
+                dir_path = result[0] if isinstance(result, (list, tuple)) else result
+                dir_path = os.path.abspath(dir_path)
+                self.settings["audio_download_dir"] = dir_path
+                save_settings(self.settings)
+
             def run_download():
-                self.cancel_flags[name] = False
-                safe_title = name.replace('\\', '\\\\').replace('"', '\\"')
+                headers = {
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/124.0.0.0 Safari/537.36"
+                    ),
+                    "Accept": "*/*",
+                }
+                parsed = urllib.parse.urlsplit(download_url)
+                if parsed.scheme and parsed.netloc:
+                    headers["Referer"] = f"{parsed.scheme}://{parsed.netloc}/"
+
+                temp_path = ""
                 try:
-                    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-                    r = requests.get(url, headers=headers, stream=True, timeout=30)
-                    if r.status_code == 200:
-                        total_size = int(r.headers.get('content-length', 0))
+                    self.cancel_flags[name] = False
+                    with requests.get(
+                        download_url, headers=headers, stream=True,
+                        timeout=30, allow_redirects=True,
+                    ) as response:
+                        if response.status_code != 200:
+                            raise Exception(f"HTTP {response.status_code}")
+
+                        content_type = (
+                            response.headers.get("content-type") or ""
+                        ).split(";")[0].strip().lower()
+                        if content_type in ("text/html", "application/json"):
+                            raise Exception(
+                                "The site returned a web page instead of an audio file"
+                            )
+
+                        filename = self._audio_filename_from_response(
+                            response, download_url, name
+                        )
+                        destination = os.path.join(dir_path, filename)
+                        stem, ext = os.path.splitext(destination)
+                        counter = 2
+                        while os.path.exists(destination):
+                            destination = f"{stem} ({counter}){ext}"
+                            counter += 1
+                        temp_path = destination + ".part"
+
+                        total_size = int(response.headers.get("content-length", 0) or 0)
                         downloaded_size = 0
                         last_reported = 0
-                        with open(dest_path, 'wb') as f:
-                            for chunk in r.iter_content(chunk_size=8192):
+                        with open(temp_path, "wb") as out_file:
+                            for chunk in response.iter_content(chunk_size=65536):
                                 if self.cancel_flags.get(name):
                                     raise Exception("Cancelled by user")
-                                if chunk:
-                                    f.write(chunk)
-                                    downloaded_size += len(chunk)
-                                    if downloaded_size - last_reported > 1024 * 250:
-                                        last_reported = downloaded_size
-                                        self._window.evaluate_js(f'updateAudioDownloadProgress({downloaded_size}, {total_size}, "{safe_title}")')
-                                        self._window.evaluate_js(f'updateAudioDownloadProgress({downloaded_size}, {total_size}, {json.dumps(name)})')
-                        self.load_directory(dest_path)
-                        self._log_download(name, dest_path, "audio")
-                        self._window.evaluate_js(f'downloadCompleteNotify("{safe_title}")')
-                        self._window.evaluate_js(f'downloadCompleteNotify({json.dumps(name)})')
-                    else:
-                        self._window.evaluate_js(f'downloadFailedNotify("{safe_title}", "HTTP {r.status_code}")')
-                        self._window.evaluate_js(f'downloadFailedNotify({json.dumps(name)}, "HTTP {r.status_code}")')
-                except Exception as ex:
-                    safe_ex = str(ex).replace('\\', '\\\\').replace('"', '\\"')
-                    self._window.evaluate_js(f'downloadFailedNotify("{safe_title}", "{safe_ex}")')
-                    self._window.evaluate_js(f'downloadFailedNotify({json.dumps(name)}, {json.dumps(str(ex))})')
-                    
+                                if not chunk:
+                                    continue
+                                out_file.write(chunk)
+                                downloaded_size += len(chunk)
+                                if downloaded_size - last_reported > 250 * 1024:
+                                    last_reported = downloaded_size
+                                    self._window.evaluate_js(
+                                        "updateAudioDownloadProgress("
+                                        f"{downloaded_size}, {total_size}, "
+                                        f"{json.dumps(name)})"
+                                    )
+
+                    if not temp_path or not os.path.exists(temp_path):
+                        raise Exception("Download produced no file")
+                    os.replace(temp_path, destination)
+                    try:
+                        self._log_download(name, destination, "audio")
+                    except Exception:
+                        pass
+                    self._window.evaluate_js(
+                        f"downloadCompleteNotify({json.dumps(name)})"
+                    )
+                    try:
+                        self.load_directory(destination)
+                    except Exception:
+                        pass
+                except Exception as error:
+                    if temp_path and os.path.exists(temp_path):
+                        try:
+                            os.remove(temp_path)
+                        except OSError:
+                            pass
+                    try:
+                        self._window.evaluate_js(
+                            f"downloadFailedNotify({json.dumps(name)}, "
+                            f"{json.dumps(str(error))})"
+                        )
+                    except Exception:
+                        pass
+
             threading.Thread(target=run_download, daemon=True).start()
             return {"status": "started"}
         except Exception as e:
             return {"status": "error", "msg": str(e)}
+
+    def _audio_track_title(self, soup, page_url, fallback):
+        import re
+
+        def clean(text):
+            text = re.sub(r"\s+", " ", (text or "")).strip()
+            text = re.sub(r"^Post\s*#\d+\s*[·\-]\s*", "", text, flags=re.I)
+            text = re.sub(r"\s*[-·]\s*Liltsome\s*$", "", text, flags=re.I)
+            return text.strip()
+
+        for selector in (
+            "h1.audio-player-title", "h1.post-title", "article h1",
+            "main h1", "h1",
+        ):
+            element = soup.select_one(selector)
+            if element is None:
+                continue
+            text = clean(element.get_text(" ", strip=True))
+            if text and not re.fullmatch(r"Post\s*#\d+", text, flags=re.I):
+                return text
+
+        meta = soup.find("meta", attrs={"property": "og:title"})
+        if meta and meta.get("content"):
+            text = clean(meta["content"])
+            if text:
+                return text
+        if soup.title and soup.title.string:
+            text = clean(soup.title.string)
+            if text:
+                return text
+        return clean(fallback) or "Audio track"
+
+    def _audio_track_artist(self, soup):
+        for selector in (
+            ".audio-tile-artist", "[class*='artist']", "[rel='author']",
+            "meta[name='author']",
+        ):
+            element = soup.select_one(selector)
+            if element is None:
+                continue
+            value = element.get("content") if element.name == "meta" else element.get_text(" ", strip=True)
+            value = re.sub(r"^(?:by|artist)\s*[:\-]?\s*", "", (value or "").strip(), flags=re.I)
+            value = value.strip()
+            if value and len(value) <= 120:
+                return value
+        return ""
+
+    def _audio_tracks_from_page(self, soup, page_url, fallback_name):
+        import re
+        import urllib.parse
+
+        media_urls = []
+        labels = {}
+
+        def add_media(source, label=""):
+            if not source:
+                return
+            source = source.strip()
+            if source.startswith(("data:", "blob:", "javascript:", "#")):
+                return
+            abs_url = urllib.parse.urljoin(page_url, source)
+            media_urls.append(abs_url)
+            label = (label or "").strip()
+            if label:
+                labels.setdefault(abs_url, label)
+
+        for audio in soup.find_all("audio"):
+            label = audio.get("title") or audio.get("aria-label") or ""
+            label = re.sub(r"^Play\s+", "", label, flags=re.I).strip()
+            if label.lower() in ("play", "audio", "audio player"):
+                label = ""
+            if audio.get("src"):
+                add_media(audio["src"], label)
+            for source in audio.find_all("source", src=True):
+                add_media(source["src"], label)
+        for meta in soup.find_all("meta"):
+            prop = (meta.get("property") or meta.get("name") or "").lower()
+            if prop in ("og:audio", "og:audio:url", "twitter:player:stream"):
+                add_media(meta.get("content"))
+        for anchor in soup.find_all("a", href=True):
+            href = anchor["href"]
+            ext = os.path.splitext(urllib.parse.urlsplit(href).path)[1].lower()
+            if ext in AUDIO_BUNDLE_EXTS:
+                label = anchor.get_text(" ", strip=True)
+                if not label:
+                    label = urllib.parse.unquote(
+                        os.path.basename(urllib.parse.urlsplit(href).path)
+                    )
+                add_media(href, label)
+
+        download_url = ""
+        for anchor in soup.find_all("a", href=True):
+            text = anchor.get_text(" ", strip=True).lower()
+            href = anchor["href"]
+            if href.lower().startswith(("javascript:", "#")):
+                continue
+            if "download" in text or re.search(r"/download(?:[/?#]|$)", href, re.I):
+                download_url = urllib.parse.urljoin(page_url, href)
+                break
+
+        title = self._audio_track_title(soup, page_url, fallback_name)
+        artist = self._audio_track_artist(soup)
+        tracks = []
+        seen = set()
+        for index, media_url in enumerate(media_urls):
+            if media_url in seen:
+                continue
+            seen.add(media_url)
+            specific_label = labels.get(media_url, "")
+            if specific_label:
+                name = specific_label
+            else:
+                name = title
+                if len(media_urls) > 1:
+                    name = f"{title} ({index + 1})"
+            if artist and artist.lower() not in name.lower():
+                name = f"{artist} - {name}"
+            tracks.append({
+                "name": name,
+                "url": media_url,
+                "download_url": download_url or media_url,
+                "source_url": page_url,
+                "artist": artist,
+            })
+        return tracks
+
+    def _audio_detail_links(self, soup, base_url, limit=30):
+        import urllib.parse
+
+        base_host = urllib.parse.urlsplit(base_url).netloc.lower()
+        links = []
+        seen = set()
+
+        def add(href):
+            if not href or href.startswith(("javascript:", "#", "mailto:")):
+                return False
+            abs_url = urllib.parse.urljoin(base_url, href)
+            parts = urllib.parse.urlsplit(abs_url)
+            if parts.scheme not in ("http", "https"):
+                return False
+            if parts.netloc.lower() != base_host:
+                return False
+            path = parts.path.lower()
+            if any(path.startswith(prefix) for prefix in (
+                "/login", "/register", "/tags", "/users", "/preferences",
+                "/news", "/support", "/search-help", "/filters", "/blacklist",
+            )):
+                return False
+            normalized = urllib.parse.urlunsplit(
+                (parts.scheme, parts.netloc, parts.path, parts.query, "")
+            )
+            if normalized in seen:
+                return False
+            seen.add(normalized)
+            links.append(abs_url)
+            return True
+
+        selectors = (
+            "a.post-card-link[href]",
+            "a[href*='/post/']",
+            "a[href*='/posts/']",
+            "a[href*='/track/']",
+            "a[href*='/audio/']",
+            "a[href*='/episode/']",
+            "a[href*='/view/']",
+        )
+        for selector in selectors:
+            for anchor in soup.select(selector):
+                add(anchor.get("href"))
+                if len(links) >= limit:
+                    return links[:limit]
+
+        if len(links) < limit:
+            for anchor in soup.find_all("a", href=True):
+                classes = " ".join(anchor.get("class") or []).lower()
+                if any(token in classes for token in (
+                    "post-card-link", "card-link", "title-link", "thumb-link",
+                )):
+                    add(anchor.get("href"))
+                    if len(links) >= limit:
+                        break
+        return links[:limit]
 
     def scrape_audio_links(self, url):
         try:
             import requests
             from bs4 import BeautifulSoup
             import urllib.parse
-            
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-            
-            # Special JSON scraper for Liltsome
-            if "liltsome.yerf.org" in url:
-                json_url = urllib.parse.urljoin(url, "/data/library.json")
-                try:
-                    r = requests.get(json_url, headers=headers, timeout=10)
-                    if r.status_code == 200:
-                        data = r.json()
-                        tracks = []
-                        for artist in data.get("artists", []):
-                            artist_name = artist.get("name", "Unknown Artist")
-                            audio_files = artist.get("files", {}).get("audio", [])
-                            for file in audio_files:
-                                file_path = file.get("path", "")
-                                if file_path:
-                                    # Encode path components but keep directory separators
-                                    encoded_path = urllib.parse.quote(file_path).replace('%2F', '/')
-                                    track_url = urllib.parse.urljoin(url, f"audio_files/{encoded_path}")
-                                    track_title = file.get("title", file.get("filename", "Unknown"))
-                                    tracks.append({
-                                        "name": f"{artist_name} - {track_title}",
-                                        "url": track_url
-                                    })
-                        if tracks:
-                            return {"status": "success", "tracks": tracks}
-                except Exception as ex:
-                    pass
 
+            url = (url or "").strip()
+            if not url:
+                return {"status": "error", "msg": "No audio site URL provided."}
+            if "://" not in url:
+                url = "https://" + url
+
+            headers = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            }
+
+            response = None
             try:
                 import cloudscraper
-                scraper = cloudscraper.create_scraper()
-                response = scraper.get(url, headers=headers, timeout=10)
-            except:
-                response = requests.get(url, headers=headers, timeout=10)
-                
+                response = cloudscraper.create_scraper().get(
+                    url, headers=headers, timeout=20
+                )
+            except Exception:
+                response = None
+            if response is None or response.status_code != 200:
+                try:
+                    response = requests.get(url, headers=headers, timeout=20)
+                except Exception as error:
+                    return {"status": "error", "msg": f"Could not load audio site: {error}"}
             if response.status_code != 200:
-                return {"status": "error", "msg": f"Failed to load page: HTTP {response.status_code}"}
-                
-            soup = BeautifulSoup(response.text, 'html.parser')
-            tracks = []
-            supported_exts = {'.mp3', '.wav', '.ogg', '.m4a', '.mp4', '.webm'}
-            
-            for a in soup.find_all('a', href=True):
-                href = a['href']
-                parsed_href = urllib.parse.urlparse(href)
-                path = parsed_href.path
-                ext = os.path.splitext(path)[1].lower()
-                
-                if ext in supported_exts:
-                    abs_url = urllib.parse.urljoin(url, href)
-                    text = a.text.strip()
-                    if not text:
-                        text = urllib.parse.unquote(os.path.basename(path))
-                    tracks.append({"name": text, "url": abs_url})
-            
+                return {
+                    "status": "error",
+                    "msg": f"Failed to load page: HTTP {response.status_code}",
+                }
+
+            soup = BeautifulSoup(response.text, "html.parser")
+            tracks = self._audio_tracks_from_page(soup, url, "Audio track")
+
+            # Directory-style audio sites often put the actual player on a
+            # detail/post page rather than the listing page.
             if not tracks:
-                for audio in soup.find_all(['audio', 'video']):
-                    src = audio.get('src')
-                    if src:
-                        abs_url = urllib.parse.urljoin(url, src)
-                        name = urllib.parse.unquote(os.path.basename(urllib.parse.urlparse(abs_url).path))
-                        tracks.append({"name": name, "url": abs_url})
-                    for source in audio.find_all('source', src=True):
-                        src = source['src']
-                        abs_url = urllib.parse.urljoin(url, src)
-                        name = urllib.parse.unquote(os.path.basename(urllib.parse.urlparse(abs_url).path))
-                        tracks.append({"name": name, "url": abs_url})
-            
+                detail_links = self._audio_detail_links(soup, url)
+                if detail_links:
+                    from concurrent.futures import ThreadPoolExecutor
+
+                    def fetch_detail(link):
+                        try:
+                            detail = requests.get(
+                                link, headers=headers, timeout=15,
+                                allow_redirects=True,
+                            )
+                            if detail.status_code == 200:
+                                return link, BeautifulSoup(detail.text, "html.parser")
+                        except Exception:
+                            pass
+                        return link, None
+
+                    with ThreadPoolExecutor(max_workers=8) as pool:
+                        for link, detail_soup in pool.map(fetch_detail, detail_links):
+                            if detail_soup is None:
+                                continue
+                            fallback = urllib.parse.unquote(
+                                os.path.basename(urllib.parse.urlsplit(link).path)
+                            ) or "Audio track"
+                            tracks.extend(
+                                self._audio_tracks_from_page(
+                                    detail_soup, link, fallback
+                                )
+                            )
+
             seen = set()
             unique_tracks = []
-            for t in tracks:
-                if t["url"] not in seen:
-                    seen.add(t["url"])
-                    unique_tracks.append(t)
-                    
+            for track in tracks:
+                media_url = track.get("url")
+                if not media_url or media_url in seen:
+                    continue
+                seen.add(media_url)
+                unique_tracks.append(track)
             return {"status": "success", "tracks": unique_tracks}
+        except Exception as e:
+            return {"status": "error", "msg": str(e)}
+
+    @staticmethod
+    def _audio_search_url(url, query):
+        import urllib.parse
+
+        parts = urllib.parse.urlsplit(url)
+        pairs = [
+            (key, value) for key, value in
+            urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+            if key.lower() not in ("q", "query", "search", "keywords", "term")
+        ]
+        pairs.append(("q", query))
+        return urllib.parse.urlunsplit((
+            parts.scheme, parts.netloc, parts.path,
+            urllib.parse.urlencode(pairs), parts.fragment,
+        ))
+
+    def search_audio_site(self, url, query):
+        try:
+            import urllib.parse
+
+            query = (query or "").strip()
+            if not query:
+                return self.scrape_audio_links(url)
+
+            base = (url or "").strip()
+            if not base:
+                return {"status": "error", "msg": "No audio site URL provided."}
+            if "://" not in base:
+                base = "https://" + base
+            parsed_base = urllib.parse.urlsplit(base)
+
+            configured_search = ""
+            for site in self.settings.get("audio_sites", []) or []:
+                domain = (site.get("domain") or "").strip()
+                if not domain:
+                    continue
+                if "://" not in domain:
+                    domain = "https://" + domain
+                if urllib.parse.urlsplit(domain).netloc.lower() != parsed_base.netloc.lower():
+                    continue
+                notes = (site.get("notes") or "").strip()
+                if notes.startswith("{") and notes.endswith("}"):
+                    try:
+                        config = json.loads(notes)
+                        configured_search = (config.get("search_url") or "").strip()
+                    except Exception:
+                        pass
+                break
+
+            if configured_search:
+                if "{query}" in configured_search:
+                    search_url = configured_search.replace(
+                        "{query}", urllib.parse.quote(query, safe="")
+                    )
+                else:
+                    search_url = self._audio_search_url(configured_search, query)
+            else:
+                search_url = self._audio_search_url(base, query)
+
+            result = self.scrape_audio_links(search_url)
+            if isinstance(result, dict):
+                result["search_url"] = search_url
+                result["query"] = query
+            return result
         except Exception as e:
             return {"status": "error", "msg": str(e)}
 
@@ -1838,15 +3037,122 @@ class Api:
         except Exception as e:
             return {"status": "error", "msg": str(e)}
 
-    def search_online_stories(self, source_id, query):
-        # Find the site config from settings
+    def _search_nifty(self, query, config):
         try:
-            src_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'MAINLIST.json')
-            with open(src_path, 'r', encoding='utf-8') as f:
-                sources = json.load(f)
-                all_sites = sources.get("story_sites", [])
-        except Exception:
-            all_sites = []
+            import re
+            import requests
+            import urllib.parse
+            from bs4 import BeautifulSoup
+
+            listing_url = (
+                config.get("search_url") or "https://www.nifty.org/nifty/"
+            ).strip()
+            if "nifty.org" not in listing_url:
+                listing_url = "https://www.nifty.org/nifty/"
+            if not listing_url.endswith("/"):
+                listing_url += "/"
+
+            headers = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            }
+
+            response = None
+            try:
+                import cloudscraper
+                response = cloudscraper.create_scraper().get(
+                    listing_url, headers=headers, timeout=20
+                )
+            except Exception:
+                response = None
+            if response is None or response.status_code != 200:
+                response = requests.get(listing_url, headers=headers, timeout=20)
+            if response.status_code != 200:
+                return {
+                    "status": "error",
+                    "msg": f"Nifty returned HTTP {response.status_code}.",
+                }
+
+            soup = BeautifulSoup(response.text, "html.parser")
+            table = soup.find("table")
+            if table is None:
+                return {
+                    "status": "error",
+                    "msg": "Could not find the Nifty story listing.",
+                }
+
+            results = []
+            seen = set()
+            for row in table.find_all("tr")[1:]:
+                anchor = row.find("a", href=True)
+                if anchor is None:
+                    continue
+                href = anchor["href"].strip()
+                label = anchor.get_text(" ", strip=True).strip()
+                if not href or href.startswith(("#", "mailto:", "javascript:")):
+                    continue
+                if label.endswith("/") or href.split("?")[0].endswith("/"):
+                    continue
+                cells = [
+                    cell.get_text(" ", strip=True) for cell in row.find_all("td")
+                ]
+                if cells and cells[0].lower() == "dir":
+                    continue
+                full_url = urllib.parse.urljoin(listing_url, href)
+                if full_url in seen:
+                    continue
+                seen.add(full_url)
+
+                display = urllib.parse.unquote(label)
+                display = display.replace("-", " ").replace("_", " ").strip()
+                display = re.sub(r"\s+", " ", display)
+                display = " ".join(word.capitalize() for word in display.split())
+                if not display:
+                    display = os.path.basename(
+                        urllib.parse.urlsplit(full_url).path
+                    ) or "Nifty story"
+                summary = f"{cells[0]} · {cells[1]}" if len(cells) >= 3 else ""
+                results.append({
+                    "title": display,
+                    "author": "",
+                    "summary": summary,
+                    "url": full_url,
+                })
+
+            query_norm = (query or "").strip().lower()
+            if query_norm:
+                matches = [
+                    item for item in results
+                    if all(
+                        token in item["title"].lower()
+                        for token in query_norm.split()
+                    )
+                ]
+                if matches:
+                    results = matches
+            return {"status": "success", "results": results[:100]}
+        except Exception as e:
+            return {"status": "error", "msg": str(e)}
+
+    def search_online_stories(self, source_id, query):
+        # Find the site config from settings. save_online_sources() updates both
+        # settings and MAINLIST.json, but in a frozen build __file__ points at
+        # the bundled copy, so settings is the reliable source at runtime.
+        all_sites = self.settings.get("story_sites") or []
+        if not all_sites:
+            try:
+                src_path = find_app_data_file('MAINLIST.json')
+                if src_path:
+                    with open(src_path, 'r', encoding='utf-8') as f:
+                        sources = json.load(f)
+                        all_sites = sources.get("story_sites", [])
+            except Exception:
+                all_sites = []
  
         site_config = next((s for s in all_sites if s.get('id') == source_id), None)
  
@@ -1863,12 +3169,599 @@ class Api:
 
         parser_type = search_config.get('parser')
 
+        site_id = (site_config.get('id') or '').lower()
+        site_domain = (site_config.get('domain') or '').lower()
+        site_name = (site_config.get('name') or '').lower()
+        if site_id == 'nifty' or 'nifty.org' in site_domain or 'nifty' in site_name:
+            return self._search_nifty(query, search_config)
+
         if parser_type == 'ao3':
             return self._search_ao3(query)
         elif parser_type == 'generic_html':
             return self._search_generic_html(query, search_config)
         
         return {"status": "error", "msg": "Search not configured for this source. Edit its 'notes' in MAINLIST.json."}
+
+    def _story_page_title(self, soup):
+        import re
+
+        def clean(text):
+            text = re.sub(r"\s+", " ", (text or "")).strip()
+            text = re.sub(r"\s*\|\s*Archive of Our Own\s*$", "", text, flags=re.I)
+            return text
+
+        def acceptable(text):
+            low = text.lower().strip()
+            if len(low) < 2:
+                return False
+            if low in ("stories", "story", "online stories", "home", "index"):
+                return False
+            if re.fullmatch(r"[a-z0-9.-]+\.(com|org|net|info|us|co\.uk|io)", low):
+                return False
+            return True
+
+        for selector in (
+            'meta[property="og:title"]',
+            "h1.story-title", "h1.title", "h2.story-title", "h2.title",
+            ".story-title", "h1", "h2",
+        ):
+            element = soup.select_one(selector)
+            if element is None:
+                continue
+            text = element.get("content") if element.name == "meta" else element.get_text(" ", strip=True)
+            text = clean(text)
+            if acceptable(text):
+                return text
+        return ""
+
+    def _story_page_author(self, soup):
+        import re
+
+        for selector in (
+            'meta[name="author"]',
+            'a[rel="author"]',
+            "h3.byline a", "h3.byline", ".byline a", ".byline",
+            '[class*="author"]',
+        ):
+            element = soup.select_one(selector)
+            if element is None:
+                continue
+            text = element.get("content") if element.name == "meta" else element.get_text(" ", strip=True)
+            text = re.sub(r"^(?:by|author)\s*[:\-]?\s*", "", (text or "").strip(), flags=re.I)
+            text = re.sub(r"\s+", " ", text).strip()
+            if text and len(text) <= 120:
+                return text
+        return ""
+
+    def _extract_story_paragraphs(self, soup):
+        import re
+
+        selectors = (
+            "#chapters .userstuff", "div.chapter .userstuff", ".userstuff",
+            ".story_center_panel", ".block_panel", ".storytext", "#storytext",
+            ".story-text", ".story-body", ".storybody", ".chapter-content",
+            ".chapterText", ".entry-content", ".post-content",
+            ".reading-content", ".text-content", "article", "main",
+            "#content", ".content", "pre",
+        )
+        candidates = []
+        seen_nodes = set()
+        for selector in selectors:
+            for node in soup.select(selector):
+                if id(node) in seen_nodes:
+                    continue
+                seen_nodes.add(id(node))
+                candidates.append(node)
+        if not candidates and soup.body:
+            candidates.append(soup.body)
+        if not candidates:
+            return []
+
+        def score(node):
+            text = node.get_text(" ", strip=True)
+            classes = (
+                " ".join(node.get("class") or []) + " " + (node.get("id") or "")
+            ).lower()
+            bonus = 0
+            if any(word in classes for word in ("story", "chapter", "text", "read", "content")):
+                bonus += 600
+            for bad in (
+                "nav", "menu", "comment", "footer", "sidebar", "header",
+                "share", "related", "breadcrumb",
+            ):
+                if bad in classes:
+                    bonus -= 2000
+            return len(text) + len(node.find_all("p")) * 80 + bonus
+
+        best = max(candidates, key=score)
+        if score(best) <= 0 and soup.body:
+            best = soup.body
+
+        chapter_nodes = soup.select("#chapters .userstuff, div.chapter .userstuff")
+        nodes = chapter_nodes if len(chapter_nodes) > 1 else [best]
+
+        paragraphs = []
+        seen_text = set()
+        total_chars = 0
+
+        def add(kind, text):
+            nonlocal total_chars
+            text = re.sub(r"[ \t]+", " ", (text or "")).strip()
+            if len(text) < 2 or text in seen_text:
+                return
+            seen_text.add(text)
+            paragraphs.append({"type": kind, "text": text})
+            total_chars += len(text)
+
+        for node in nodes:
+            blocks = node.find_all(["h1", "h2", "h3", "h4", "p", "li", "blockquote", "pre"])
+            if blocks:
+                for block in blocks:
+                    if block.name == "pre":
+                        text = block.get_text("\n", strip=True)
+                    else:
+                        text = block.get_text(" ", strip=True)
+                    if not text:
+                        continue
+                    if block.name in ("h1", "h2", "h3", "h4"):
+                        add(block.name, text)
+                    elif block.name == "li":
+                        add("li", "• " + text)
+                    elif block.name == "blockquote":
+                        add("blockquote", text)
+                    else:
+                        add("p", text)
+                    if total_chars > 400000:
+                        break
+            else:
+                raw = node.get_text("\n", strip=True)
+                for chunk in re.split(r"\n+", raw):
+                    add("p", chunk)
+                    if total_chars > 400000:
+                        break
+            if total_chars > 400000:
+                break
+
+        if len(paragraphs) == 1 and len(paragraphs[0]["text"]) > 1200:
+            raw = paragraphs[0]["text"]
+            paragraphs = []
+            seen_text.clear()
+            total_chars = 0
+            for chunk in re.split(r"(?<=[.!?])\s+", raw):
+                add("p", chunk)
+
+        # Strip rating/vote/comment/footer boilerplate that some story sites
+        # place inside the same container as the story text.
+        stop_pattern = re.compile(
+            r"^(?:vote list|please login or register|rated$|\d+\s*votes?$|"
+            r"times\s*\|$|copyright|back to|do you write|submit a text|"
+            r"contact us|bookmark|set us as your homepage|visit xnxx)", re.I
+        )
+        cut_at = len(paragraphs)
+        for index, paragraph in enumerate(paragraphs):
+            text = paragraph["text"].strip()
+            if stop_pattern.match(text):
+                cut_at = index
+                break
+            if re.fullmatch(r"\d{2,}", text):
+                nearby = " ".join(
+                    item["text"] for item in paragraphs[index:index + 4]
+                ).lower()
+                if "times" in nearby or "rated" in nearby or "votes" in nearby:
+                    cut_at = index
+                    break
+        paragraphs = paragraphs[:cut_at]
+
+        leading_noise = re.compile(
+            r"^(?:all chars are 18|do you write|back to|visit xnxx|bookmark|"
+            r"set us as your homepage|submit a text|contact us|copyright)", re.I
+        )
+        while paragraphs and leading_noise.match(paragraphs[0]["text"].strip()):
+            paragraphs.pop(0)
+        trailing_noise = re.compile(
+            r"^(?:read|next|previous|prev|back|home|comments?|share|report|"
+            r"favorite|favourite|rate|vote)$", re.I
+        )
+        while paragraphs and trailing_noise.match(paragraphs[-1]["text"].strip()):
+            paragraphs.pop()
+        while paragraphs and re.fullmatch(r"[\d\s|%]+", paragraphs[-1]["text"].strip()):
+            paragraphs.pop()
+        return paragraphs
+
+    def _parse_plain_story(self, text, url):
+        import re
+
+        raw = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+        lines = raw.split("\n")
+
+        subject = ""
+        body_start = 0
+        for index, line in enumerate(lines[:40]):
+            stripped = line.strip()
+            if not stripped:
+                body_start = index + 1
+                break
+            match = re.match(r"^Subject:\s*(.+)$", stripped, re.I)
+            if match:
+                subject = match.group(1).strip()
+
+        body_lines = lines[body_start:]
+        title = ""
+        if subject:
+            title = re.sub(r"\s*\([^)]*\)\s*$", "", subject).strip()
+
+        author = ""
+        title_index = None
+        author_index = None
+        if title:
+            for index, line in enumerate(body_lines):
+                if line.strip().lower() == title.lower():
+                    title_index = index
+                    break
+        for index, line in enumerate(body_lines):
+            match = re.match(r"^\s*By\s+(.+?)\s*$", line, re.I)
+            if match and (title_index is None or index >= title_index):
+                author = match.group(1).strip()
+                author_index = index
+                break
+
+        if title_index is not None:
+            start = title_index + 1
+            if author_index is not None and author_index >= start:
+                start = author_index + 1
+            while start < len(body_lines) and not body_lines[start].strip():
+                start += 1
+            if start < len(body_lines):
+                match = re.match(r"^\s*By\s+(.+?)\s*$", body_lines[start], re.I)
+                if match:
+                    author = match.group(1).strip()
+                    start += 1
+        elif author_index is not None:
+            start = author_index + 1
+        else:
+            start = 0
+            noise_start = re.compile(
+                r"^(?:date|from|subject|this story is a work of fiction|"
+                r"if this type of content|note:|remember to donate|"
+                r"please donate|donate\.nifty\.org|https?://|nifty\.org)",
+                re.I,
+            )
+            while start < len(body_lines):
+                stripped = body_lines[start].strip()
+                if not stripped or noise_start.match(stripped):
+                    start += 1
+                    continue
+                break
+
+        content = "\n".join(body_lines[start:])
+        noise = re.compile(
+            r"donate\.nifty\.org|Remember to donate|"
+            r"This story is a work of fiction|"
+            r"If this type of content offends|Please donate|Nifty\.org",
+            re.I,
+        )
+        paragraphs = []
+        for block in re.split(r"\n\s*\n", content):
+            paragraph = " ".join(
+                line.strip() for line in block.splitlines() if line.strip()
+            )
+            paragraph = re.sub(r"\s+", " ", paragraph).strip()
+            if not paragraph or noise.search(paragraph):
+                continue
+            paragraphs.append({"type": "p", "text": paragraph})
+
+        if len(paragraphs) <= 1 and content.strip():
+            paragraphs = []
+            for line in content.splitlines():
+                paragraph = line.strip()
+                if paragraph and not noise.search(paragraph):
+                    paragraphs.append({"type": "p", "text": paragraph})
+
+        if not title:
+            title = "Nifty Story"
+        return {
+            "title": title,
+            "author": author,
+            "paragraphs": paragraphs,
+            "text": "\n\n".join(p["text"] for p in paragraphs)[:400000],
+            "word_count": sum(len(p["text"].split()) for p in paragraphs),
+        }
+
+    def fetch_story_content(self, url):
+        try:
+            import re
+            import requests
+            import urllib.parse
+            from bs4 import BeautifulSoup
+
+            url = (url or "").strip()
+            if not url:
+                return {"status": "error", "msg": "No story URL provided."}
+            if "://" not in url:
+                url = "https://" + url
+
+            fetch_url = url
+            if "archiveofourown.org/works/" in url and "view_full_work" not in url:
+                fetch_url = url + ("&" if "?" in url else "?") + "view_full_work=true"
+
+            headers = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            }
+
+            response = None
+            try:
+                import cloudscraper
+                response = cloudscraper.create_scraper().get(
+                    fetch_url, headers=headers, timeout=20
+                )
+            except Exception:
+                response = None
+            if response is None or response.status_code != 200:
+                try:
+                    response = requests.get(fetch_url, headers=headers, timeout=20)
+                except Exception as error:
+                    return {
+                        "status": "error",
+                        "msg": f"Could not load the story: {error}",
+                    }
+            if response.status_code != 200:
+                return {
+                    "status": "error",
+                    "msg": f"The story site returned HTTP {response.status_code}.",
+                }
+
+            content_type = (response.headers.get("content-type") or "").lower()
+            raw_text = response.text or ""
+            if content_type.startswith("text/plain") or raw_text.lstrip().startswith(
+                ("Date:", "From:", "Subject:")
+            ):
+                plain = self._parse_plain_story(raw_text, url)
+                if plain and plain.get("paragraphs"):
+                    return {
+                        "status": "success",
+                        "url": url,
+                        "fetch_url": fetch_url,
+                        **plain,
+                    }
+
+            soup = BeautifulSoup(response.text, "html.parser")
+            for tag in soup([
+                "script", "style", "noscript", "svg", "nav", "header",
+                "footer", "aside", "form", "iframe", "button", "input",
+                "select", "textarea",
+            ]):
+                tag.decompose()
+
+            title = self._story_page_title(soup)
+            author = self._story_page_author(soup)
+            if title and not author and "sexstories.com" in url:
+                match = re.match(r"^(.*?)\s+by\s+(.+)$", title, flags=re.I)
+                if match:
+                    title = match.group(1).strip()
+                    author = match.group(2).strip()
+
+            paragraphs = self._extract_story_paragraphs(soup)
+            if not paragraphs:
+                return {
+                    "status": "error",
+                    "msg": (
+                        "Could not find readable story text on that page. "
+                        "Open it in your browser instead."
+                    ),
+                }
+
+            text = "\n\n".join(paragraph["text"] for paragraph in paragraphs)
+            return {
+                "status": "success",
+                "url": url,
+                "fetch_url": fetch_url,
+                "title": title,
+                "author": author,
+                "paragraphs": paragraphs,
+                "text": text[:400000],
+                "word_count": len(text.split()),
+            }
+        except Exception as e:
+            return {"status": "error", "msg": str(e)}
+
+    def _tts_cache_dir(self):
+        cache = os.path.join(APP_PWD, ".tts_cache")
+        try:
+            os.makedirs(cache, exist_ok=True)
+            return cache
+        except OSError:
+            fallback = os.path.join(tempfile.gettempdir(), "XenoPlayer_tts_cache")
+            os.makedirs(fallback, exist_ok=True)
+            return fallback
+
+    def _prune_tts_cache(self, keep_path=None):
+        cache = self._tts_cache_dir()
+        max_bytes = 300 * 1024 ** 2
+        now = time.time()
+        entries = []
+        total = 0
+        try:
+            names = os.listdir(cache)
+        except OSError:
+            return
+        for name in names:
+            path = os.path.join(cache, name)
+            if not os.path.isfile(path):
+                continue
+            try:
+                stat = os.stat(path)
+            except OSError:
+                continue
+            if name.endswith(".part"):
+                if now - stat.st_mtime > 3600:
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+                continue
+            if not name.lower().endswith(".mp3"):
+                continue
+            if now - stat.st_mtime > 30 * 86400:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+                continue
+            entries.append((stat.st_mtime, path))
+            total += stat.st_size
+        if total <= max_bytes:
+            return
+        entries.sort(key=lambda row: row[0])
+        for _mtime, path in entries:
+            if total <= max_bytes:
+                break
+            if keep_path and os.path.normpath(path) == os.path.normpath(keep_path):
+                continue
+            try:
+                size = os.path.getsize(path)
+                os.remove(path)
+                total -= size
+            except OSError:
+                pass
+
+    def edge_tts_voices(self):
+        try:
+            import edge_tts  # noqa: F401
+        except Exception:
+            return {
+                "status": "unavailable",
+                "voices": [],
+                "msg": (
+                    "edge-tts is not installed. Install it with: "
+                    "pip install edge-tts"
+                ),
+            }
+        voices = [
+            {"id": "en-US-AriaNeural", "name": "Aria — US female"},
+            {"id": "en-US-JennyNeural", "name": "Jenny — US female"},
+            {"id": "en-US-MichelleNeural", "name": "Michelle — US female"},
+            {"id": "en-US-GuyNeural", "name": "Guy — US male"},
+            {"id": "en-US-AndrewNeural", "name": "Andrew — US male"},
+            {"id": "en-US-BrianNeural", "name": "Brian — US male"},
+            {"id": "en-US-ChristopherNeural", "name": "Christopher — US male"},
+            {"id": "en-GB-SoniaNeural", "name": "Sonia — UK female"},
+            {"id": "en-GB-RyanNeural", "name": "Ryan — UK male"},
+            {"id": "en-AU-NatashaNeural", "name": "Natasha — AU female"},
+            {"id": "en-AU-WilliamMultilingualNeural", "name": "William — AU male"},
+            {"id": "en-CA-ClaraNeural", "name": "Clara — CA female"},
+            {"id": "en-CA-LiamNeural", "name": "Liam — CA male"},
+            {"id": "en-IE-EmilyNeural", "name": "Emily — IE female"},
+            {"id": "en-IE-ConnorNeural", "name": "Connor — IE male"},
+            {"id": "en-IN-NeerjaNeural", "name": "Neerja — IN female"},
+            {"id": "en-IN-PrabhatNeural", "name": "Prabhat — IN male"},
+            {"id": "en-NZ-MollyNeural", "name": "Molly — NZ female"},
+            {"id": "en-NZ-MitchellNeural", "name": "Mitchell — NZ male"},
+        ]
+        return {"status": "success", "voices": voices, "default": "en-US-AriaNeural"}
+
+    def edge_tts_generate(self, text, voice="en-US-AriaNeural", rate=1.0):
+        try:
+            import asyncio
+            import hashlib
+
+            text = (text or "").strip()
+            if not text:
+                return {"status": "error", "msg": "No text to speak."}
+            if len(text) > 6000:
+                text = text[:6000]
+            try:
+                import edge_tts
+            except Exception:
+                return {
+                    "status": "unavailable",
+                    "msg": (
+                        "edge-tts is not installed. Install it with: "
+                        "pip install edge-tts"
+                    ),
+                }
+            voice = (voice or "en-US-AriaNeural").strip()
+            try:
+                rate_value = float(rate)
+            except (TypeError, ValueError):
+                rate_value = 1.0
+            rate_value = max(0.5, min(2.0, rate_value))
+            rate_percent = max(
+                -50, min(100, int(round((rate_value - 1.0) * 100)))
+            )
+            rate_text = f"{rate_percent:+d}%"
+
+            cache_dir = self._tts_cache_dir()
+            key = hashlib.sha256(
+                f"{voice}|{rate_text}|{text}".encode("utf-8")
+            ).hexdigest()[:32]
+            cache_path = os.path.join(cache_dir, f"{key}.mp3")
+            if os.path.isfile(cache_path) and os.path.getsize(cache_path) > 1000:
+                return {
+                    "status": "success",
+                    "path": cache_path,
+                    "voice": voice,
+                    "rate": rate_text,
+                    "cached": True,
+                }
+
+            temp_path = cache_path + ".part"
+
+            async def generate():
+                communicate = edge_tts.Communicate(text, voice, rate=rate_text)
+                await communicate.save(temp_path)
+
+            try:
+                try:
+                    asyncio.run(generate())
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    try:
+                        loop.run_until_complete(generate())
+                    finally:
+                        loop.close()
+                if not os.path.exists(temp_path) or os.path.getsize(temp_path) < 1000:
+                    raise RuntimeError("Edge TTS returned no audio.")
+                os.replace(temp_path, cache_path)
+                self._prune_tts_cache(keep_path=cache_path)
+                return {
+                    "status": "success",
+                    "path": cache_path,
+                    "voice": voice,
+                    "rate": rate_text,
+                }
+            except Exception as error:
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+                return {"status": "error", "msg": f"Edge TTS failed: {error}"}
+        except Exception as e:
+            return {"status": "error", "msg": str(e)}
+
+    def save_story_tts_settings(self, engine, voice, rate):
+        self.settings["story_tts_engine"] = (
+            "edge" if (engine or "").lower() == "edge" else "system"
+        )
+        self.settings["story_tts_voice"] = (
+            voice or "en-US-AriaNeural"
+        ).strip()
+        try:
+            self.settings["story_tts_rate"] = max(0.5, min(2.0, float(rate)))
+        except (TypeError, ValueError):
+            self.settings["story_tts_rate"] = 1.0
+        save_settings(self.settings)
+        return {
+            "status": "success",
+            "engine": self.settings["story_tts_engine"],
+            "voice": self.settings["story_tts_voice"],
+            "rate": self.settings["story_tts_rate"],
+        }
 
     def search_custom_collection(self, source_id, query):
         try:
@@ -1897,12 +3790,32 @@ class Api:
             if not search_url_template:
                 return {"status": "error", "msg": "search_url not defined in site configuration."}
             
-            search_url = search_url_template.replace('{query}', urllib.parse.quote(query))
+            search_url = search_url_template.replace('{query}', urllib.parse.quote(query, safe=''))
             
             scraper = cloudscraper.create_scraper()
-            response = scraper.get(search_url, timeout=15)
+            headers = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+                "Accept": (
+                    "text/html,application/xhtml+xml,application/xml;q=0.9,"
+                    "image/avif,image/webp,*/*;q=0.8"
+                ),
+                "Accept-Language": "en-US,en;q=0.9",
+            }
+            response = scraper.get(search_url, timeout=20, headers=headers)
+            if response.status_code == 202:
+                return {
+                    "status": "error",
+                    "msg": (
+                        "That site returned a bot-check page (HTTP 202) instead of "
+                        "results. Try again later, or open this source in your browser."
+                    ),
+                }
             if response.status_code != 200:
-                return {"status": "error", "msg": f"Site returned HTTP {response.status_code}"}
+                return {"status": "error", "msg": f"Site returned HTTP {response.status_code}."}
 
             soup = BeautifulSoup(response.text, 'html.parser')
             results = []
@@ -1910,30 +3823,54 @@ class Api:
             results_selector = config.get('results_selector')
             if not results_selector:
                 return {"status": "error", "msg": "results_selector not defined in site configuration."}
+            try:
+                candidate_items = soup.select(results_selector)
+            except Exception as selector_error:
+                return {
+                    "status": "error",
+                    "msg": f"Invalid results selector '{results_selector}': {selector_error}",
+                }
 
-            for item in soup.select(results_selector):
-                title = item.select_one(config['title_selector']).text.strip() if config.get('title_selector') and item.select_one(config['title_selector']) else ""
-                author = item.select_one(config['author_selector']).text.strip() if config.get('author_selector') and item.select_one(config['author_selector']) else ""
-                summary = item.select_one(config['summary_selector']).text.strip() if config.get('summary_selector') and item.select_one(config['summary_selector']) else ""
-                
-                url_el = item.select_one(config['url_selector']) if config.get('url_selector') else item
+            def pick(item, selector):
+                if not selector:
+                    return None
+                try:
+                    return item.select_one(selector)
+                except Exception:
+                    return None
+
+            for item in candidate_items:
+                title_el = pick(item, config.get('title_selector'))
+                title = title_el.get_text(" ", strip=True) if title_el else ""
+                if not title and title_el is not None:
+                    title = (title_el.get("aria-label") or "").strip()
+                    if not title:
+                        image = title_el.find("img")
+                        if image is not None:
+                            title = (image.get("alt") or "").strip()
+                author_el = pick(item, config.get('author_selector'))
+                author = author_el.get_text(" ", strip=True) if author_el else ""
+                summary_el = pick(item, config.get('summary_selector'))
+                summary = summary_el.get_text(" ", strip=True) if summary_el else ""
+
+                url_el = pick(item, config.get('url_selector')) or item
                 url = url_el['href'] if url_el and url_el.has_attr('href') else ""
-                
-                if not title and url_el: title = url_el.text.strip()
+
+                if not title and url_el:
+                    title = url_el.get_text(" ", strip=True)
 
                 if not title or not url:
                     continue
 
                 base_url = config.get('base_url', '')
-                full_url = urllib.parse.urljoin(base_url if base_url else search_url, url)
+                full_url = urllib.parse.urljoin(search_url, url)
 
-                thumb_selector = config.get('thumb_selector')
-                thumb_el = item.select_one(thumb_selector) if thumb_selector else item.select_one('img')
+                thumb_el = pick(item, config.get('thumb_selector')) or item.find("img")
                 thumb = ""
                 if thumb_el:
                     thumb = thumb_el.get('src') or thumb_el.get('data-src') or thumb_el.get('data-original') or ""
                     if thumb:
-                        thumb = urllib.parse.urljoin(base_url if base_url else search_url, thumb)
+                        thumb = urllib.parse.urljoin(search_url, thumb)
 
                 results.append({"title": title, "author": author, "summary": summary, "url": full_url, "thumb": thumb})
             
@@ -1974,90 +3911,626 @@ class Api:
         except Exception as e:
             return {"status": "error", "msg": str(e)}
 
-    def guess_story_site_selectors(self, url):
+    # --- Site config guessing -------------------------------------------------
+    # The guesser looks for a group of sibling cards that each contain a link.
+    # That is far more reliable than grouping by child-tag signatures, which
+    # happily selects SVG <defs> blocks or navigation wrappers.
+
+    _GUESS_BAD_TAGS = {
+        "script", "style", "noscript", "svg", "head", "meta", "link",
+        "template", "iframe", "canvas", "object", "embed",
+    }
+    _GUESS_BAD_CONTEXT = {"nav", "header", "footer", "aside", "form"}
+    _GUESS_RESULT_WORDS = (
+        "result", "search", "item", "card", "entry", "post", "work", "book",
+        "story", "gallery", "manga", "comic", "album", "track", "song", "video",
+        "product", "listing", "grid", "thumb", "media", "chapter", "title",
+    )
+    _GUESS_BAD_WORDS = (
+        "nav", "menu", "breadcrumb", "pagination", "pager", "sidebar", "footer",
+        "header", "advert", "promo", "banner", "filter", "sort", "tab", "modal",
+        "tag", "genre", "toolbar", "cookie",
+    )
+    _GUESS_SEARCH_KEYS = (
+        "q", "query", "query_string", "search", "search_query", "searchquery",
+        "search_term", "searchterm", "keyword", "keywords", "k", "term", "terms",
+        "text", "f_search", "quicksearch", "title", "name",
+    )
+    _GUESS_AI_CHALLENGE_MARKERS = (
+        "cf-browser-verification", "cf-chl", "challenge-platform",
+        "just a moment...", "checking your browser before accessing",
+        "attention required! | cloudflare", "ddos protection by",
+        "px-captcha", "captcha-delivery", "please turn javascript on",
+    )
+
+    @staticmethod
+    def _guess_is_within(element, ancestor):
+        node = element
+        while node is not None:
+            if node is ancestor:
+                return True
+            node = node.parent
+        return False
+
+    @classmethod
+    def _guess_has_bad_ancestor(cls, element):
+        node = element.parent
+        while node is not None and getattr(node, "name", None):
+            if node.name in cls._GUESS_BAD_CONTEXT:
+                return True
+            node = node.parent
+        return False
+
+    @classmethod
+    def _guess_class_token(cls, element):
+        """Pick the most descriptive, CSS-safe class on an element."""
+        import re
+        classes = [
+            name for name in (element.get("class") or [])
+            if re.fullmatch(r"[A-Za-z_][\w-]*", name)
+        ]
+        if not classes:
+            return ""
+        ranked = []
+        good_words = {
+            "title", "name", "cover", "caption", "author", "artist", "summary",
+            "desc", "thumb", "image", "result", "item", "card", "track",
+            "album", "story", "book", "work", "entry", "post", "song", "video",
+        }
+        for index, name in enumerate(classes):
+            low = name.lower()
+            score = 0.0
+            if good_words & set(re.split(r"[-_]+", low)):
+                score += 20
+            score += min(len(name), 24) / 10.0
+            if re.fullmatch(r"[a-f0-9]{6,}", low) or re.search(r"\d{4,}", low):
+                score -= 30
+            if low.startswith(("svelte-", "css-", "sc-", "jsx-")):
+                score -= 30
+            ranked.append((score, -index, name))
+        ranked.sort(reverse=True)
+        return ranked[0][2]
+
+    @classmethod
+    def _guess_step_selector(cls, element):
+        from soupsieve import escape
+        token = cls._guess_class_token(element)
+        if token:
+            return f"{element.name}.{escape(token)}"
+        parent = element.parent
+        if parent is not None:
+            siblings = [
+                child for child in parent.find_all(recursive=False)
+                if getattr(child, "name", None) == element.name
+            ]
+            if element in siblings:
+                return f"{element.name}:nth-of-type({siblings.index(element) + 1})"
+        return element.name
+
+    @classmethod
+    def _guess_selector_within(cls, element, item):
+        """Build a selector for `element` that is relative to `item`."""
+        if element is None or item is None:
+            return ""
+        from soupsieve import escape
+        parts = []
+        node = element
+        guard = 0
+        while node is not None and node is not item and getattr(node, "name", None) and guard < 10:
+            parts.append(cls._guess_step_selector(node))
+            node = node.parent
+            guard += 1
+        if node is not item:
+            return ""
+        selector = " > ".join(reversed(parts))
+        try:
+            if item.select_one(selector) is element:
+                return selector
+        except Exception:
+            pass
+        token = cls._guess_class_token(element)
+        candidates = ([f"{element.name}.{escape(token)}"] if token else []) + [element.name]
+        for candidate in candidates:
+            try:
+                if item.select_one(candidate) is element:
+                    return candidate
+            except Exception:
+                continue
+        return ""
+
+    @classmethod
+    def _score_guess_group(cls, items, kind):
+        count = len(items)
+        links = 0
+        images = 0
+        good_text = 0
+        total_text = 0
+        unique_hrefs = set()
+        for item in items:
+            anchors = [
+                anchor for anchor in item.find_all("a", href=True)
+                if anchor.get("href") and not anchor["href"].startswith(("javascript:", "#", "mailto:"))
+            ]
+            if anchors:
+                links += 1
+                unique_hrefs.add(anchors[0]["href"])
+            if item.find("img"):
+                images += 1
+            text = item.get_text(" ", strip=True)
+            length = len(text)
+            if 8 <= length <= 1200:
+                good_text += 1
+            total_text += min(length, 400)
+        if links < count * 0.6 or len(unique_hrefs) < 2:
+            return None
+
+        # Reject link farms that point at taxonomy pages (genres, tags,
+        # categories) rather than individual result items.
+        import urllib.parse
+        taxonomy_prefixes = (
+            "/genre", "/genres", "/tag", "/tags", "/category", "/categories",
+            "/browse", "/search", "/login", "/signup", "/register", "/about",
+            "/help", "/privacy", "/terms", "/settings", "/account",
+        )
+        sampled = 0
+        taxonomy_links = 0
+        for item in items:
+            anchor = item.find("a", href=True)
+            if not anchor or not anchor.get("href"):
+                continue
+            sampled += 1
+            path = urllib.parse.urlsplit(anchor["href"]).path.lower()
+            if path.startswith(taxonomy_prefixes):
+                taxonomy_links += 1
+        if sampled and taxonomy_links / sampled >= 0.7:
+            return None
+
+        attrs = " ".join(
+            " ".join(item.get("class") or []) for item in items[:3]
+        ).lower()
+        attrs += " " + (items[0].get("id") or "").lower()
+        bonus = 0
+        if any(word in attrs for word in cls._GUESS_RESULT_WORDS):
+            bonus += 6
+        if any(word in attrs for word in cls._GUESS_BAD_WORDS):
+            bonus -= 14
+
+        score = (
+            count * 2
+            + links * 2
+            + images * 1.5
+            + good_text * 2
+            + min(total_text / 20.0, 80)
+            + bonus
+        )
+        average_text = total_text / max(1, count)
+        if average_text > 600:
+            score -= (average_text - 600) / 10.0
+        if kind == "collection":
+            score += images * 1.5
+        elif kind == "audio":
+            score += sum(1 for item in items if item.find(["audio", "video"])) * 3
+        else:
+            score += good_text * 1.5
+        return score
+
+    @classmethod
+    def _guess_results_selector(cls, soup, parent, items, token):
+        from soupsieve import escape
+
+        candidates = []
+        if token:
+            candidates.append(f"{items[0].name}.{escape(token)}")
+        parent_step = cls._guess_step_selector(parent)
+        candidates.append(f"{parent_step} > {items[0].name}")
+        candidates.append(items[0].name)
+
+        threshold = max(3, int(len(items) * 0.6))
+        best = None
+        for selector in candidates:
+            try:
+                matched = soup.select(selector)
+            except Exception:
+                continue
+            if len(matched) < threshold:
+                continue
+            distance = abs(len(matched) - len(items))
+            if best is None or distance < best[0]:
+                best = (distance, selector)
+        if best:
+            return best[1]
+        return candidates[0]
+
+    @classmethod
+    def _guess_title_element(cls, item):
+        anchors = [
+            anchor for anchor in item.find_all("a", href=True)
+            if anchor.get("href") and not anchor["href"].startswith(("javascript:", "#", "mailto:"))
+        ]
+        if not anchors:
+            return None
+
+        def score(anchor):
+            text = anchor.get_text(" ", strip=True)
+            value = min(len(text), 120)
+            attrs_parts = list(anchor.get("class") or [])
+            attrs_parts.append(anchor.get("id") or "")
+            for ancestor in list(anchor.parents)[:2]:
+                attrs_parts.extend(ancestor.get("class") or [])
+                attrs_parts.append(ancestor.get("id") or "")
+            attrs = " ".join(attrs_parts).lower()
+            if anchor.find_parent(["h1", "h2", "h3", "h4", "h5", "h6"]):
+                value += 40
+            if any(word in attrs for word in (
+                "title", "name", "heading", "track", "book", "story", "caption",
+                "cover", "work", "entry", "post",
+            )):
+                value += 25
+            if any(word in attrs for word in (
+                "tag", "genre", "author", "artist", "user", "avatar", "button",
+                "play", "icon", "thumb", "subdued", "series", "secondary",
+                "meta", "muted", "stats", "edition", "rating", "review",
+                "publication", "format",
+            )):
+                value -= 30
+            if text:
+                value += 10
+            else:
+                value -= 45
+            if anchor.get("aria-label"):
+                value += 20
+            if anchor.find("img") and not text:
+                value -= 20
+            return value
+
+        return max(anchors, key=score)
+
+    @classmethod
+    def _guess_author_element(cls, item, title_element):
+        tokens = (
+            "author", "byline", "writer", "creator", "artist", "username",
+            "uploader", "poster",
+        )
+        candidates = []
+        for element in item.find_all(True):
+            if element is title_element:
+                continue
+            if (cls._guess_is_within(title_element, element)
+                    or cls._guess_is_within(element, title_element)):
+                continue
+            attrs = (
+                " ".join(element.get("class") or [])
+                + " " + (element.get("id") or "")
+                + " " + " ".join(element.get("rel") or [])
+            ).lower()
+            if not any(token in attrs for token in tokens):
+                continue
+            text = element.get_text(" ", strip=True)
+            if not text or len(text) > 120:
+                continue
+            candidates.append((1 if element.name == "a" else 0, -len(text), element))
+        if not candidates:
+            return None
+        candidates.sort(reverse=True, key=lambda row: (row[0], row[1]))
+        return candidates[0][2]
+
+    @classmethod
+    def _guess_summary_element(cls, item, title_element):
+        tokens = (
+            "summary", "description", "desc", "synopsis", "excerpt", "snippet",
+            "caption", "blurb", "abstract",
+        )
+        for element in item.find_all(["p", "div", "span"]):
+            if element is title_element:
+                continue
+            if (cls._guess_is_within(title_element, element)
+                    or cls._guess_is_within(element, title_element)):
+                continue
+            attrs = (
+                " ".join(element.get("class") or [])
+                + " " + (element.get("id") or "")
+            ).lower()
+            text = element.get_text(" ", strip=True)
+            if any(token in attrs for token in tokens) and 8 <= len(text) <= 600:
+                return element
+        paragraph = item.find("p")
+        if paragraph is not None:
+            text = paragraph.get_text(" ", strip=True)
+            if 20 <= len(text) <= 600:
+                return paragraph
+        return None
+
+    @classmethod
+    def _guess_search_url(cls, url):
+        """Turn a search-results URL into a template containing {query}."""
+        import re
+        import urllib.parse
+
+        parsed = urllib.parse.urlsplit(url)
+        pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+        if pairs:
+            chosen_key = None
+            lowered = [(key, key.lower().strip("[]")) for key, _ in pairs]
+            for key, low in lowered:
+                if low in cls._GUESS_SEARCH_KEYS:
+                    chosen_key = key
+                    break
+            if chosen_key is None:
+                for key, low in lowered:
+                    if any(token in low for token in ("query", "search", "keyword", "term")):
+                        chosen_key = key
+                        break
+            if chosen_key is None:
+                ignored = {
+                    "page", "p", "sort", "order", "sortby", "orderby", "type",
+                    "ready", "limit", "offset", "per_page", "lang", "language",
+                }
+                for key, value in pairs:
+                    if key.lower() in ignored:
+                        continue
+                    if len(value) >= 2 and re.search(r"[A-Za-z]{2,}", value):
+                        chosen_key = key
+                        break
+            if chosen_key is not None:
+                rebuilt = []
+                paging_keys = {"page", "p", "offset", "start", "pg", "paged"}
+                for key, value in pairs:
+                    if key == chosen_key:
+                        value = "{query}"
+                    elif key.lower() in paging_keys:
+                        # Don't pin the guessed page number into every search.
+                        continue
+                    rebuilt.append(
+                        f"{urllib.parse.quote(key, safe='')}="
+                        f"{urllib.parse.quote(value, safe='{}')}"
+                    )
+                query = "&".join(rebuilt)
+                template = urllib.parse.urlunsplit(
+                    (parsed.scheme, parsed.netloc, parsed.path, query, parsed.fragment)
+                )
+                return template, True
+
+        segments = parsed.path.split("/")
+        for index, segment in enumerate(segments):
+            if segment.lower() in ("search", "query", "results") and index + 1 < len(segments):
+                if segments[index + 1]:
+                    new_segments = segments[:]
+                    new_segments[index + 1] = "{query}"
+                    template = urllib.parse.urlunsplit(
+                        (parsed.scheme, parsed.netloc, "/".join(new_segments),
+                         parsed.query, parsed.fragment)
+                    )
+                    return template, True
+        return url, False
+
+    @classmethod
+    def _guess_site_config_from_soup(cls, url, soup, kind="story"):
+        import urllib.parse
+        from collections import defaultdict
+        from bs4 import Tag
+
+        # React streaming pages (Goodreads and others) leave real card markup
+        # inside <template> tags. Unwrap them so it can be inspected normally.
+        for template in soup.find_all("template"):
+            template.unwrap()
+        for tag in soup.find_all(cls._GUESS_BAD_TAGS):
+            tag.decompose()
+
+        groups = []
+        for parent in soup.find_all(True):
+            if parent.name in cls._GUESS_BAD_TAGS or cls._guess_has_bad_ancestor(parent):
+                continue
+            children = [
+                child for child in parent.find_all(recursive=False)
+                if isinstance(child, Tag) and child.name not in cls._GUESS_BAD_TAGS
+            ]
+            if len(children) < 3:
+                continue
+            buckets = defaultdict(list)
+            for child in children:
+                token = cls._guess_class_token(child)
+                buckets[(child.name, token)].append(child)
+            for (tag, token), items in buckets.items():
+                if len(items) < 3:
+                    continue
+                score = cls._score_guess_group(items, kind)
+                if score is None:
+                    continue
+                groups.append((score, parent, items, token))
+
+        groups.sort(key=lambda row: row[0], reverse=True)
+        for _score, parent, items, token in groups[:30]:
+            result = cls._guess_config_from_group(
+                url, soup, parent, items, token, kind
+            )
+            if result:
+                return result
+        return None
+
+    @classmethod
+    def _guess_config_from_group(cls, url, soup, parent, items, token, kind):
+        import urllib.parse
+
+        # The first sibling is often a header or a differently shaped promo row.
+        # Try several representatives and keep the title selector that covers
+        # the most cards.
+        best = None
+        tried = set()
+        for representative in items[:12]:
+            title_element = cls._guess_title_element(representative)
+            if title_element is None:
+                continue
+            title_selector = cls._guess_selector_within(title_element, representative)
+            if not title_selector or title_selector in tried:
+                continue
+            tried.add(title_selector)
+            covered = 0
+            for item in items:
+                try:
+                    element = item.select_one(title_selector)
+                except Exception:
+                    element = None
+                if element is None or not element.has_attr("href") or not element.get("href"):
+                    continue
+                label = element.get_text(" ", strip=True)
+                if not label:
+                    label = (element.get("aria-label") or "").strip()
+                if not label:
+                    image = element.find("img")
+                    if image is not None:
+                        label = (image.get("alt") or "").strip()
+                if label:
+                    covered += 1
+            if best is None or covered > best[0]:
+                best = (covered, title_element, title_selector, representative)
+
+        if best is None:
+            return None
+        covered, title_element, title_selector, representative = best
+        required = max(3, int(len(items) * 0.6))
+        if covered < required:
+            return None
+
+        author_element = cls._guess_author_element(representative, title_element)
+        summary_element = cls._guess_summary_element(representative, title_element)
+        thumb_element = representative.find("img")
+
+        results_selector = cls._guess_results_selector(soup, parent, items, token)
+        search_url, has_query = cls._guess_search_url(url)
+        parsed = urllib.parse.urlsplit(url)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+
+        config = {
+            "parser": "generic_html",
+            "search_url": search_url,
+            "base_url": base_url,
+            "results_selector": results_selector,
+            "title_selector": title_selector,
+            "url_selector": title_selector,
+            "author_selector": cls._guess_selector_within(author_element, representative),
+            "summary_selector": cls._guess_selector_within(summary_element, representative),
+            "thumb_selector": cls._guess_selector_within(thumb_element, representative),
+        }
+        warning = ""
+        if not has_query:
+            warning = (
+                "This URL had no obvious search parameter, so it was saved as a "
+                "static listing URL. Every search will show that same page; edit "
+                "the search_url in Notes to add {query} for real searching."
+            )
+        return {
+            "status": "success",
+            "config": config,
+            "url": url,
+            "kind": kind,
+            "item_count": covered,
+            "warning": warning,
+        }
+
+    def guess_site_selectors(self, url, kind="story"):
         try:
             import cloudscraper
             from bs4 import BeautifulSoup
-            from collections import Counter
             import urllib.parse
-            import re
 
-            scraper = cloudscraper.create_scraper()
-            response = scraper.get(url, timeout=15)
-            soup = BeautifulSoup(response.text, 'html.parser')
+            kind = (kind or "story").lower()
+            url = (url or "").strip()
+            if not url:
+                return {"status": "error", "msg": "Please paste a URL to guess from."}
+            if "://" not in url:
+                url = "https://" + url
 
-            parsed_url = urllib.parse.urlparse(url)
-            query_params = urllib.parse.parse_qs(parsed_url.query)
-            search_term, search_key = "", ""
-            for key, values in query_params.items():
-                if len(values) == 1 and len(values[0]) > 2 and re.search(r'[a-zA-Z]{3,}', values[0]):
-                    search_term, search_key = values[0], key
-                    break
-            
-            search_url = url.replace(search_term, '{query}') if search_term else url
-            base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+            parsed = urllib.parse.urlsplit(url)
+            if parsed.scheme not in ("http", "https") or not parsed.netloc:
+                return {"status": "error", "msg": "That does not look like a valid http(s) URL."}
 
-            # --- New logic to find repeating container elements ---
-            signatures = {}
-            # We look for elements that could be containers. Good containers have several children.
-            for el in soup.find_all(True):
-                children = el.find_all(recursive=False)
-                if len(children) < 2: continue # Skip elements with 0 or 1 child
-
-                # Create a structural signature from the children's tags
-                sig = tuple(sorted([child.name for child in children]))
-
-                if sig not in signatures:
-                    signatures[sig] = []
-                
-                selector = el.name
-                if el.has_attr('class'):
-                    selector += '.' + el['class'][0] # Use only the first class to keep selector general
-                signatures[sig].append(selector)
-
-            best_sig_selectors = []
-            for sig, selectors in signatures.items():
-                if len(selectors) > len(best_sig_selectors) and len(selectors) > 2: # Must repeat at least 3 times
-                    best_sig_selectors = selectors
-            
-            if not best_sig_selectors:
-                return self._guess_selectors_with_ai(url, soup)
-
-            results_selector = Counter(best_sig_selectors).most_common(1)[0][0]
-            first_result_item = soup.select_one(results_selector)
-            if not first_result_item:
-                return self._guess_selectors_with_ai(url, soup)
-
-            def get_selector(element):
-                if not element: return ""
-                selector = element.name
-                if element.has_attr('class'):
-                    selector += '.' + '.'.join(element['class'])
-                return selector
-
-            title_el = first_result_item.select_one('h1 a, h2 a, h3 a, h4 a')
-            title_selector = get_selector(title_el) if title_el else ""
-            
-            author_selector = ""
-            author_el = first_result_item.select_one('[class*="author"], [id*="author"], a[rel="author"]')
-            if author_el:
-                author_selector = get_selector(author_el)
-
-            summary_selector = ""
-            summary_el = first_result_item.select_one('p, div[class*="summary"], div[class*="description"], div[class*="synopsis"], blockquote')
-            if summary_el:
-                summary_selector = get_selector(summary_el)
-
-            config = {
-                "parser": "generic_html", "search_url": search_url, "base_url": base_url,
-                "results_selector": results_selector, "title_selector": title_selector,
-                "url_selector": title_selector, "author_selector": author_selector,
-                "summary_selector": summary_selector
+            headers = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+                "Accept": (
+                    "text/html,application/xhtml+xml,application/xml;q=0.9,"
+                    "image/avif,image/webp,*/*;q=0.8"
+                ),
+                "Accept-Language": "en-US,en;q=0.9",
             }
 
-            return {"status": "success", "config": config}
-        except Exception as e:
-            return {"status": "error", "msg": str(e)}
+            response = None
+            first_error = None
+            try:
+                response = cloudscraper.create_scraper().get(
+                    url, timeout=20, headers=headers
+                )
+            except Exception as error:
+                first_error = error
+                try:
+                    import requests
+                    response = requests.get(url, timeout=20, headers=headers)
+                except Exception:
+                    return {
+                        "status": "error",
+                        "msg": f"Could not reach that URL: {first_error}",
+                    }
+
+            status = getattr(response, "status_code", 0)
+            if status >= 400:
+                if status in (401, 403, 418, 429, 503):
+                    return {
+                        "status": "error",
+                        "msg": (
+                            f"That site refused the automated request (HTTP {status}). "
+                            "It blocks scrapers, so Guess cannot read its results. "
+                            "Open the page in your browser and paste its address in a "
+                            "normal browser tab, or add a JSON config to Notes manually."
+                        ),
+                    }
+                return {"status": "error", "msg": f"That page returned HTTP {status}."}
+
+            text = response.text or ""
+            if len(text.strip()) < 200:
+                return {
+                    "status": "error",
+                    "msg": "That page returned almost no HTML. It may need a login or JavaScript.",
+                }
+
+            soup = BeautifulSoup(text, "html.parser")
+            lowered = text.lower()
+            has_challenge_marker = any(
+                marker in lowered for marker in self._GUESS_AI_CHALLENGE_MARKERS
+            )
+            if has_challenge_marker:
+                visible_text = soup.get_text(" ", strip=True)
+                meaningful_links = soup.find_all("a", href=True)
+                # Many normal pages mention a challenge script but still ship
+                # real results. Only treat it as a block when there is almost
+                # no usable content.
+                if len(visible_text) < 400 or len(meaningful_links) < 5:
+                    return {
+                        "status": "error",
+                        "msg": (
+                            "That page is showing a bot/JavaScript challenge instead of "
+                            "search results. Open the results in a normal browser tab and "
+                            "paste that URL, or configure the source manually."
+                        ),
+                    }
+
+            result = self._guess_site_config_from_soup(url, soup, kind)
+            if result:
+                return result
+            return self._guess_selectors_with_ai(url, soup, kind)
+        except Exception as error:
+            return {"status": "error", "msg": f"Guess failed: {error}"}
+
+    def guess_story_site_selectors(self, url):
+        return self.guess_site_selectors(url, "story")
+
+    def guess_collection_site_selectors(self, url):
+        return self.guess_site_selectors(url, "collection")
+
+    def guess_audio_site_selectors(self, url):
+        return self.guess_site_selectors(url, "audio")
 
     def _get_env_var(self, *names):
         for name in names:
@@ -2065,20 +4538,46 @@ class Api:
             if value:
                 return value
 
-        for relative_path in [".env", os.path.join("web", ".env")]:
-            path = os.path.join(app_dir, relative_path)
-            if os.path.exists(path):
-                try:
-                    with open(path, "r", encoding="utf-8") as f:
-                        for line in f:
-                            if "=" in line:
-                                k, v = line.split("=", 1)
-                                if k.strip() in names:
-                                    return v.strip().strip('"').strip("'")
-                except: pass
+        bases = []
+        for base in (APP_PWD, app_dir, os.getcwd()):
+            base = os.path.abspath(base)
+            if base not in bases:
+                bases.append(base)
+        for base in bases:
+            for relative_path in [".env", os.path.join("web", ".env")]:
+                path = os.path.join(base, relative_path)
+                if os.path.exists(path):
+                    try:
+                        with open(path, "r", encoding="utf-8") as f:
+                            for line in f:
+                                if "=" in line:
+                                    k, v = line.split("=", 1)
+                                    if k.strip() in names:
+                                        return v.strip().strip('"').strip("'")
+                    except: pass
         return ""
 
-    def _guess_selectors_with_ai(self, url, soup):
+    @staticmethod
+    def _parse_ai_config(response_text):
+        import json
+        import re
+        text = (response_text or "").strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```[a-zA-Z]*\s*", "", text)
+            text = re.sub(r"\s*```$", "", text)
+        try:
+            config = json.loads(text)
+        except Exception:
+            match = re.search(r"\{.*\}", text, re.DOTALL)
+            if not match:
+                return {}
+            try:
+                config = json.loads(match.group(0))
+            except Exception:
+                return {}
+        return config if isinstance(config, dict) else {}
+
+    def _guess_selectors_with_ai(self, url, soup, kind="story"):
         account_id = self._get_env_var("CLOUDFLARE_ACCOUNTID", "Cloudflare_Account_ID")
         api_key = self._get_env_var("CF_WORKERSAI_REST_API", "CF_ACCOUNT_API_Token", "Cloudflare_API_Key")
         
@@ -2089,11 +4588,11 @@ class Api:
             html_content = str(soup)[:50000]
             
             import requests
-            import json
             
             prompt = (
                 "You are an expert web scraper helper. I need you to analyze the HTML source code of a search results page "
-                f"from URL: {url} and extract the CSS selectors for the repeating items.\n\n"
+                f"from URL: {url} and extract the CSS selectors for the repeating items. "
+                f"The user is configuring a {kind} source.\n\n"
                 "Extract the following:\n"
                 "1. 'results_selector': The CSS selector matching each repeating item card/element (e.g. '.result-card', 'li.work', 'div.item').\n"
                 "2. 'title_selector': The relative CSS selector (relative to the results_selector element) matching the anchor tag for the item title.\n"
@@ -2130,14 +4629,9 @@ class Api:
                     if r.status_code == 200:
                         resp_data = r.json()
                         response_text = resp_data['result']['response'].strip()
-                        if response_text.startswith("```"):
-                            lines = response_text.splitlines()
-                            if lines[0].startswith("```json"):
-                                response_text = "\n".join(lines[1:-1])
-                            elif lines[0].startswith("```"):
-                                response_text = "\n".join(lines[1:-1])
-                        config = json.loads(response_text)
-                        return self._build_final_config(url, config)
+                        config = self._parse_ai_config(response_text)
+                        if config.get("results_selector"):
+                            return self._build_final_config(url, config, kind)
                 except Exception as e:
                     print(f"Cloudflare AI failed: {e}")
 
@@ -2158,18 +4652,21 @@ class Api:
                     if r.status_code == 200:
                         resp_data = r.json()
                         response_text = resp_data['candidates'][0]['content']['parts'][0]['text'].strip()
-                        if response_text.startswith("```"):
-                            lines = response_text.splitlines()
-                            if lines[0].startswith("```json"):
-                                response_text = "\n".join(lines[1:-1])
-                            elif lines[0].startswith("```"):
-                                response_text = "\n".join(lines[1:-1])
-                        config = json.loads(response_text)
-                        return self._build_final_config(url, config)
+                        config = self._parse_ai_config(response_text)
+                        if config.get("results_selector"):
+                            return self._build_final_config(url, config, kind)
                 except Exception as e:
                     print(f"Gemini AI failed: {e}")
 
-            return {"status": "error", "msg": "Heuristic failed, and AI models could not run. Provide a Gemini API key in Options, or set Cloudflare keys in your .env file."}
+            return {
+                "status": "error",
+                "msg": (
+                    "XenoPlayer could not find a repeating result list on that page. "
+                    "Some sites build their results with JavaScript or refuse automated "
+                    "requests. Try a server-rendered search results page, add a Gemini "
+                    "API key in Options, or paste a JSON config into the Notes field."
+                ),
+            }
         except Exception as e:
             return {"status": "error", "msg": f"AI Guess failed: {str(e)}"}
 
@@ -2313,20 +4810,18 @@ class Api:
             })
         return {"status": "success", "playlist": playlist}
 
-    def _build_final_config(self, url, config):
+    def _build_final_config(self, url, config, kind="story"):
         import urllib.parse
-        import re
-        parsed_url = urllib.parse.urlparse(url)
-        query_params = urllib.parse.parse_qs(parsed_url.query)
-        search_term = ""
-        for key, values in query_params.items():
-            if len(values) == 1 and len(values[0]) > 2 and re.search(r'[a-zA-Z]{3,}', values[0]):
-                search_term = values[0]
-                break
-        
-        search_url = url.replace(search_term, '{query}') if search_term else url
+        search_url, has_query = self._guess_search_url(url)
+        parsed_url = urllib.parse.urlsplit(url)
         base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
-        
+        warning = ""
+        if not has_query:
+            warning = (
+                "This URL had no obvious search parameter, so it was saved as a "
+                "static listing URL. Every search will show that same page; edit "
+                "the search_url in Notes to add {query} for real searching."
+            )
         return {
             "status": "success",
             "config": {
@@ -2339,7 +4834,10 @@ class Api:
                 "author_selector": config.get("author_selector", ""),
                 "summary_selector": config.get("summary_selector", ""),
                 "thumb_selector": config.get("thumb_selector", "")
-            }
+            },
+            "url": url,
+            "kind": kind,
+            "warning": warning,
         }
 
     def rename_collection(self, path, newName):
@@ -2422,10 +4920,53 @@ class Api:
         return {"status": "success"}
 
     def open_collection_viewer(self, path):
-        if not path: return
+        if not path:
+            return {"status": "error", "msg": "No collection selected."}
         if os.path.isfile(path) and os.path.splitext(path)[1].lower() in self.COLLECTION_ARCHIVE_EXTS:
             return self.open_cbz_archive(path)
         directory = os.path.dirname(path) if os.path.isfile(path) else path
+        if not os.path.isdir(directory):
+            return {"status": "error", "msg": "Collection folder does not exist."}
+
+        image_exts = {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.avif'}
+        video_exts = {
+            '.mp4', '.webm', '.ogg', '.mkv', '.avi', '.mov', '.m4v',
+            '.wmv', '.flv', '.mpg', '.mpeg', '.ts',
+        }
+        has_video = False
+        has_image = False
+        for root_dir, dirs, files in os.walk(directory):
+            for f in files:
+                ext = os.path.splitext(f)[1].lower()
+                if ext in video_exts:
+                    has_video = True
+                elif ext in image_exts:
+                    has_image = True
+            if has_video:
+                break
+
+        if not has_video and not has_image:
+            return {
+                "status": "error",
+                "msg": "This collection has no images or videos to open.",
+            }
+
+        root_has_image = False
+        try:
+            root_has_image = any(
+                os.path.splitext(f)[1].lower() in image_exts
+                for f in os.listdir(directory)
+                if os.path.isfile(os.path.join(directory, f))
+            )
+        except OSError:
+            pass
+
+        # CollectionViewer is an image-page reader. If the collection contains
+        # videos, or only has images inside subfolders, use the main player so
+        # every supported media type is available.
+        if has_video or (has_image and not root_has_image):
+            return self.load_selected_directory(directory, recursive=True)
+
         import subprocess
         env = os.environ.copy()
         if getattr(sys, 'frozen', False):
@@ -2433,7 +4974,7 @@ class Api:
         else:
             script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "CollectionViewer.py")
             subprocess.Popen([sys.executable, script, directory], env=env)
-        return {"status": "success"}
+        return {"status": "success", "viewer": "collection_viewer"}
 
     # --- NHENTAI AUTOMATION ENGINE ROUTING ---
 
@@ -3384,6 +5925,10 @@ class Api:
         library = []
         dl_dir = self.get_collection_download_dir()["dir"]
         parents = [dl_dir] + self.settings.get("saved_folders", [])
+        archive_parents = list(parents)
+        for parent in self.settings.get("known_collection_archive_dirs", []) or []:
+            if parent and parent not in archive_parents:
+                archive_parents.append(parent)
         
         # Auto-scan Download Locations Safely
         for parent in parents:
@@ -3409,23 +5954,69 @@ class Api:
                             if n: name = n
                     except: pass
                 
+                image_exts = {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.avif'}
+                video_exts = {
+                    '.mp4', '.webm', '.ogg', '.mkv', '.avi', '.mov', '.m4v',
+                    '.wmv', '.flv', '.mpg', '.mpeg', '.ts',
+                }
+                thumb_exts = {'.mp4', '.webm', '.ogg'}
                 first_image = None
+                first_video = None
                 page_count = 0
+                video_count = 0
                 try:
-                    supported = {'.jpg', '.jpeg', '.png', '.webp', '.gif'}
-                    image_files = sorted([f for f in os.listdir(d) if os.path.splitext(f)[1].lower() in supported], key=natural_sort_key)
+                    files = os.listdir(d)
+                    image_files = sorted(
+                        [f for f in files if os.path.splitext(f)[1].lower() in image_exts],
+                        key=natural_sort_key,
+                    )
+                    video_files = sorted(
+                        [f for f in files if os.path.splitext(f)[1].lower() in video_exts],
+                        key=natural_sort_key,
+                    )
                     page_count = len(image_files)
-                    if image_files: first_image = os.path.join(d, image_files[0])
+                    video_count = len(video_files)
+                    if image_files:
+                        first_image = os.path.join(d, image_files[0])
+                    if video_files:
+                        preferred = [
+                            f for f in video_files
+                            if os.path.splitext(f)[1].lower() in thumb_exts
+                        ]
+                        first_video = os.path.join(d, (preferred or video_files)[0])
                 except: pass
+
+                # Collections with media only inside subfolders still deserve a
+                # thumbnail in the library grid.
+                if not first_image and not first_video:
+                    try:
+                        for root_dir, dirs, files in os.walk(d):
+                            dirs.sort(key=natural_sort_key)
+                            for f in sorted(files, key=natural_sort_key):
+                                ext = os.path.splitext(f)[1].lower()
+                                if ext in image_exts:
+                                    first_image = os.path.join(root_dir, f)
+                                    break
+                                if ext in video_exts and not first_video:
+                                    first_video = os.path.join(root_dir, f)
+                            if first_image or first_video:
+                                break
+                    except: pass
+
+                thumb = first_image or first_video
                 
                 try: mtime = os.path.getctime(d)
                 except: mtime = 0
                 
-                library.append({"path": d, "name": name, "thumb": first_image, "mtime": mtime, "page_count": page_count, "kind": "folder"})
+                library.append({
+                    "path": d, "name": name, "thumb": thumb, "mtime": mtime,
+                    "page_count": page_count, "video_count": video_count,
+                    "kind": "folder",
+                })
 
         # Comic archives marked as collections (sidecar <name>.collection.json next to the file)
         seen_archives = set()
-        for parent in parents:
+        for parent in archive_parents:
             if not parent or not os.path.isdir(parent):
                 continue
             try:
@@ -3453,7 +6044,7 @@ class Api:
                 name = (meta.get("name") or "").strip() or os.path.splitext(archive_name)[0]
                 try: mtime = os.path.getmtime(archive)
                 except: mtime = 0
-                library.append({"path": archive, "name": name, "thumb": None, "mtime": mtime, "page_count": 0, "kind": "archive"})
+                library.append({"path": archive, "name": name, "thumb": None, "mtime": mtime, "page_count": 0, "video_count": 0, "kind": "archive"})
 
         self.settings["known_collection_folders"] = valid_known
         save_settings(self.settings)
@@ -3514,13 +6105,20 @@ class Api:
                 cropped.save(temp_img_path)
                 
                 if getattr(sys, 'frozen', False):
-                    # In a COLLECT/onedir build, ocr_worker.exe sits in ocr_worker/ or next to Porn layer.exe
+                    # One-file builds extract the worker to _MEIPASS; older
+                    # onedir builds keep it beside the main executable.
                     exe_dir = os.path.dirname(sys.executable)
-                    worker_exe = os.path.join(exe_dir, "ocr_worker", "ocr_worker.exe")
-                    if not os.path.exists(worker_exe):
-                        worker_exe = os.path.join(exe_dir, "ocr_worker.exe")
-                    # manga_ocr_model is bundled inside _MEIPASS (the _internal extraction dir)
                     base_dir = sys._MEIPASS
+                    worker_candidates = [
+                        os.path.join(base_dir, "ocr_worker.exe"),
+                        os.path.join(base_dir, "ocr_worker", "ocr_worker.exe"),
+                        os.path.join(exe_dir, "ocr_worker", "ocr_worker.exe"),
+                        os.path.join(exe_dir, "ocr_worker.exe"),
+                    ]
+                    worker_exe = next(
+                        (candidate for candidate in worker_candidates if os.path.exists(candidate)),
+                        worker_candidates[0],
+                    )
                 else:
                     base_dir = os.path.dirname(os.path.abspath(__file__))
                     worker_exe = sys.executable
@@ -3850,7 +6448,7 @@ class Api:
         else:
             directory = os.path.dirname(filepath)
             
-        supported = {'.mp4', '.webm', '.ogg', '.mp3', '.wav', '.wave', '.jpg', '.jpeg', '.png', '.webp', '.gif', '.txt', '.md', '.json', '.csv'}
+        supported = {'.mp4', '.webm', '.ogg', '.avi', '.wmv', '.mkv', '.mov', '.flv', '.mpg', '.mpeg', '.m4v', '.ts', '.zip', '.cbz', '.mp3', '.wav', '.wave', '.m4a', '.m4b', '.aac', '.flac', '.oga', '.opus', '.jpg', '.jpeg', '.png', '.webp', '.gif', '.txt', '.md', '.json', '.csv'}
         
         if self.settings.get("recursive_load", False):
             full_paths = []
@@ -3932,11 +6530,18 @@ def get_thumbnail():
     if not path or not os.path.exists(path) or os.path.isdir(path): return "Not found", 404
     ext = os.path.splitext(path)[1].lower()
     if ext in {'.jpg', '.jpeg', '.png', '.webp', '.gif'}: return send_file(path)
-    if ext not in {'.mp4', '.webm', '.ogg'}: return "Not video", 404
+    if ext not in {
+        '.mp4', '.webm', '.ogg', '.mkv', '.avi', '.mov', '.m4v',
+        '.wmv', '.flv', '.mpg', '.mpeg', '.ts',
+    }:
+        return "Not video", 404
     cap = cv2.VideoCapture(path)
     if cap.isOpened():
         cap.set(cv2.CAP_PROP_POS_FRAMES, 30)
         ret, frame = cap.read()
+        if not ret:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            ret, frame = cap.read()
         cap.release()
         if ret and frame is not None:
             _, buf = cv2.imencode(".jpg", cv2.resize(frame, (160, 90)))
@@ -4172,7 +6777,7 @@ def run_server():
 
 # --- REGISTRATION KEY SECURITY (Cloudflare-backed) ---
 
-REG_KEY_CACHE_FILE = os.path.join(app_dir, "reg_cache.json")
+REG_KEY_CACHE_FILE = os.path.join(APP_PWD, "reg_cache.json")
 REG_KEY_TTL_DAYS = 30
 
 
@@ -4200,7 +6805,12 @@ def _dotenv_lookup(*names):
         value = os.environ.get(name)
         if value and value.strip():
             return value.strip()
-    for base in (app_dir, os.getcwd()):
+    bases = []
+    for base in (APP_PWD, app_dir, os.getcwd()):
+        base = os.path.abspath(base)
+        if base not in bases:
+            bases.append(base)
+    for base in bases:
         for relative_path in (".env", os.path.join("web", ".env")):
             path = os.path.join(base, relative_path)
             if not os.path.exists(path):

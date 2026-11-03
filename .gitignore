@@ -23,6 +23,8 @@ XenoPlayer.exe
 33Build/
 33dist/
 web_settings.json
+build_info.json
+.tts_cache/
 /models
 .env
 web/node_modules/

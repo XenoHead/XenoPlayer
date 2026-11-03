@@ -19,26 +19,15 @@
                 <img src="icon.png" alt="Logo" class="logo" style="width: 20px; height: 20px; border-radius: 4px;"
                     onerror="this.onerror=null; this.src='data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';">
                 <h2 style="font-size: 14px; margin: 0; font-weight: 600; color: #cdd6f4;">XenoPlayer</h2>
-            </div>
-
-            <!-- Sidebar Player Controls -->
-            <div id="sidebar-player-controls" style="height: 38px; box-sizing: border-box; border-bottom: 1px solid #333; display: flex; flex-direction: row; gap: 10px; align-items: center; justify-content: space-between; background: #181825; padding: 0 10px;">
-                <div style="display: flex; gap: 10px; align-items: center;">
-                    <button onclick="handlePrevMedia()" style="background: none; border: none; color: white; font-size: 13px; cursor: pointer; display: flex; align-items: center; justify-content: center; width: auto; padding: 0;"><i class="fa-solid fa-backward-step"></i></button>
-                    <button onclick="togglePlay()" id="play-btn" style="background: none; border: none; color: white; font-size: 15px; cursor: pointer; display: flex; align-items: center; justify-content: center; width: auto; padding: 0;"><i class="fa-solid fa-pause"></i></button>
-                    <button onclick="handleNextMedia()" style="background: none; border: none; color: white; font-size: 13px; cursor: pointer; display: flex; align-items: center; justify-content: center; width: auto; padding: 0;"><i class="fa-solid fa-forward-step"></i></button>
-                    <button id="sidebar-collapse-btn" onclick="toggleSidebarCollapse()" style="background: none; border: none; color: #a0a0b0; font-size: 13px; cursor: pointer; display: flex; align-items: center; justify-content: center; width: auto; padding: 0;" title="Collapse Sidebar"><i class="fa-solid fa-chevron-up"></i></button>
-                </div>
-                <div style="display: flex; align-items: center; gap: 5px; flex: 1; max-width: 80px; justify-content: flex-end;">
-                    <i class="fa-solid fa-volume-high" style="font-size: 10px; color: #a0a0b0;"></i>
-                    <input type="range" id="volume-slider" min="0" max="100" value="100" oninput="changeVolume(this.value)" style="width: 100%; max-width: 50px; cursor: pointer; margin: 0; padding: 0; height: 3px;">
-                </div>
+                <button id="sidebar-collapse-btn" onclick="toggleSidebarCollapse()"
+                    style="margin-left: auto; background: none; border: none; color: #a0a0b0; font-size: 13px; cursor: pointer; display: flex; align-items: center; justify-content: center; width: auto; padding: 0;"
+                    title="Collapse Sidebar"><i class="fa-solid fa-chevron-up"></i></button>
             </div>
 
             <div id="sidebar-controls">
                 <div style="display: flex; gap: 6px; width: 100%;">
                     <button onclick="loadFolderAction()" style="flex: 1; width: auto; padding: 6px 5px; font-size: 13px;"><i class="fa-solid fa-folder-open"></i> Folder</button>
-                    <button onclick="pywebview.api.open_dialog()" style="flex: 1; width: auto; padding: 6px 5px; font-size: 13px; background-color: #313244; color: #cdd6f4; border: 1px solid #45475a;"><i class="fa-solid fa-file"></i> File</button>
+                    <button onclick="openFileDialog()" style="flex: 1; width: auto; padding: 6px 5px; font-size: 13px; background-color: #313244; color: #cdd6f4; border: 1px solid #45475a;"><i class="fa-solid fa-file"></i> File</button>
                 </div>
                 <div style="display: flex; justify-content: space-between; gap: 8px; width: 100%; margin: 2px 0 4px 0;">
                     <div style="display:flex; align-items:center; gap:6px; font-size:11px; color:#a0a0b0; user-select:none;">
@@ -99,6 +88,8 @@
                         <option value="video">Video</option>
                         <option value="audio">Audio</option>
                         <option value="text">Text</option>
+                        <option value="zip">ZIP</option>
+                        <option value="cbz">CBZ</option>
                     </select>
                     <label for="playlist-sort" style="font-size: 11px; color: #a0a0b0;" title="Sort By"><i class="fa-solid fa-sort"></i></label>
                     <select id="playlist-sort" onchange="renderPlaylist(); savePlaylistSettings();" style="flex: 1; background: #222; color: #cdd6f4; border: 1px solid #45475a; border-radius: 3px; font-size: 11px; padding: 2px; min-width: 0;">
@@ -129,7 +120,9 @@
                     <button class="dropbtn">File</button>
                     <div class="dropdown-content">
                         <a href="#" onclick="loadFolderAction()"><i class="fa-solid fa-folder-open" style="margin-right: 8px; color: #f9e2af;"></i> Load Folder</a>
-                        <a href="#" onclick="pywebview.api.open_dialog()"><i class="fa-solid fa-file" style="margin-right: 8px; color: #89b4fa;"></i> Load File</a>
+                        <a href="#" onclick="openFileDialog()"><i class="fa-solid fa-file" style="margin-right: 8px; color: #89b4fa;"></i> Load File</a>
+                        <a href="#" onclick="createImageCbz()"><i class="fa-solid fa-images" style="margin-right: 8px; color: #f9e2af;"></i> Create Image CBZ...</a>
+                        <a href="#" onclick="createVideoCbz()"><i class="fa-solid fa-video" style="margin-right: 8px; color: #cba6f7;"></i> Create Video CBZ...</a>
                         <a href="#" onclick="refreshCurrentFolder()"><i class="fa-solid fa-arrows-rotate" style="margin-right: 8px; color: #a6e3a1;"></i> Refresh</a>
                         <a href="#" onclick="pywebview.api.exit_app()">Exit</a>
                     </div>
@@ -230,6 +223,17 @@
                     <div class="pane-content" style="flex:1; position:relative; display:flex; justify-content:center; align-items:center; height: 100%; overflow:hidden;">
                         <video id="video-player" style="display:none;" autoplay></video>
                         <audio id="audio-player" style="display:none;" autoplay></audio>
+                        <div id="video-convert-overlay"
+                            style="display:none; position:absolute; inset:0; z-index:60; background:rgba(17,17,27,0.86); flex-direction:column; align-items:center; justify-content:center; gap:12px; color:#cdd6f4; text-align:center; padding:20px;">
+                            <i class="fa-solid fa-spinner fa-spin" style="font-size:34px; color:#89b4fa;"></i>
+                            <div id="video-convert-text" style="font-size:14px; font-weight:bold; max-width:90%;">Preparing video...</div>
+                            <div style="width:min(360px,80%); height:7px; background:#313244; border-radius:4px; overflow:hidden;">
+                                <div id="video-convert-bar" style="width:0%; height:100%; background:#89b4fa; transition:width 0.25s;"></div>
+                            </div>
+                            <div style="font-size:11px; color:#a6adc8;">AVI/WMV files are converted to MP4 once, then cached.</div>
+                            <button onclick="cancelVideoConversion()"
+                                style="background:#313244; color:#cdd6f4; border:1px solid #45475a; border-radius:4px; padding:6px 14px; cursor:pointer; font-size:12px;">Cancel</button>
+                        </div>
                     </div>
                 </div>
 
@@ -264,30 +268,41 @@
             </div>
 
             <div id="bottom-controls">
-                <div id="progress-container"
-                    style="display:flex; align-items:center; gap:5px; margin-left: 15px; width: 250px;">
-                    <span id="current-time" style="font-size:12px; min-width:35px; text-align:right;">0:00</span>
-                    <input type="range" id="progress-slider" min="0" max="100" value="0" step="0.1"
-                        style="flex-grow:1; cursor:pointer;">
-                    <span id="total-time" style="font-size:12px; min-width:35px;">0:00</span>
+                <div id="transport-controls" style="display:flex; align-items:center; gap:10px; flex:1; min-width:0; max-width:680px;">
+                    <button onclick="handlePrevMedia()" title="Previous"><i class="fa-solid fa-backward-step"></i></button>
+                    <button onclick="togglePlay()" id="play-btn" title="Play/Pause"><i class="fa-solid fa-pause"></i></button>
+                    <button onclick="handleNextMedia()" title="Next"><i class="fa-solid fa-forward-step"></i></button>
+                    <div id="progress-container"
+                        style="display:flex; align-items:center; gap:8px; flex:1; min-width:120px;">
+                        <span id="current-time" style="font-size:12px; min-width:35px; text-align:right;">0:00</span>
+                        <input type="range" id="progress-slider" min="0" max="100" value="0" step="0.1"
+                            style="flex:1; cursor:pointer;">
+                        <span id="total-time" style="font-size:12px; min-width:35px;">0:00</span>
+                    </div>
                 </div>
 
-                <div id="loop-controls" style="display:flex; align-items:center; gap:5px; margin-left: 15px;">
-                    <input type="checkbox" id="loop-checkbox" onchange="resetLoopCount()">
-                    <label for="loop-checkbox">Loop</label>
-                    <input type="number" id="loop-count" min="1" max="99" value="3"
-                        style="width: 45px; background: #222; color: white; border: 1px solid #444; border-radius: 4px; padding: 2px 5px;"
-                        onchange="resetLoopCount()">
-                    <label for="loop-count">x</label>
+                <div id="volume-control" style="display:flex; align-items:center; gap:6px; min-width:105px; justify-content:flex-end;">
+                    <i class="fa-solid fa-volume-high" style="font-size:12px; color:#a0a0b0;"></i>
+                    <input type="range" id="volume-slider" min="0" max="100" value="100" oninput="changeVolume(this.value)"
+                        style="width:90px; cursor:pointer; margin:0; padding:0; height:3px;">
                 </div>
 
+                <div id="secondary-controls" style="display:flex; align-items:center; gap:16px;">
+                    <div id="loop-controls" style="display:flex; align-items:center; gap:5px;">
+                        <input type="checkbox" id="loop-checkbox" onchange="resetLoopCount()">
+                        <label for="loop-checkbox">Loop</label>
+                        <input type="number" id="loop-count" min="1" max="99" value="3"
+                            style="width: 45px; background: #222; color: white; border: 1px solid #444; border-radius: 4px; padding: 2px 5px;"
+                            onchange="resetLoopCount()">
+                        <label for="loop-count">x</label>
+                    </div>
 
-
-                <div style="display:flex; align-items:center; gap:5px; margin-left: 20px;">
-                    <label for="image-timer">Timer (s):</label>
-                    <input type="number" id="image-timer" min="0" max="60" value="0"
-                        style="width: 45px; background: #222; color: white; border: 1px solid #444; border-radius: 4px; padding: 2px 5px;"
-                        onchange="updateImageTimer()">
+                    <div style="display:flex; align-items:center; gap:5px;">
+                        <label for="image-timer">Timer (s):</label>
+                        <input type="number" id="image-timer" min="0" max="60" value="0"
+                            style="width: 45px; background: #222; color: white; border: 1px solid #444; border-radius: 4px; padding: 2px 5px;"
+                            onchange="updateImageTimer()">
+                    </div>
                 </div>
             </div>
 
@@ -351,6 +366,8 @@
                 <li><b>Delete Dupes:</b> Scans current folder to remove duplicate media files</li>
                 <li><b>Favorites:</b> Click the <i class="fa-regular fa-star"></i> icon to favorite. View them via 'Play
                     Favorites'</li>
+                <li><b>Create Image/Video CBZ:</b> Bundle a folder's images or MP4/WebM/OGG clips into one playable
+                    <code>.cbz</code> archive</li>
             </ul>
         </div>
 
@@ -958,6 +975,46 @@
         </div>
     </div>
     
+    <!-- Story Reader Modal -->
+    <div id="story-reader-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="story-reader-title"
+        style="display:none; position:fixed; inset:0; z-index:1100; background:rgba(0,0,0,0.72); padding:3vh 3vw;">
+        <div class="story-reader-shell">
+            <div class="story-reader-header">
+                <div style="min-width:0;">
+                    <div id="story-reader-title">Story</div>
+                    <div id="story-reader-author"></div>
+                    <div id="story-reader-meta"></div>
+                </div>
+                <div class="story-reader-header-actions">
+                    <button onclick="openStoryInBrowser()" title="Open in browser"><i class="fa-solid fa-arrow-up-right-from-square"></i></button>
+                    <button onclick="closeStoryReader()" title="Close"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+            </div>
+            <div id="story-reader-content" class="story-reader-content">
+                <div id="story-reader-body"></div>
+            </div>
+            <div class="story-reader-tts">
+                <div class="story-reader-tts-controls">
+                    <button id="story-tts-play" onclick="toggleStoryTts()" title="Read aloud"><i class="fa-solid fa-play"></i> <span>Read</span></button>
+                    <button onclick="stopStoryTts()" title="Stop"><i class="fa-solid fa-stop"></i></button>
+                    <label for="story-tts-engine">Engine</label>
+                    <select id="story-tts-engine" onchange="onStoryTtsEngineChanged()"
+                        title="Edge Neural uses Microsoft's online voices; System uses offline voices installed in Windows.">
+                        <option value="edge">Edge Neural</option>
+                        <option value="system">System</option>
+                    </select>
+                    <label for="story-tts-voice">Voice</label>
+                    <select id="story-tts-voice"></select>
+                    <label for="story-tts-rate">Speed</label>
+                    <input type="range" id="story-tts-rate" min="0.5" max="2" step="0.1" value="1">
+                    <span id="story-tts-rate-label">1.0x</span>
+                    <span id="story-tts-status">Ready</span>
+                </div>
+                <audio id="story-tts-audio" style="display:none;"></audio>
+            </div>
+        </div>
+    </div>
+
     <!-- Online Audio Modal -->
     <div id="online-audio-modal" class="modal">
         <div class="modal-content"
@@ -1085,9 +1142,18 @@
                         <div class="audio-search-wrapper"
                             style="width: 100%; margin-bottom: 10px; display: flex; gap: 10px; align-items: center; background: #111; padding: 8px 12px; border-radius: 6px; border: 1px solid #444;">
                             <i class="fa-solid fa-magnifying-glass" style="color: #89b4fa; font-size: 14px;"></i>
-                            <input type="text" id="tracks-search-box" placeholder="Filter tracks in list..."
+                            <input type="text" id="tracks-search-box" placeholder="Filter loaded tracks, or press Enter to search the site..."
                                 oninput="onTracksSearchChanged()"
+                                onkeydown="onTracksSearchKeydown(event)"
                                 style="flex: 1; background: transparent; border: none; outline: none; color: white; font-size: 14px; padding: 4px 0; box-shadow: none !important;">
+                            <button id="tracks-site-search-btn" onclick="searchAudioSite()"
+                                title="Search the source site for more tracks"
+                                style="display: inline-flex; align-items: center; gap: 5px; background: #89b4fa; color: #11111b; border: none; border-radius: 4px; padding: 5px 10px; font-size: 11px; font-weight: bold; cursor: pointer; white-space: nowrap;"><i
+                                    class="fa-solid fa-globe"></i> Search Site</button>
+                            <button id="tracks-refresh-btn" onclick="refreshAudioSite()"
+                                title="Scrape this site again"
+                                style="display: inline-flex; align-items: center; justify-content: center; background: #313244; color: #cdd6f4; border: 1px solid #45475a; border-radius: 4px; padding: 5px 9px; font-size: 11px; cursor: pointer;"><i
+                                    class="fa-solid fa-rotate"></i></button>
                         </div>
 
                         <!-- Track list scroll box -->

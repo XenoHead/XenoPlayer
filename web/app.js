@@ -1,5 +1,8 @@
 let videoPlayer, audioPlayer, imageViewer, playlistContainer, fileNameDisplay, playBtn, prevBtn, nextBtn, cm, mlCm, omCm, mediaContainer, selectionBox, transContainer, loadingOverlay, observer;
 let currentIsAudio = false;
+const CONVERTIBLE_VIDEO_EXTS = ['avi', 'wmv', 'mkv', 'mov', 'flv', 'mpg', 'mpeg', 'm4v', 'ts'];
+const videoPlaybackOverrides = new Map();
+let pendingVideoConversion = null;
 let normBtn, thresholdSlider, gainSlider, normContainer;
 
 videoPlayer = document.getElementById('video-player');
@@ -117,6 +120,52 @@ function toggleSortDir() {
     const btn = document.getElementById('sort-dir-btn');
     if (btn) btn.innerHTML = sortAsc ? '<i class="fa-solid fa-arrow-up"></i>' : '<i class="fa-solid fa-arrow-down"></i>';
     renderPlaylist();
+    savePlaylistSettings();
+}
+
+function savePlaylistSettings() {
+    const typeFilter = document.getElementById('type-filter');
+    const sortSelect = document.getElementById('playlist-sort');
+    const viewSelect = document.getElementById('view-filter');
+    const values = {
+        typeFilter: typeFilter ? typeFilter.value : 'all',
+        sort: sortSelect ? sortSelect.value : 'name',
+        asc: sortAsc,
+        view: viewSelect ? viewSelect.value : 'medium'
+    };
+    if (appState) {
+        appState.type_filter = values.typeFilter;
+        appState.playlist_sort = values.sort;
+        appState.sort_asc = values.asc;
+        appState.view_mode = values.view;
+    }
+    pywebview.api.save_playlist_settings(
+        values.typeFilter, values.sort, values.asc, values.view
+    );
+}
+
+function resetPlaylistTypeFilter() {
+    const typeFilter = document.getElementById('type-filter');
+    if (typeFilter && typeFilter.value !== 'all') {
+        typeFilter.value = 'all';
+        savePlaylistSettings();
+    }
+}
+
+function openFileDialog() {
+    pywebview.api.open_dialog().then(() => {
+        resetPlaylistTypeFilter();
+        updatePlaylist();
+        updateState();
+    });
+}
+
+function changePlaylistView(value) {
+    const list = document.getElementById('playlist');
+    if (!list) return;
+    list.classList.remove('view-list', 'view-small', 'view-medium', 'view-large');
+    list.classList.add('view-' + (value || 'medium'));
+    savePlaylistSettings();
 }
 let currentIndex = -1;
 let selectedIndices = new Set();
@@ -400,6 +449,13 @@ function loadMedia(path, index) {
     // Remove splash view class if it exists
     mediaContainer.classList.remove('splash-view');
 
+    // A previous slow conversion must not take over after the user moves on.
+    if (pendingVideoConversion && pendingVideoConversion.path !== path) {
+        pendingVideoConversion = null;
+        hideVideoConvertOverlay();
+        pywebview.api.cancel_video_conversion();
+    }
+
     if (splitScreenActive) {
         const cleanPath = path.split('?')[0];
         const ext = cleanPath.split('.').pop().toLowerCase();
@@ -432,9 +488,21 @@ function loadMedia(path, index) {
 
     const cleanPath = path.split('?')[0];
     const ext = cleanPath.split('.').pop().toLowerCase();
-    const mediaUrl = isOnline ? path : `http://localhost:5050/media?path=${encodeURIComponent(path)}`;
+    const overridePath = isOnline ? '' : videoPlaybackOverrides.get(path);
+    const playbackPath = overridePath || path;
+    const mediaUrl = isOnline ? path : `http://localhost:5050/media?path=${encodeURIComponent(playbackPath)}`;
 
-    if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) {
+    const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext);
+    const isAudio = ['mp3', 'wav', 'wave', 'm4a', 'm4b', 'aac', 'flac', 'ogg', 'oga', 'opus'].includes(ext);
+    const needsConversion = !isOnline && !overridePath && !isImage && !isAudio
+        && CONVERTIBLE_VIDEO_EXTS.includes(ext);
+
+    if (needsConversion) {
+        requestVideoConversion(path, index, fullDisplayName);
+        return;
+    }
+
+    if (isImage) {
         // Single view image
         document.getElementById('left-split-pane').style.display = 'none';
         document.getElementById('right-split-pane').style.display = 'flex';
@@ -457,7 +525,6 @@ function loadMedia(path, index) {
         updateImageTimer();
     } else {
         // Single view video or audio
-        const isAudio = ['mp3', 'wav', 'wave'].includes(ext);
         currentIsAudio = isAudio;
         const mediaEl = isAudio ? audioPlayer : videoPlayer;
         const otherEl = isAudio ? videoPlayer : audioPlayer;
@@ -470,7 +537,10 @@ function loadMedia(path, index) {
         otherEl.pause();
         mediaEl.style.display = 'block';
         mediaEl.src = mediaUrl;
-        mediaEl.play();
+        const playPromise = mediaEl.play();
+        if (playPromise && playPromise.catch) {
+            playPromise.catch(error => console.error('Media playback failed:', error));
+        }
         playBtn.innerHTML = '<i class="fa-solid fa-pause"></i>';
         document.getElementById('translations-container').innerHTML = '';
         if (imageTimerInterval) {
@@ -488,6 +558,123 @@ function loadMedia(path, index) {
     updateState();
 }
 
+function requestVideoConversion(originalPath, index, displayName) {
+    pendingVideoConversion = null;
+    document.getElementById('left-split-pane').style.display = 'flex';
+    document.getElementById('right-split-pane').style.display = 'none';
+    imageViewer.style.display = 'none';
+    audioPlayer.style.display = 'none';
+    audioPlayer.pause();
+    videoPlayer.style.display = 'block';
+    videoPlayer.pause();
+    currentIsAudio = false;
+    playBtn.innerHTML = '<i class="fa-solid fa-pause"></i>';
+    document.getElementById('translations-container').innerHTML = '';
+    showVideoConvertOverlay(displayName);
+
+    pywebview.api.prepare_video_for_playback(originalPath).then(res => {
+        if (!res || res.status === 'error') {
+            hideVideoConvertOverlay();
+            alert((res && res.msg) || 'Could not prepare this video for playback.');
+            return;
+        }
+        if (res.status === 'native') {
+            hideVideoConvertOverlay();
+            loadMedia(originalPath, index);
+            return;
+        }
+        if (res.status === 'ready') {
+            hideVideoConvertOverlay();
+            videoPlaybackOverrides.set(originalPath, res.path);
+            loadMedia(originalPath, index);
+            return;
+        }
+        if (res.status === 'converting') {
+            pendingVideoConversion = {
+                token: res.token,
+                path: originalPath,
+                index: index,
+                name: displayName
+            };
+            return;
+        }
+        if (res.status === 'no_ffmpeg') {
+            hideVideoConvertOverlay();
+            if (confirm((res.msg || 'ffmpeg was not found.') + '\n\nOpen this video in your default player instead?')) {
+                pywebview.api.open_path_external(originalPath);
+            }
+            return;
+        }
+        hideVideoConvertOverlay();
+        alert(res.msg || 'Could not prepare this video.');
+    }).catch(error => {
+        hideVideoConvertOverlay();
+        alert('Could not prepare this video:\n' + (error && error.message ? error.message : error));
+    });
+}
+
+function showVideoConvertOverlay(name) {
+    const overlay = document.getElementById('video-convert-overlay');
+    const text = document.getElementById('video-convert-text');
+    const bar = document.getElementById('video-convert-bar');
+    if (overlay) overlay.style.display = 'flex';
+    if (text) text.textContent = `Preparing ${name || 'video'}...`;
+    if (bar) {
+        bar.style.width = '0%';
+        bar.style.opacity = '1';
+    }
+}
+
+function hideVideoConvertOverlay() {
+    const overlay = document.getElementById('video-convert-overlay');
+    if (overlay) overlay.style.display = 'none';
+}
+
+function updateVideoConvertProgress(percent, name) {
+    const text = document.getElementById('video-convert-text');
+    const bar = document.getElementById('video-convert-bar');
+    if (text) {
+        text.textContent = percent >= 0
+            ? `Converting ${name}... ${percent}%`
+            : `Converting ${name}...`;
+    }
+    if (bar) {
+        if (percent >= 0) {
+            bar.style.width = Math.max(0, Math.min(100, percent)) + '%';
+            bar.style.opacity = '1';
+        } else {
+            bar.style.width = '35%';
+            bar.style.opacity = '0.6';
+        }
+    }
+}
+
+function videoConvertFinished(token, convertedPath, sourcePath) {
+    if (!pendingVideoConversion || pendingVideoConversion.token !== token) return;
+    const pending = pendingVideoConversion;
+    pendingVideoConversion = null;
+    hideVideoConvertOverlay();
+    videoPlaybackOverrides.set(pending.path, convertedPath);
+    loadMedia(pending.path, pending.index);
+}
+
+function videoConvertFailed(token, message) {
+    if (!pendingVideoConversion || pendingVideoConversion.token !== token) return;
+    const pending = pendingVideoConversion;
+    pendingVideoConversion = null;
+    hideVideoConvertOverlay();
+    if (message === 'Cancelled') return;
+    if (confirm(`Could not convert this video:\n${message}\n\nOpen it in your default player instead?`)) {
+        pywebview.api.open_path_external(pending.path);
+    }
+}
+
+function cancelVideoConversion() {
+    pendingVideoConversion = null;
+    hideVideoConvertOverlay();
+    pywebview.api.cancel_video_conversion();
+}
+
 function updateState() {
     pywebview.api.get_state().then(state => {
         appState = state;
@@ -496,6 +683,24 @@ function updateState() {
 }
 
 function renderState() {
+    // Restore playlist filter/sort/view settings.
+    const typeFilter = document.getElementById('type-filter');
+    if (typeFilter && appState.type_filter) typeFilter.value = appState.type_filter;
+    const sortSelect = document.getElementById('playlist-sort');
+    if (sortSelect && appState.playlist_sort) sortSelect.value = appState.playlist_sort;
+    const viewSelect = document.getElementById('view-filter');
+    if (viewSelect && appState.view_mode) viewSelect.value = appState.view_mode;
+    if (typeof appState.sort_asc === 'boolean') {
+        sortAsc = appState.sort_asc;
+        const sortBtn = document.getElementById('sort-dir-btn');
+        if (sortBtn) sortBtn.innerHTML = sortAsc ? '<i class="fa-solid fa-arrow-up"></i>' : '<i class="fa-solid fa-arrow-down"></i>';
+    }
+    const playlistEl = document.getElementById('playlist');
+    if (playlistEl && appState.view_mode) {
+        playlistEl.classList.remove('view-list', 'view-small', 'view-medium', 'view-large');
+        playlistEl.classList.add('view-' + appState.view_mode);
+    }
+
     // Update Recursive Load Checkbox
     const recCheckbox = document.getElementById('recursive-load-checkbox');
     if (recCheckbox) {
@@ -2102,7 +2307,7 @@ function updatePlaylist() {
     pywebview.api.get_playlist().then(items => {
         playlist = items.map((item, i) => ({ ...item, originalIndex: i }));
         if (splitScreenActive) {
-            const videoExts = ['mp4', 'webm', 'ogg', 'mp3', 'wav', 'wave'];
+            const videoExts = ['mp4', 'webm', 'ogg', 'mp3', 'wav', 'wave', 'm4a', 'm4b', 'aac', 'flac', 'oga', 'opus'];
             leftPlaylist = playlist.filter(f => {
                 const ext = f.path.split('.').pop().toLowerCase();
                 return videoExts.includes(ext);
@@ -2189,9 +2394,11 @@ function renderPlaylist() {
         const filterValue = filterSelect.value;
         const extMap = {
             'image': ['jpg', 'jpeg', 'png', 'webp', 'gif'],
-            'video': ['mp4', 'webm', 'ogg'],
-            'audio': ['mp3', 'wav', 'wave'],
-            'text': ['txt', 'md', 'json', 'csv']
+            'video': ['mp4', 'webm', 'ogg', 'avi', 'wmv', 'mkv', 'mov', 'flv', 'mpg', 'mpeg', 'm4v', 'ts'],
+            'audio': ['mp3', 'wav', 'wave', 'm4a', 'm4b', 'aac', 'flac', 'ogg', 'oga', 'opus'],
+            'text': ['txt', 'md', 'json', 'csv'],
+            'zip': ['zip'],
+            'cbz': ['cbz']
         };
         const validExts = extMap[filterValue] || [];
         
@@ -2262,7 +2469,20 @@ function renderPlaylist() {
                         loadRightMedia(item.path);
                     }
                 } else {
-                    pywebview.api.play_index(item.originalIndex !== undefined ? item.originalIndex : index);
+                    const ext = item.path.split('.').pop().toLowerCase();
+                    if (ext === 'cbz' || ext === 'zip') {
+                        resetPlaylistTypeFilter();
+                        pywebview.api.open_cbz_archive(item.path).then(res => {
+                            if (res && res.status === 'error') {
+                                alert(res.msg || 'Could not open this archive.');
+                                return;
+                            }
+                            updatePlaylist();
+                            updateState();
+                        });
+                    } else {
+                        pywebview.api.play_index(item.originalIndex !== undefined ? item.originalIndex : index);
+                    }
                 }
             }
             renderPlaylist();
@@ -2289,17 +2509,26 @@ function renderPlaylist() {
         // Also suppress contextmenu just in case it leaks through
         div.oncontextmenu = (e) => e.preventDefault();
 
-        const img = document.createElement('img');
-        img.className = 'playlist-thumbnail';
-        img.dataset.src = `http://localhost:5050/thumbnail?path=${encodeURIComponent(item.path)}`;
-        img.onerror = function () { this.onerror = null; this.src = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='; };
-        observer.observe(img);
+        const thumbExt = item.path.split('.').pop().toLowerCase();
+        if (thumbExt === 'cbz' || thumbExt === 'zip') {
+            const archiveThumb = document.createElement('div');
+            archiveThumb.className = 'playlist-thumbnail';
+            archiveThumb.style.cssText = 'display:flex; align-items:center; justify-content:center; color:#cba6f7; background:#1e1e2e; font-size:20px;';
+            archiveThumb.innerHTML = '<i class="fa-solid fa-file-zipper"></i>';
+            div.appendChild(archiveThumb);
+        } else {
+            const img = document.createElement('img');
+            img.className = 'playlist-thumbnail';
+            img.dataset.src = `http://localhost:5050/thumbnail?path=${encodeURIComponent(item.path)}`;
+            img.onerror = function () { this.onerror = null; this.src = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='; };
+            observer.observe(img);
+            div.appendChild(img);
+        }
 
         const nameSpan = document.createElement('span');
         nameSpan.className = 'playlist-name';
         nameSpan.textContent = item.name;
 
-        div.appendChild(img);
         div.appendChild(nameSpan);
         playlistContainer.appendChild(div);
     });
@@ -2735,8 +2964,12 @@ function updateImageTimer() {
 
 // --- Keyboard & Mouse Shortcuts ---
 window.addEventListener('keydown', e => {
-    // Prevent triggering if typing in an input or textarea
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    // Prevent triggering if typing in an input, textarea or select.
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+
+    // The story reader has its own keyboard handling (Escape/TTS controls).
+    const storyReader = document.getElementById('story-reader-modal');
+    if (storyReader && storyReader.style.display === 'flex') return;
 
     const hotkeys = appState.hotkeys || { next: ["ArrowRight", "Space", "", "", ""], prev: ["ArrowLeft", "", "", "", ""], 
         pause: ["KeyP", "", "", "", ""], mute: ["KeyM", "", "", "", ""], 
@@ -4171,7 +4404,7 @@ function openCollectionLibrary() {
     pywebview.api.get_collection_library().then(res => {
         if (res.status === 'success') {
             currentCollectionLibrary = res.library;
-            collectionLibraryStatus.innerText = `Found ${currentCollectionLibrary.length} collection.`;
+            collectionLibraryStatus.innerText = `Found ${currentCollectionLibrary.length} collection${currentCollectionLibrary.length === 1 ? '' : 's'}.`;
             renderCollectionLibrary();
         } else {
             collectionLibraryStatus.innerText = `Error loading library: ${res.msg}`;
@@ -4207,10 +4440,11 @@ function renderCollectionLibrary() {
         card.style.flexDirection = 'column';
         card.style.gap = '10px';
         card.style.cursor = 'pointer';
-        card.title = 'Double-click to read | Right-click for options';
+        card.title = 'Double-click to open | Right-click for options';
         card.ondblclick = () => {
             closeCollectionLibrary();
             if (collection.kind === 'archive') {
+                resetPlaylistTypeFilter();
                 pywebview.api.open_cbz_archive(collection.path).then(res => {
                     if (res && res.status === 'error') {
                         alert(res.msg);
@@ -4220,7 +4454,18 @@ function renderCollectionLibrary() {
                     updateState();
                 });
             } else {
-                pywebview.api.open_collection_viewer(collection.path);
+                pywebview.api.open_collection_viewer(collection.path).then(res => {
+                    if (res && res.status === 'error') {
+                        alert(res.msg || 'Could not open this collection.');
+                        return;
+                    }
+                    if (!res || res.viewer !== 'collection_viewer') {
+                        updatePlaylist();
+                        updateState();
+                    }
+                }).catch(error => {
+                    alert('Could not open this collection:\n' + error);
+                });
             }
         };
         card.oncontextmenu = (e) => {
@@ -4272,11 +4517,17 @@ function renderCollectionLibrary() {
         const imgContainer = document.createElement('div');
         imgContainer.style.position = 'relative';
 
+        const placeholderPixel = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
         const img = document.createElement('img');
         if (collection.thumb) {
             img.src = `http://localhost:5050/thumbnail?path=${encodeURIComponent(collection.thumb)}`;
+            img.onerror = () => {
+                img.onerror = null;
+                img.src = placeholderPixel;
+                img.style.background = '#111';
+            };
         } else {
-            img.src = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='; // Transparent pixel
+            img.src = placeholderPixel; // Transparent pixel
             img.style.background = '#111';
         }
         img.style.width = '100%';
@@ -4287,18 +4538,30 @@ function renderCollectionLibrary() {
 
         imgContainer.appendChild(img);
 
-        if (collection.page_count !== undefined && collection.kind !== 'archive') {
-            const pageBadge = document.createElement('div');
-            pageBadge.innerHTML = `<i class="fa-regular fa-images"></i> ${collection.page_count}`;
-            pageBadge.style.position = 'absolute';
-            pageBadge.style.bottom = '5px';
-            pageBadge.style.right = '5px';
-            pageBadge.style.background = 'rgba(0, 0, 0, 0.8)';
-            pageBadge.style.color = 'white';
-            pageBadge.style.padding = '3px 6px';
-            pageBadge.style.borderRadius = '4px';
-            pageBadge.style.fontSize = '11px';
-            imgContainer.appendChild(pageBadge);
+        const imageCount = collection.page_count || 0;
+        const videoCount = collection.video_count || 0;
+        if (videoCount > 0 && imageCount === 0) {
+            const playOverlay = document.createElement('div');
+            playOverlay.innerHTML = '<i class="fa-solid fa-play"></i>';
+            playOverlay.style.cssText = 'position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:rgba(255,255,255,0.85); font-size:28px; text-shadow:0 2px 8px #000; pointer-events:none;';
+            imgContainer.appendChild(playOverlay);
+        }
+        if (collection.kind !== 'archive' && (imageCount > 0 || videoCount > 0)) {
+            const badgeRow = document.createElement('div');
+            badgeRow.style.cssText = 'position:absolute; bottom:5px; right:5px; display:flex; gap:4px;';
+            if (imageCount > 0) {
+                const pageBadge = document.createElement('div');
+                pageBadge.innerHTML = `<i class="fa-regular fa-images"></i> ${imageCount}`;
+                pageBadge.style.cssText = 'background:rgba(0,0,0,0.8); color:white; padding:3px 6px; border-radius:4px; font-size:11px;';
+                badgeRow.appendChild(pageBadge);
+            }
+            if (videoCount > 0) {
+                const videoBadge = document.createElement('div');
+                videoBadge.innerHTML = `<i class="fa-solid fa-video"></i> ${videoCount}`;
+                videoBadge.style.cssText = 'background:rgba(0,0,0,0.8); color:#89dceb; padding:3px 6px; border-radius:4px; font-size:11px;';
+                badgeRow.appendChild(videoBadge);
+            }
+            imgContainer.appendChild(badgeRow);
         }
 
         if (collection.kind === 'archive') {
@@ -4335,15 +4598,34 @@ function closeCollectionLibrary() {
 
 function checkForUpdates() {
     pywebview.api.check_for_updates().then(res => {
+        if (!res) {
+            alert('The update check returned no response.');
+            return;
+        }
         if (res.status === 'update_available') {
-            if (confirm(`A new version (${res.version}) is available!\nWould you like to open the download page?`)) {
-                pywebview.api.open_external_url(res.url);
+            const latest = res.version || res.latest || res.commit || 'new commit';
+            let message = `A new update is available (${latest}).`;
+            if (res.current) message += `\nCurrent: ${res.current}`;
+            if (res.date) message += `\nPublished: ${res.date}`;
+            if (res.notes) message += `\n\n${res.notes}`;
+            message += '\n\nOpen the Git page?';
+            if (confirm(message)) {
+                pywebview.api.open_external_url(res.url || 'https://github.com/XenoHead/XenoPlayer');
             }
         } else if (res.status === 'up_to_date') {
-            alert(`You are using the latest version (${res.version}).`);
+            let message = `You are up to date (${res.version || 'local build'}).`;
+            if (res.latest) message += `\nLatest Git commit: ${res.latest}`;
+            if (res.ahead > 0) message += `\nYour local checkout is ${res.ahead} commit(s) ahead of origin/main.`;
+            alert(message);
         } else {
-            alert(`Failed to check for updates: ${res.msg}\n\nPlease check www.xenohead.com manually.`);
+            alert(
+                'Failed to check for updates:\n' +
+                (res.msg || 'Unknown error') +
+                '\n\nTip: run XenoPlayer from a Git checkout with credentials, or add GITHUB_TOKEN to .env for a private repo.'
+            );
         }
+    }).catch(error => {
+        alert('Failed to check for updates:\n' + (error && error.message ? error.message : error));
     });
 }
 
@@ -4375,6 +4657,7 @@ let filteredTracksList = [];
 let tracksSearchQuery = "";
 let browserSourceType = ""; // "site" or "playlist"
 let browserSourceName = "";
+let browserSourceUrl = "";
 let currentAudioTab = "sites"; // "sites" or "playlists"
 let tracksLoadedCount = 200;
 
@@ -4459,8 +4742,13 @@ function renderOnlineAudioList() {
         const rawSites = appState.audio_sites || [];
         const sites = rawSites.map(s => {
             if (!s) return null;
-            // Map tags from notes
-            const tags = s.notes ? s.notes.split(',').map(t => t.trim().toLowerCase()).filter(t => t.length > 0) : [];
+            // Notes double as a JSON config for guessed sources; don't turn
+            // that blob into a visible tag.
+            const notes = (s.notes || '').trim();
+            const isJsonConfig = notes.startsWith('{') && notes.endsWith('}');
+            const tags = (!isJsonConfig && notes)
+                ? notes.split(',').map(t => t.trim().toLowerCase()).filter(t => t.length > 0)
+                : [];
             return {
                 id: s.id,
                 name: s.name,
@@ -4657,7 +4945,11 @@ function renderOnlinePlaylistsGrid() {
                 alert("Playlist is empty. Browse sites and add tracks first!");
                 return;
             }
-            pywebview.api.play_online_playlist(tracks, 0);
+            pywebview.api.play_online_playlist(tracks, 0).then(res => {
+                if (res && res.status === 'error') {
+                    alert(res.msg || 'Could not play this playlist.');
+                }
+            });
         };
 
         const browseBtn = document.createElement('button');
@@ -4741,11 +5033,17 @@ function updatePlaylistDropdown() {
 function openTracksBrowser(type, name, data) {
     browserSourceType = type;
     browserSourceName = name;
+    browserSourceUrl = (type === 'site') ? (data || '') : '';
     tracksSearchQuery = "";
     tracksLoadedCount = 200;
 
     const searchBox = document.getElementById('tracks-search-box');
-    if (searchBox) searchBox.value = "";
+    if (searchBox) {
+        searchBox.value = "";
+        searchBox.placeholder = (type === 'site')
+            ? "Filter loaded tracks, or press Enter to search the site..."
+            : "Filter tracks in this playlist...";
+    }
 
     document.getElementById('audio-tab-sites-view').style.display = 'none';
     document.getElementById('audio-tab-playlists-view').style.display = 'none';
@@ -4763,29 +5061,86 @@ function openTracksBrowser(type, name, data) {
         if (btnAddAll) btnAddAll.style.display = (type === 'site') ? 'block' : 'none';
     }
 
+    const siteSearchBtn = document.getElementById('tracks-site-search-btn');
+    if (siteSearchBtn) siteSearchBtn.style.display = (type === 'site') ? 'inline-flex' : 'none';
+    const refreshBtn = document.getElementById('tracks-refresh-btn');
+    if (refreshBtn) refreshBtn.style.display = (type === 'site') ? 'inline-flex' : 'none';
+
     updatePlaylistDropdown();
 
     if (type === 'site') {
-        subtitle.textContent = `Scraping audio tracks from: ${data}`;
-        const container = document.getElementById('audio-tracks-list');
-        if (container) container.innerHTML = '<div style="text-align: center; color: #888; padding: 30px;"><i class="fa-solid fa-spinner fa-spin"></i> Scraping audio links... Please wait.</div>';
-
-        pywebview.api.scrape_audio_links(data).then(res => {
-            if (res.status === 'success') {
-                currentTracksList = res.tracks || [];
-                subtitle.textContent = `Found ${currentTracksList.length} streamable track(s) on: ${data}`;
-                applyTracksFilter();
-                renderTracksList();
-            } else {
-                if (container) container.innerHTML = `<div style="text-align: center; color: #f38ba8; padding: 30px;"><i class="fa-solid fa-circle-exclamation"></i> Error: ${res.msg}</div>`;
-                subtitle.textContent = `Scrape failed.`;
-            }
-        });
+        scrapeAudioSite(data);
     } else {
         currentTracksList = data || [];
         subtitle.textContent = `Online Playlist - ${currentTracksList.length} track(s)`;
         applyTracksFilter();
         renderTracksList();
+    }
+}
+
+function scrapeAudioSite(siteUrl, query) {
+    browserSourceUrl = siteUrl || browserSourceUrl;
+    const subtitle = document.getElementById('tracks-browser-subtitle');
+    const container = document.getElementById('audio-tracks-list');
+    const action = query ? `Searching for "${query}"` : 'Scraping audio tracks';
+    if (subtitle) subtitle.textContent = `${action} from: ${browserSourceUrl}`;
+    if (container) {
+        container.innerHTML = '<div style="text-align: center; color: #888; padding: 30px;"><i class="fa-solid fa-spinner fa-spin"></i> Scraping audio links... Please wait.</div>';
+    }
+
+    const request = query
+        ? pywebview.api.search_audio_site(browserSourceUrl, query)
+        : pywebview.api.scrape_audio_links(browserSourceUrl);
+
+    request.then(res => {
+        if (res.status === 'success') {
+            currentTracksList = res.tracks || [];
+            tracksLoadedCount = 200;
+            if (query) {
+                tracksSearchQuery = '';
+                filteredTracksList = [...currentTracksList];
+                subtitle.textContent = `Found ${currentTracksList.length} track(s) for "${query}"`;
+            } else {
+                subtitle.textContent = `Found ${currentTracksList.length} streamable track(s) on: ${browserSourceUrl}`;
+                applyTracksFilter();
+            }
+            renderTracksList();
+        } else {
+            if (container) {
+                container.innerHTML = `<div style="text-align: center; color: #f38ba8; padding: 30px;"><i class="fa-solid fa-circle-exclamation"></i> Error: ${res.msg}</div>`;
+            }
+            subtitle.textContent = 'Scrape failed.';
+        }
+    }).catch(error => {
+        if (container) {
+            container.innerHTML = `<div style="text-align: center; color: #f38ba8; padding: 30px;">Error: ${error}</div>`;
+        }
+        subtitle.textContent = 'Scrape failed.';
+    });
+}
+
+function searchAudioSite() {
+    if (browserSourceType !== 'site' || !browserSourceUrl) return;
+    const box = document.getElementById('tracks-search-box');
+    const query = box ? box.value.trim() : '';
+    if (!query) {
+        alert('Type a search term first.');
+        return;
+    }
+    scrapeAudioSite(browserSourceUrl, query);
+}
+
+function refreshAudioSite() {
+    if (browserSourceType !== 'site' || !browserSourceUrl) return;
+    const box = document.getElementById('tracks-search-box');
+    if (box) box.value = '';
+    scrapeAudioSite(browserSourceUrl);
+}
+
+function onTracksSearchKeydown(event) {
+    if (event.key === 'Enter' && browserSourceType === 'site') {
+        event.preventDefault();
+        searchAudioSite();
     }
 }
 
@@ -4824,8 +5179,11 @@ function renderTracksList() {
     container.innerHTML = '';
 
     if (filteredTracksList.length === 0) {
+        const message = currentTracksList.length === 0
+            ? 'No tracks found on this page.'
+            : 'No tracks match your filter.';
         container.innerHTML = `<div style="text-align: center; color: #666; padding: 30px; font-size: 13px;">
-            No tracks found matching your filter criteria.
+            ${message}
         </div>`;
         return;
     }
@@ -4871,14 +5229,23 @@ function renderTracksList() {
         downloadBtn.onclick = () => {
             downloadBtn.disabled = true;
             downloadBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
-            pywebview.api.download_online_track(track.url, track.name).then(res => {
-                if (res.status === 'started') {
-                    // download started
-                } else {
-                    alert(res.msg);
-                    downloadBtn.disabled = false;
-                    downloadBtn.innerHTML = '<i class="fa-solid fa-download"></i>';
+            const resetDownloadButton = () => {
+                downloadBtn.disabled = false;
+                downloadBtn.innerHTML = '<i class="fa-solid fa-download"></i>';
+            };
+            pywebview.api.download_online_track(
+                track.url, track.name, track.download_url || track.url
+            ).then(res => {
+                if (res && res.status === 'started') return;
+                if (res && res.status === 'cancelled') {
+                    resetDownloadButton();
+                    return;
                 }
+                alert((res && res.msg) || 'Could not start the download.');
+                resetDownloadButton();
+            }).catch(error => {
+                alert('Could not start the download:\n' + (error && error.message ? error.message : error));
+                resetDownloadButton();
             });
         };
         actions.appendChild(downloadBtn);
@@ -5030,10 +5397,36 @@ function playModalTrack(tracks, index) {
 
     trackName.textContent = track.name;
     audio.src = track.url;
-    audio.play();
+    const playPromise = audio.play();
+    if (playPromise && playPromise.catch) {
+        playPromise.catch(error => {
+            console.error('Modal audio playback failed:', error);
+            showAudioPlaybackError(track, error);
+        });
+    }
 
     container.style.display = 'flex';
     playBtn.innerHTML = '<i class="fa-solid fa-pause"></i>';
+}
+
+let lastAudioPlaybackErrorUrl = '';
+
+function showAudioPlaybackError(track, error) {
+    const key = track && track.url ? track.url : '';
+    if (key && key === lastAudioPlaybackErrorUrl) return;
+    lastAudioPlaybackErrorUrl = key;
+
+    const nameEl = document.getElementById('modal-player-track-name');
+    if (nameEl && track) nameEl.textContent = `${track.name} (unavailable)`;
+    const playBtn = document.getElementById('modal-player-play-btn');
+    if (playBtn) playBtn.innerHTML = '<i class="fa-solid fa-play"></i>';
+
+    const reason = error && error.message ? ` (${error.message})` : '';
+    alert(
+        `This track could not be played${reason}.\n\n` +
+        'The URL may be offline, or the site may have changed its file layout. ' +
+        'Go back and re-open the site so the track list is scraped again.'
+    );
 }
 
 function toggleModalPlay() {
@@ -5042,7 +5435,12 @@ function toggleModalPlay() {
     if (!audio || !playBtn) return;
 
     if (audio.paused) {
-        audio.play();
+        audio.play().catch(error => {
+            console.error('Modal audio playback failed:', error);
+            const track = (modalCurrentTracks && modalCurrentIndex >= 0)
+                ? modalCurrentTracks[modalCurrentIndex] : null;
+            showAudioPlaybackError(track, error);
+        });
         playBtn.innerHTML = '<i class="fa-solid fa-pause"></i>';
         if (videoPlayer && !videoPlayer.paused) {
             togglePlay();
@@ -5169,6 +5567,31 @@ function updateAudioDownloadProgress(current, total, title) {
 
         modalAudio.addEventListener('ended', () => {
             playNextModalTrack();
+        });
+
+        modalAudio.addEventListener('error', () => {
+            const track = (modalCurrentTracks && modalCurrentIndex >= 0)
+                ? modalCurrentTracks[modalCurrentIndex] : null;
+            showAudioPlaybackError(track, null);
+        });
+    }
+
+    const topAudio = document.getElementById('top-audio-element');
+    if (topAudio) {
+        topAudio.addEventListener('error', () => {
+            // Closing the bar clears src; that is not a playback failure.
+            if (!topAudio.getAttribute('src')) return;
+            const track = (topAudioPlaylist && topAudioIndex >= 0)
+                ? topAudioPlaylist[topAudioIndex] : null;
+            const key = track && track.url ? track.url : '';
+            if (key && key === lastAudioPlaybackErrorUrl) return;
+            lastAudioPlaybackErrorUrl = key;
+            const playBtn = document.getElementById('top-audio-play-btn');
+            if (playBtn) playBtn.innerHTML = '<i class="fa-solid fa-play"></i>';
+            alert(
+                'This track could not be played. The URL may be offline, or the site ' +
+                'may have changed its file layout.\n\nRe-open the site and scrape it again.'
+            );
         });
     }
 
@@ -5330,7 +5753,7 @@ function browsePaneFolder(side) {
             }
             
             if (side === 'left') {
-                const videoExts = ['mp4', 'webm', 'ogg', 'mp3', 'wav', 'wave'];
+                const videoExts = ['mp4', 'webm', 'ogg', 'mp3', 'wav', 'wave', 'm4a', 'm4b', 'aac', 'flac', 'oga', 'opus'];
                 leftPlaylist = files.filter(f => {
                     const ext = f.name.split('.').pop().toLowerCase();
                     return videoExts.includes(ext);
@@ -5478,6 +5901,31 @@ function loadFolderAction() {
             pywebview.api.load_selected_directory(path);
         }
     });
+}
+
+function createCbz(kind) {
+    const create = kind === 'image' ? pywebview.api.create_image_cbz : pywebview.api.create_video_cbz;
+    create().then(res => {
+        if (!res || res.status === 'cancelled') return;
+        if (res.status === 'error') {
+            alert(res.msg || `Could not create the ${kind} CBZ.`);
+            return;
+        }
+        const label = res.label || (kind === 'image' ? 'Image' : 'Video');
+        const article = label.toLowerCase() === 'image' ? 'an' : 'a';
+        const unit = res.count === 1 ? 'file' : 'files';
+        if (confirm(`Created ${article} ${label} CBZ with ${res.count} ${unit}:\n${res.path}\n\nOpen it now?`)) {
+            pywebview.api.load_directory(res.path);
+        }
+    });
+}
+
+function createImageCbz() {
+    createCbz('image');
+}
+
+function createVideoCbz() {
+    createCbz('video');
 }
 
 // --- Folder Tree-view & Navigation Helpers ---
@@ -5660,7 +6108,7 @@ function renderFolderTree(listToRender, currentSubdirs) {
         closeArchiveBtn.style.cursor = 'pointer';
         closeArchiveBtn.style.fontSize = '11px';
         closeArchiveBtn.style.padding = '2px 5px';
-        closeArchiveBtn.textContent = 'Close CBZ';
+        closeArchiveBtn.textContent = 'Close Archive';
         closeArchiveBtn.onclick = () => {
             pywebview.api.close_cbz_archive().then(result => {
                 if (result && result.status === 'error') alert(result.msg);
@@ -5732,6 +6180,9 @@ function renderFolderTree(listToRender, currentSubdirs) {
         
         div.onclick = (e) => {
             if (e.detail > 1) return;
+            if (node.type === 'archive') {
+                resetPlaylistTypeFilter();
+            }
             const openFolder = node.type === 'archive'
                 ? pywebview.api.open_cbz_archive(node.path)
                 : pywebview.api.load_selected_directory(node.path);
@@ -5857,7 +6308,13 @@ function addGridSite(nameEl, domEl, notesEl, list, renderCallback) {
     if (!nameInput) return;
     const name = nameInput.value.trim();
     if (name) {
-        const id = slugify(name);
+        let id = slugify(name);
+        const usedIds = new Set(list.map(site => site && site.id).filter(Boolean));
+        if (usedIds.has(id)) {
+            let suffix = 2;
+            while (usedIds.has(`${id}_${suffix}`)) suffix += 1;
+            id = `${id}_${suffix}`;
+        }
         list.push({
             id,
             name,
@@ -5885,112 +6342,76 @@ function addStorySiteSource() {
     addGridSite('new-story-name', 'new-story-domain', 'new-story-notes', tempStorySites, renderStorySitesEditorList);
 }
 
-function guessStorySiteConfig() {
-    const urlInput = document.getElementById('story-config-guesser-url');
+async function guessSiteConfig(kind) {
+    const urlInput = document.getElementById(`${kind}-config-guesser-url`);
+    if (!urlInput) return;
     const url = urlInput.value.trim();
     if (!url) {
         alert('Please paste a URL to guess from.');
         return;
     }
 
-    const guessBtn = urlInput.nextElementSibling;
-    guessBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Guessing...';
-    guessBtn.disabled = true;
+    const guessBtn = urlInput.parentElement ? urlInput.parentElement.querySelector('button') : null;
+    const originalLabel = guessBtn ? guessBtn.innerHTML : 'Guess Config';
+    if (guessBtn) {
+        guessBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Guessing...';
+        guessBtn.disabled = true;
+    }
 
-    pywebview.api.guess_story_site_selectors(url).then(res => {
-        guessBtn.innerHTML = 'Guess Config';
-        guessBtn.disabled = false;
+    const guessers = {
+        collection: () => pywebview.api.guess_collection_site_selectors(url),
+        audio: () => pywebview.api.guess_audio_site_selectors(url),
+        story: () => pywebview.api.guess_story_site_selectors(url)
+    };
+    const guesser = guessers[kind] || guessers.story;
 
-        if (res.status === 'success') {
-            const config = res.config;
-            
-            try {
-                const urlObj = new URL(url);
-                let name = urlObj.hostname.replace(/^www\./, '').split('.')[0];
-                name = name.charAt(0).toUpperCase() + name.slice(1);
-                document.getElementById('new-story-name').value = name;
-                document.getElementById('new-story-domain').value = urlObj.origin;
-            } catch(e) { /* ignore if URL is invalid */ }
-
-            document.getElementById('new-story-notes').value = JSON.stringify(config);
-            
-            alert('Successfully guessed configuration! The fields below have been pre-filled. Review and click "Add".');
-        } else {
-            alert('Failed to guess configuration:\n' + res.msg);
+    try {
+        const res = await guesser();
+        if (!res) throw new Error('No response from the guesser.');
+        if (res.status !== 'success') {
+            alert('Failed to guess configuration:\n' + (res.msg || 'Unknown error'));
+            return;
         }
-    });
+
+        const config = res.config || {};
+        const targetUrl = res.url || url;
+        try {
+            const urlObj = new URL(targetUrl);
+            let name = urlObj.hostname.replace(/^www\./, '').split('.')[0];
+            name = name.charAt(0).toUpperCase() + name.slice(1);
+            document.getElementById(`new-${kind}-name`).value = name;
+            document.getElementById(`new-${kind}-domain`).value = urlObj.origin;
+        } catch (e) { /* keep whatever the user typed */ }
+
+        document.getElementById(`new-${kind}-notes`).value = JSON.stringify(config);
+
+        const details = [];
+        if (res.item_count) details.push(`${res.item_count} result items found`);
+        details.push(`results: ${config.results_selector || 'not found'}`);
+        details.push(`title: ${config.title_selector || 'not found'}`);
+        let message = `Successfully guessed configuration!\n\n${details.join('\n')}\n\nThe fields below have been pre-filled. Review and click "Add".`;
+        if (res.warning) message += `\n\n${res.warning}`;
+        alert(message);
+    } catch (error) {
+        alert('Failed to guess configuration:\n' + (error && error.message ? error.message : error));
+    } finally {
+        if (guessBtn) {
+            guessBtn.innerHTML = originalLabel;
+            guessBtn.disabled = false;
+        }
+    }
+}
+
+function guessStorySiteConfig() {
+    return guessSiteConfig('story');
 }
 
 function guessCollectionSiteConfig() {
-    const urlInput = document.getElementById('collection-config-guesser-url');
-    const url = urlInput.value.trim();
-    if (!url) {
-        alert('Please paste a URL to guess from.');
-        return;
-    }
-
-    const guessBtn = urlInput.nextElementSibling;
-    guessBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Guessing...';
-    guessBtn.disabled = true;
-
-    pywebview.api.guess_story_site_selectors(url).then(res => {
-        guessBtn.innerHTML = 'Guess Config';
-        guessBtn.disabled = false;
-
-        if (res.status === 'success') {
-            const config = res.config;
-            
-            try {
-                const urlObj = new URL(url);
-                let name = urlObj.hostname.replace(/^www\./, '').split('.')[0];
-                name = name.charAt(0).toUpperCase() + name.slice(1);
-                document.getElementById('new-collection-name').value = name;
-                document.getElementById('new-collection-domain').value = urlObj.origin;
-            } catch(e) { /* ignore if URL is invalid */ }
-
-            document.getElementById('new-collection-notes').value = JSON.stringify(config);
-            
-            alert('Successfully guessed configuration! The fields below have been pre-filled. Review and click "Add".');
-        } else {
-            alert('Failed to guess configuration:\n' + res.msg);
-        }
-    });
+    return guessSiteConfig('collection');
 }
 
 function guessAudioSiteConfig() {
-    const urlInput = document.getElementById('audio-config-guesser-url');
-    const url = urlInput.value.trim();
-    if (!url) {
-        alert('Please paste a URL to guess from.');
-        return;
-    }
-
-    const guessBtn = urlInput.nextElementSibling;
-    guessBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Guessing...';
-    guessBtn.disabled = true;
-
-    pywebview.api.guess_story_site_selectors(url).then(res => {
-        guessBtn.innerHTML = 'Guess Config';
-        guessBtn.disabled = false;
-
-        if (res.status === 'success') {
-            const config = res.config;
-            
-            try {
-                const urlObj = new URL(url);
-                let name = urlObj.hostname.replace(/^www\./, '').split('.')[0];
-                name = name.charAt(0).toUpperCase() + name.slice(1);
-                document.getElementById('new-audio-name').value = name;
-                document.getElementById('new-audio-domain').value = urlObj.origin;
-            } catch(e) { /* ignore if URL is invalid */ }
-
-            document.getElementById('new-audio-notes').value = JSON.stringify(config);
-            
-            alert('Successfully guessed configuration! The fields below have been pre-filled. Review and click "Add".');
-        } else {
-            alert('Failed to guess configuration:\n' + res.msg);
-        }
-    });
+    return guessSiteConfig('audio');
 }
 
 function saveOnlineSourcesModal() {
@@ -6116,6 +6537,629 @@ function searchOnlineStories() {
     });
 }
 
+// --- Story Reader / Text-to-Speech ---
+let storyReaderData = null;
+let storyTtsChunks = [];
+let storyTtsParagraphs = [];
+let storyTtsIndex = 0;
+let storyTtsPlaying = false;
+let storyTtsPaused = false;
+let storyTtsUtterance = null;
+let storyTtsVoices = [];
+let storyTtsEngine = 'edge';
+let storyEdgeVoices = [];
+let storyEdgeAvailable = false;
+let storyTtsAudio = null;
+let storyEdgePrefetch = new Map();
+let storyEdgePrefetchPromises = new Map();
+let storyTtsSession = 0;
+let storyTtsInitialized = false;
+
+function openStoryReader(item) {
+    if (!item || !item.url) {
+        alert('This story has no URL.');
+        return;
+    }
+    const modal = document.getElementById('story-reader-modal');
+    const body = document.getElementById('story-reader-body');
+    const titleEl = document.getElementById('story-reader-title');
+    const authorEl = document.getElementById('story-reader-author');
+    const metaEl = document.getElementById('story-reader-meta');
+    const content = document.getElementById('story-reader-content');
+    if (!modal || !body || !titleEl || !authorEl) return;
+
+    stopStoryTts();
+    storyTtsChunks = [];
+    storyTtsParagraphs = [];
+    storyReaderData = { ...item };
+    titleEl.textContent = item.title || 'Story';
+    authorEl.textContent = item.author ? `by ${item.author}` : '';
+    if (metaEl) metaEl.textContent = '';
+    body.innerHTML = '<div class="story-reader-loading"><i class="fa-solid fa-spinner fa-spin"></i> Loading story...</div>';
+    modal.style.display = 'flex';
+    if (content) content.scrollTop = 0;
+    setStoryTtsStatus('Loading...');
+    ensureStoryTtsEngine();
+
+    pywebview.api.fetch_story_content(item.url).then(res => {
+        if (!res || res.status !== 'success') {
+            showStoryReaderError((res && res.msg) || 'Could not load this story.');
+            return;
+        }
+        storyReaderData = { ...item, ...res };
+        renderStoryReader(res);
+    }).catch(error => {
+        showStoryReaderError('Could not load this story: ' + (error && error.message ? error.message : error));
+    });
+}
+
+function showStoryReaderError(message) {
+    const body = document.getElementById('story-reader-body');
+    if (!body) return;
+    body.innerHTML = '';
+    const wrap = document.createElement('div');
+    wrap.className = 'story-reader-error';
+    const icon = document.createElement('i');
+    icon.className = 'fa-solid fa-triangle-exclamation';
+    wrap.appendChild(icon);
+    const text = document.createElement('div');
+    text.textContent = message;
+    text.style.marginTop = '10px';
+    wrap.appendChild(text);
+    const button = document.createElement('button');
+    button.textContent = 'Open in browser';
+    button.onclick = openStoryInBrowser;
+    wrap.appendChild(button);
+    body.appendChild(wrap);
+    setStoryTtsStatus('Unavailable');
+}
+
+function renderStoryReader(data) {
+    const body = document.getElementById('story-reader-body');
+    const titleEl = document.getElementById('story-reader-title');
+    const authorEl = document.getElementById('story-reader-author');
+    const metaEl = document.getElementById('story-reader-meta');
+    if (!body) return;
+
+    body.innerHTML = '';
+    let displayTitle = (storyReaderData && storyReaderData.title) || data.title || 'Story';
+    if (data.title && displayTitle && data.title.toLowerCase() === displayTitle.toLowerCase()) {
+        displayTitle = data.title;
+    }
+    titleEl.textContent = displayTitle;
+    authorEl.textContent = data.author
+        ? `by ${data.author}`
+        : (storyReaderData && storyReaderData.author ? `by ${storyReaderData.author}` : '');
+    if (metaEl) {
+        metaEl.textContent = data.word_count
+            ? `${Number(data.word_count).toLocaleString()} words`
+            : '';
+    }
+
+    const paragraphs = Array.isArray(data.paragraphs) ? data.paragraphs : [];
+    storyTtsParagraphs = paragraphs;
+    storyTtsChunks = buildStoryTtsChunks(paragraphs);
+    storyTtsIndex = 0;
+    storyTtsPlaying = false;
+    storyTtsPaused = false;
+
+    if (!paragraphs.length) {
+        showStoryReaderError('No readable text was found on this page.');
+        return;
+    }
+
+    paragraphs.forEach((paragraph, index) => {
+        const type = (paragraph.type || 'p').toLowerCase();
+        let element;
+        if (type === 'h1' || type === 'h2' || type === 'h3' || type === 'h4') {
+            element = document.createElement(type === 'h1' ? 'h2' : 'h3');
+        } else if (type === 'blockquote') {
+            element = document.createElement('blockquote');
+        } else {
+            element = document.createElement('p');
+        }
+        element.className = 'story-paragraph';
+        element.dataset.ttsIndex = String(index);
+        element.textContent = paragraph.text || '';
+        body.appendChild(element);
+    });
+
+    setStoryTtsButton(false);
+    setStoryTtsStatus(storyTtsChunks.length ? 'Ready' : 'No text');
+    const content = document.getElementById('story-reader-content');
+    if (content) content.scrollTop = 0;
+    populateStoryVoiceOptions();
+    if (storyTtsEngine === 'edge' && storyEdgeAvailable && storyTtsChunks.length) {
+        prefetchEdgeChunk(0);
+        prefetchEdgeChunk(1);
+    }
+}
+
+function closeStoryReader() {
+    stopStoryTts();
+    const modal = document.getElementById('story-reader-modal');
+    if (modal) modal.style.display = 'none';
+    const body = document.getElementById('story-reader-body');
+    if (body) body.innerHTML = '';
+    storyReaderData = null;
+    storyTtsChunks = [];
+    storyTtsParagraphs = [];
+}
+
+function openStoryInBrowser() {
+    if (storyReaderData && storyReaderData.url) {
+        pywebview.api.open_external_url(storyReaderData.url);
+    }
+}
+
+function buildStoryTtsChunks(paragraphs) {
+    const chunks = [];
+    paragraphs.forEach((paragraph, paraIndex) => {
+        const text = (paragraph.text || '').replace(/^•\s*/, '').trim();
+        if (!text) return;
+        const sentences = text.match(/[^.!?]+[.!?]+(?:\s|$)|[^.!?]+$/g) || [text];
+        let buffer = '';
+        sentences.forEach(sentence => {
+            if ((buffer + sentence).length > 320 && buffer.trim()) {
+                chunks.push({ text: buffer.trim(), para: paraIndex });
+                buffer = '';
+            }
+            buffer += sentence;
+        });
+        if (buffer.trim()) chunks.push({ text: buffer.trim(), para: paraIndex });
+    });
+    return chunks;
+}
+
+async function ensureStoryTtsEngine() {
+    if (!storyTtsInitialized) {
+        storyTtsInitialized = true;
+        initStoryTtsAudio();
+        const synth = window.speechSynthesis;
+        if (synth && !ensureStoryTtsEngine._voicesBound) {
+            synth.addEventListener('voiceschanged', () => {
+                if (storyTtsEngine === 'system') populateStoryVoiceOptions();
+            });
+            ensureStoryTtsEngine._voicesBound = true;
+        }
+
+        let edgeResult = null;
+        try {
+            edgeResult = await pywebview.api.edge_tts_voices();
+        } catch (error) {
+            edgeResult = null;
+        }
+        if (edgeResult && edgeResult.status === 'success'
+                && Array.isArray(edgeResult.voices) && edgeResult.voices.length) {
+            storyEdgeAvailable = true;
+            storyEdgeVoices = edgeResult.voices;
+        } else {
+            storyEdgeAvailable = false;
+            storyEdgeVoices = [];
+            const engineSelect = document.getElementById('story-tts-engine');
+            if (engineSelect) {
+                const option = engineSelect.querySelector('option[value="edge"]');
+                if (option) {
+                    option.disabled = true;
+                    option.textContent = 'Edge Neural (not installed)';
+                }
+            }
+        }
+
+        const savedEngine = (appState && appState.story_tts_engine) || 'edge';
+        storyTtsEngine = (savedEngine === 'edge' && storyEdgeAvailable) ? 'edge' : 'system';
+        if (!storyEdgeAvailable) storyTtsEngine = 'system';
+        const engineSelect = document.getElementById('story-tts-engine');
+        if (engineSelect) engineSelect.value = storyTtsEngine;
+
+        const savedRate = appState && appState.story_tts_rate;
+        const rate = document.getElementById('story-tts-rate');
+        if (rate && savedRate) {
+            rate.value = savedRate;
+            const label = document.getElementById('story-tts-rate-label');
+            if (label) label.textContent = `${Number(savedRate).toFixed(1)}x`;
+        }
+    }
+    populateStoryVoiceOptions(appState && appState.story_tts_voice);
+    setStoryTtsStatus(storyTtsEngine === 'edge' ? 'Edge Neural ready' : 'System voice ready');
+    if (storyTtsEngine === 'edge' && storyEdgeAvailable && storyTtsChunks.length) {
+        prefetchEdgeChunk(0);
+    }
+}
+
+function populateStoryVoiceOptions(preferredVoice) {
+    const select = document.getElementById('story-tts-voice');
+    if (!select) return;
+    select.innerHTML = '';
+    select.disabled = false;
+
+    if (storyTtsEngine === 'edge' && storyEdgeAvailable) {
+        const voices = storyEdgeVoices.length
+            ? storyEdgeVoices
+            : [{ id: 'en-US-AriaNeural', name: 'Aria — US female' }];
+        voices.forEach(voice => {
+            const option = document.createElement('option');
+            option.value = voice.id;
+            option.textContent = voice.name;
+            select.appendChild(option);
+        });
+        const saved = preferredVoice || (appState && appState.story_tts_voice) || 'en-US-AriaNeural';
+        if ([...select.options].some(option => option.value === saved)) {
+            select.value = saved;
+        }
+    } else {
+        const synth = window.speechSynthesis;
+        const voices = synth ? (synth.getVoices() || []) : [];
+        storyTtsVoices = voices;
+        if (!voices.length) {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = synth ? 'No system voices found' : 'TTS unavailable';
+            select.appendChild(option);
+            select.disabled = true;
+        } else {
+            voices.forEach((voice, index) => {
+                const option = document.createElement('option');
+                option.value = String(index);
+                option.textContent = `${voice.name} (${voice.lang})`;
+                select.appendChild(option);
+            });
+            const saved = preferredVoice || (appState && appState.story_tts_voice);
+            if (saved) {
+                const index = voices.findIndex(voice => voice.name === saved);
+                if (index >= 0) select.value = String(index);
+            }
+        }
+    }
+
+    select.onchange = () => {
+        saveStoryTtsSettings();
+        if (storyTtsPlaying) restartStoryTtsChunk();
+    };
+}
+
+function saveStoryTtsSettings() {
+    const engineSelect = document.getElementById('story-tts-engine');
+    const voiceSelect = document.getElementById('story-tts-voice');
+    const rateInput = document.getElementById('story-tts-rate');
+    const engine = engineSelect ? engineSelect.value : storyTtsEngine;
+    let voice = '';
+    if (voiceSelect) {
+        if (engine === 'edge') {
+            voice = voiceSelect.value || 'en-US-AriaNeural';
+        } else {
+            const index = parseInt(voiceSelect.value, 10);
+            voice = (!Number.isNaN(index) && storyTtsVoices[index])
+                ? storyTtsVoices[index].name
+                : '';
+        }
+    }
+    const rate = rateInput ? parseFloat(rateInput.value) : 1;
+    if (appState) {
+        appState.story_tts_engine = engine;
+        appState.story_tts_voice = voice;
+        appState.story_tts_rate = rate;
+    }
+    pywebview.api.save_story_tts_settings(engine, voice, rate);
+}
+
+function onStoryTtsEngineChanged() {
+    const select = document.getElementById('story-tts-engine');
+    storyTtsEngine = select ? select.value : 'system';
+    stopStoryTts();
+    populateStoryVoiceOptions();
+    saveStoryTtsSettings();
+    setStoryTtsStatus(storyTtsEngine === 'edge' ? 'Edge Neural ready' : 'System voice ready');
+}
+
+function initStoryTtsAudio() {
+    if (storyTtsAudio) return;
+    storyTtsAudio = document.getElementById('story-tts-audio');
+    if (!storyTtsAudio) return;
+    storyTtsAudio.addEventListener('ended', () => {
+        if (storyTtsEngine !== 'edge' || !storyTtsPlaying) return;
+        storyTtsIndex += 1;
+        playEdgeStoryChunk();
+    });
+    storyTtsAudio.addEventListener('error', () => {
+        if (!storyTtsAudio.getAttribute('src') || !storyTtsPlaying) return;
+        console.error('Edge TTS audio playback failed');
+        setStoryTtsStatus('Edge audio failed; using system voice');
+        storyTtsEngine = 'system';
+        const engineSelect = document.getElementById('story-tts-engine');
+        if (engineSelect) engineSelect.value = 'system';
+        storyTtsPlaying = false;
+        storyTtsPaused = false;
+        storyTtsAudio.removeAttribute('src');
+        storyTtsAudio.load();
+        populateStoryVoiceOptions();
+        storyTtsPlaying = true;
+        speakStoryChunk();
+    });
+}
+
+function setStoryTtsStatus(text) {
+    const status = document.getElementById('story-tts-status');
+    if (status) status.textContent = text;
+}
+
+function setStoryTtsButton(playing) {
+    const button = document.getElementById('story-tts-play');
+    if (button) {
+        button.innerHTML = playing
+            ? '<i class="fa-solid fa-pause"></i> <span>Pause</span>'
+            : '<i class="fa-solid fa-play"></i> <span>Read</span>';
+    }
+}
+
+function clearStoryTtsHighlight() {
+    const body = document.getElementById('story-reader-body');
+    if (!body) return;
+    body.querySelectorAll('.story-paragraph.tts-active').forEach(el => el.classList.remove('tts-active'));
+}
+
+function highlightStoryParagraph(index) {
+    const body = document.getElementById('story-reader-body');
+    if (!body) return;
+    body.querySelectorAll('.story-paragraph.tts-active').forEach(el => el.classList.remove('tts-active'));
+    const target = body.querySelector(`[data-tts-index="${index}"]`);
+    if (target) {
+        target.classList.add('tts-active');
+        target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+}
+
+function toggleStoryTts() {
+    if (!storyTtsChunks.length) {
+        alert('There is no story text to read.');
+        return;
+    }
+
+    if (storyTtsEngine === 'edge' && storyEdgeAvailable) {
+        if (!storyTtsAudio) initStoryTtsAudio();
+        if (storyTtsAudio && storyTtsAudio.getAttribute('src') && !storyTtsAudio.paused) {
+            storyTtsAudio.pause();
+            storyTtsPlaying = false;
+            storyTtsPaused = true;
+            setStoryTtsButton(false);
+            setStoryTtsStatus('Paused');
+            return;
+        }
+        if (storyTtsAudio && storyTtsAudio.getAttribute('src') && storyTtsPaused) {
+            storyTtsPlaying = true;
+            storyTtsPaused = false;
+            storyTtsAudio.play().catch(error => console.error('Edge audio resume failed:', error));
+            setStoryTtsButton(true);
+            setStoryTtsStatus('Reading');
+            return;
+        }
+        storyTtsPlaying = true;
+        storyTtsPaused = false;
+        if (storyTtsIndex >= storyTtsChunks.length) storyTtsIndex = 0;
+        playEdgeStoryChunk();
+        return;
+    }
+
+    if (storyTtsEngine === 'edge' && !storyEdgeAvailable) {
+        storyTtsEngine = 'system';
+        const engineSelect = document.getElementById('story-tts-engine');
+        if (engineSelect) engineSelect.value = 'system';
+        populateStoryVoiceOptions();
+    }
+
+    const synth = window.speechSynthesis;
+    if (!synth) {
+        alert('Text-to-speech is not available in this WebView.');
+        return;
+    }
+    if (synth.speaking && !synth.paused && storyTtsPlaying) {
+        synth.pause();
+        storyTtsPaused = true;
+        setStoryTtsButton(false);
+        setStoryTtsStatus('Paused');
+        return;
+    }
+    if (synth.paused && storyTtsPaused) {
+        synth.resume();
+        storyTtsPaused = false;
+        setStoryTtsButton(true);
+        setStoryTtsStatus('Reading');
+        return;
+    }
+    storyTtsPlaying = true;
+    storyTtsPaused = false;
+    if (storyTtsIndex >= storyTtsChunks.length) storyTtsIndex = 0;
+    speakStoryChunk();
+}
+
+function speakStoryChunk() {
+    const synth = window.speechSynthesis;
+    if (!synth || !storyTtsPlaying) return;
+    if (storyTtsIndex >= storyTtsChunks.length) {
+        stopStoryTts();
+        setStoryTtsStatus('Finished');
+        return;
+    }
+    const chunk = storyTtsChunks[storyTtsIndex];
+    const utterance = new SpeechSynthesisUtterance(chunk.text);
+    const rate = parseFloat(document.getElementById('story-tts-rate').value) || 1;
+    utterance.rate = Math.min(2, Math.max(0.5, rate));
+    const voiceSelect = document.getElementById('story-tts-voice');
+    if (voiceSelect && voiceSelect.value !== '') {
+        const voice = storyTtsVoices[parseInt(voiceSelect.value, 10)];
+        if (voice) utterance.voice = voice;
+    }
+    utterance.onstart = () => {
+        setStoryTtsButton(true);
+        highlightStoryParagraph(chunk.para);
+        setStoryTtsStatus(`System voice • paragraph ${chunk.para + 1} of ${storyTtsParagraphs.length}`);
+    };
+    utterance.onend = () => {
+        if (!storyTtsPlaying) return;
+        storyTtsIndex += 1;
+        speakStoryChunk();
+    };
+    utterance.onerror = (event) => {
+        if (event.error === 'interrupted' || event.error === 'canceled') return;
+        console.error('Story TTS error:', event);
+        stopStoryTts();
+        setStoryTtsStatus('TTS error');
+    };
+    storyTtsUtterance = utterance;
+    synth.speak(utterance);
+}
+
+function playEdgeStoryChunk() {
+    if (storyTtsEngine !== 'edge' || !storyEdgeAvailable || !storyTtsPlaying) return;
+    if (storyTtsIndex >= storyTtsChunks.length) {
+        stopStoryTts();
+        setStoryTtsStatus('Finished');
+        return;
+    }
+    if (!storyTtsAudio) initStoryTtsAudio();
+
+    const chunk = storyTtsChunks[storyTtsIndex];
+    const session = storyTtsSession;
+    const voiceSelect = document.getElementById('story-tts-voice');
+    const voice = (voiceSelect && voiceSelect.value) ? voiceSelect.value : 'en-US-AriaNeural';
+    const rate = parseFloat(document.getElementById('story-tts-rate').value) || 1;
+
+    const prefetched = storyEdgePrefetch.get(storyTtsIndex);
+    if (prefetched) {
+        storyEdgePrefetch.delete(storyTtsIndex);
+        playEdgeAudioPath(prefetched, chunk, session);
+        prefetchEdgeChunk(storyTtsIndex + 1);
+        return;
+    }
+
+    setStoryTtsStatus('Generating Edge audio...');
+    pywebview.api.edge_tts_generate(chunk.text, voice, rate).then(res => {
+        if (session !== storyTtsSession || !storyTtsPlaying) return;
+        if (!res || res.status !== 'success') {
+            console.error('Edge TTS failed:', res && res.msg);
+            setStoryTtsStatus('Edge TTS failed; using system voice');
+            storyTtsEngine = 'system';
+            const engineSelect = document.getElementById('story-tts-engine');
+            if (engineSelect) engineSelect.value = 'system';
+            populateStoryVoiceOptions();
+            storyTtsPlaying = true;
+            storyTtsPaused = false;
+            speakStoryChunk();
+            return;
+        }
+        playEdgeAudioPath(res.path, chunk, session);
+        prefetchEdgeChunk(storyTtsIndex + 1);
+    }).catch(error => {
+        if (session !== storyTtsSession) return;
+        console.error('Edge TTS error:', error);
+        setStoryTtsStatus('Edge TTS failed; using system voice');
+        storyTtsEngine = 'system';
+        const engineSelect = document.getElementById('story-tts-engine');
+        if (engineSelect) engineSelect.value = 'system';
+        populateStoryVoiceOptions();
+        storyTtsPlaying = true;
+        storyTtsPaused = false;
+        speakStoryChunk();
+    });
+}
+
+function playEdgeAudioPath(path, chunk, session) {
+    if (!storyTtsAudio) initStoryTtsAudio();
+    if (!storyTtsAudio) return;
+    storyTtsAudio.src = `http://localhost:5050/media?path=${encodeURIComponent(path)}`;
+    const promise = storyTtsAudio.play();
+    if (promise && promise.catch) {
+        promise.catch(error => {
+            if (session !== storyTtsSession) return;
+            console.error('Edge audio playback failed:', error);
+            setStoryTtsStatus('Could not play Edge audio');
+        });
+    }
+    setStoryTtsButton(true);
+    highlightStoryParagraph(chunk.para);
+    setStoryTtsStatus(`Edge TTS • paragraph ${chunk.para + 1} of ${storyTtsParagraphs.length}`);
+}
+
+function prefetchEdgeChunk(index) {
+    if (!storyEdgeAvailable || index >= storyTtsChunks.length) return;
+    if (storyEdgePrefetch.has(index) || storyEdgePrefetchPromises.has(index)) return;
+    const chunk = storyTtsChunks[index];
+    const voiceSelect = document.getElementById('story-tts-voice');
+    const voice = (voiceSelect && voiceSelect.value) ? voiceSelect.value : 'en-US-AriaNeural';
+    const rate = parseFloat(document.getElementById('story-tts-rate').value) || 1;
+    const session = storyTtsSession;
+    const promise = pywebview.api.edge_tts_generate(chunk.text, voice, rate).then(res => {
+        if (session !== storyTtsSession) return;
+        if (res && res.status === 'success') storyEdgePrefetch.set(index, res.path);
+    }).catch(() => {});
+    storyEdgePrefetchPromises.set(index, promise);
+    promise.finally(() => {
+        if (storyEdgePrefetchPromises.get(index) === promise) {
+            storyEdgePrefetchPromises.delete(index);
+        }
+    });
+}
+
+function restartStoryTtsChunk() {
+    const index = storyTtsIndex;
+    const wasPlaying = storyTtsPlaying;
+    stopStoryTts();
+    if (!wasPlaying) return;
+    storyTtsIndex = index;
+    storyTtsPlaying = true;
+    storyTtsPaused = false;
+    if (storyTtsEngine === 'edge' && storyEdgeAvailable) {
+        playEdgeStoryChunk();
+    } else {
+        speakStoryChunk();
+    }
+}
+
+function stopStoryTts() {
+    storyTtsPlaying = false;
+    storyTtsPaused = false;
+    storyTtsIndex = 0;
+    storyTtsSession += 1;
+    storyTtsUtterance = null;
+    storyEdgePrefetch.clear();
+    storyEdgePrefetchPromises.clear();
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+    if (storyTtsAudio) {
+        storyTtsAudio.pause();
+        storyTtsAudio.removeAttribute('src');
+        storyTtsAudio.load();
+    }
+    clearStoryTtsHighlight();
+    setStoryTtsButton(false);
+    setStoryTtsStatus('Ready');
+}
+
+(function initStoryReaderEvents() {
+    const modal = document.getElementById('story-reader-modal');
+    if (modal) {
+        modal.addEventListener('click', (event) => {
+            if (event.target === modal) closeStoryReader();
+        });
+    }
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && modal && modal.style.display === 'flex') {
+            closeStoryReader();
+        }
+    });
+    const rate = document.getElementById('story-tts-rate');
+    if (rate) {
+        rate.addEventListener('input', () => {
+            const label = document.getElementById('story-tts-rate-label');
+            if (label) label.textContent = `${parseFloat(rate.value).toFixed(1)}x`;
+        });
+        rate.addEventListener('change', () => {
+            saveStoryTtsSettings();
+            if (storyTtsPlaying) restartStoryTtsChunk();
+        });
+    }
+    initStoryTtsAudio();
+})();
+
 function renderStoryResults(results) {
     const resultsArea = document.getElementById('online-stories-results-area');
     if (!resultsArea) return;
@@ -6133,11 +7177,8 @@ function renderStoryResults(results) {
         card.className = 'audio-site-card'; // Re-using this class for similar styling
         card.style.cursor = 'pointer';
         card.style.borderColor = 'rgba(250, 179, 135, 0.2)';
-        card.onclick = () => {
-            if (item.url) {
-                pywebview.api.open_external_url(item.url);
-            }
-        };
+        card.title = 'Open in the built-in story reader';
+        card.onclick = () => openStoryReader(item);
 
         const title = document.createElement('div');
         title.className = 'audio-site-card-title';
@@ -6153,9 +7194,26 @@ function renderStoryResults(results) {
         summary.textContent = item.summary || '';
         summary.style.cssText = 'font-size: 11px; color: #999; margin-top: 8px; text-align: left; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;';
 
+        const actions = document.createElement('div');
+        actions.style.cssText = 'display:flex; justify-content:space-between; align-items:center; margin-top:10px;';
+        const readLabel = document.createElement('span');
+        readLabel.innerHTML = '<i class="fa-solid fa-book-open"></i> Read';
+        readLabel.style.cssText = 'font-size:11px; color:#fab387; font-weight:bold;';
+        const externalBtn = document.createElement('button');
+        externalBtn.innerHTML = '<i class="fa-solid fa-arrow-up-right-from-square"></i>';
+        externalBtn.title = 'Open in browser';
+        externalBtn.style.cssText = 'background:none; border:none; color:#a6adc8; cursor:pointer; font-size:12px; padding:2px 4px;';
+        externalBtn.onclick = (event) => {
+            event.stopPropagation();
+            if (item.url) pywebview.api.open_external_url(item.url);
+        };
+        actions.appendChild(readLabel);
+        actions.appendChild(externalBtn);
+
         card.appendChild(title);
         card.appendChild(author);
         card.appendChild(summary);
+        card.appendChild(actions);
         resultsArea.appendChild(card);
     });
 }
@@ -6761,11 +7819,26 @@ function playTopAudio(playlist, index) {
     const item = playlist[index];
     if (!item) return;
     
-    nameEl.textContent = decodeURIComponent(item.name);
-    nameEl.title = decodeURIComponent(item.name);
+    let displayName = item.name || 'Audio track';
+    try {
+        displayName = decodeURIComponent(displayName);
+    } catch (e) { /* names are already plain text */ }
+    nameEl.textContent = displayName;
+    nameEl.title = displayName;
     
     audio.src = item.url;
-    audio.play();
+    const topPlayPromise = audio.play();
+    if (topPlayPromise && topPlayPromise.catch) {
+        topPlayPromise.catch(error => {
+            console.error('Top audio playback failed:', error);
+            const playBtnEl = document.getElementById('top-audio-play-btn');
+            if (playBtnEl) playBtnEl.innerHTML = '<i class="fa-solid fa-play"></i>';
+            alert(
+                'This track could not be played. The URL may be offline, or the site ' +
+                'may have changed its file layout.\n\nRe-open the site and scrape it again.'
+            );
+        });
+    }
     
     playBtn.innerHTML = '<i class="fa-solid fa-pause"></i>';
     bar.style.display = 'flex';
