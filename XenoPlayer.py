@@ -254,6 +254,13 @@ if IS_MACOS:
         "", "aac", "mp3", "opus", "vorbis", "flac", "alac",
         "pcm_s16le", "pcm_s16be", "pcm_s24le", "pcm_s24be",
     }
+    NATIVE_AUDIO_EXTS = {
+        ".mp3", ".m4a", ".m4b", ".aac", ".wav", ".wave", ".flac",
+        ".aif", ".aiff", ".caf",
+    }
+    AUDIO_CONVERT_EXTS = {
+        ".ogg", ".oga", ".opus", ".webm", ".wma", ".ape", ".wv",
+    }
 else:
     NATIVE_VIDEO_EXTS = {'.mp4', '.webm', '.ogg'}
     CONVERTIBLE_VIDEO_EXTS = {
@@ -261,6 +268,8 @@ else:
     }
     NATIVE_VIDEO_CODECS = set()
     NATIVE_AUDIO_CODECS = set()
+    NATIVE_AUDIO_EXTS = set()
+    AUDIO_CONVERT_EXTS = set()
 GITHUB_REPO = "XenoHead/XenoPlayer"
 GITHUB_REPO_URL = f"https://github.com/{GITHUB_REPO}"
 
@@ -313,9 +322,17 @@ class Api:
     def get_startup_info(self):
         art_path = resource_path('XenoHead_art.png')
         platform_name = "macos" if IS_MACOS else ("windows" if IS_WINDOWS else "linux")
-        if os.path.exists(art_path):
-            return {"art_path": art_path, "platform": platform_name}
-        return {"art_path": None, "platform": platform_name}
+        info = {
+            "art_path": art_path if os.path.exists(art_path) else None,
+            "platform": platform_name,
+            "native_video_exts": sorted(ext.lstrip(".") for ext in NATIVE_VIDEO_EXTS),
+            "convertible_video_exts": sorted(
+                ext.lstrip(".") for ext in CONVERTIBLE_VIDEO_EXTS
+                if ext not in NATIVE_VIDEO_EXTS
+            ),
+            "audio_convert_exts": sorted(ext.lstrip(".") for ext in AUDIO_CONVERT_EXTS),
+        }
+        return info
 
     def _git_run(self, args, cwd, timeout=20):
         git = shutil.which("git")
@@ -1598,12 +1615,15 @@ class Api:
             os.makedirs(fallback, exist_ok=True)
             return fallback
 
-    def _video_cache_path(self, path):
+    def _media_cache_path(self, path, extension):
         stat = os.stat(path)
         key = hashlib.sha256(
             f"{os.path.abspath(path)}|{stat.st_mtime_ns}|{stat.st_size}|v1".encode("utf-8")
         ).hexdigest()[:32]
-        return os.path.join(self._video_cache_dir(), f"{key}.mp4")
+        return os.path.join(self._video_cache_dir(), f"{key}{extension}")
+
+    def _video_cache_path(self, path):
+        return self._media_cache_path(path, ".mp4")
 
     def _prune_video_cache(self, keep_path=None):
         cache = self._video_cache_dir()
@@ -1634,7 +1654,7 @@ class Api:
                     except OSError:
                         pass
                 continue
-            if not name.lower().endswith(".mp4"):
+            if not name.lower().endswith((".mp4", ".m4a")):
                 continue
             if now - stat.st_mtime > 30 * 86400:
                 try:
@@ -1704,6 +1724,75 @@ class Api:
         if audio_codec and audio_codec not in NATIVE_AUDIO_CODECS:
             return False
         return True
+
+    def prepare_audio_for_playback(self, path):
+        """Convert Ogg/Opus/WMA audio to AAC/M4A for WKWebView on macOS."""
+        temp_path = ""
+        try:
+            if not path:
+                return {"status": "error", "msg": "No audio file provided."}
+            path = os.path.abspath(path)
+            if not os.path.isfile(path):
+                return {"status": "error", "msg": "Audio file not found."}
+            if not IS_MACOS:
+                return {"status": "native", "path": path}
+
+            ext = os.path.splitext(path)[1].lower()
+            if ext in NATIVE_AUDIO_EXTS:
+                return {"status": "native", "path": path}
+            if ext not in AUDIO_CONVERT_EXTS:
+                return {
+                    "status": "error",
+                    "msg": f"{ext or 'This file'} is not an audio format XenoPlayer can open.",
+                }
+
+            cache_path = self._media_cache_path(path, ".m4a")
+            if os.path.isfile(cache_path) and os.path.getsize(cache_path) > 1024:
+                return {"status": "ready", "path": cache_path, "source": path, "cached": True}
+
+            ffmpeg = self._find_ffmpeg()
+            if not ffmpeg:
+                return {
+                    "status": "no_ffmpeg",
+                    "source": path,
+                    "msg": (
+                        "This audio format needs ffmpeg for playback. Install ffmpeg "
+                        "with `brew install ffmpeg`, or set ffmpeg_path in web_settings.json."
+                    ),
+                }
+
+            cache_dir = self._video_cache_dir()
+            temp_path = os.path.join(
+                cache_dir, f".audio_{int(time.time() * 1000)}.m4a"
+            )
+            result = subprocess.run(
+                [
+                    ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+                    "-i", path, "-vn", "-c:a", "aac", "-b:a", "192k",
+                    "-movflags", "+faststart", temp_path,
+                ],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=1800, creationflags=subprocess_creationflags(),
+            )
+            if (
+                result.returncode != 0
+                or not os.path.exists(temp_path)
+                or os.path.getsize(temp_path) < 1024
+            ):
+                message = (result.stderr or "").strip().splitlines()
+                message = message[-1] if message else f"ffmpeg failed (exit code {result.returncode})."
+                return {"status": "error", "msg": message}
+            os.replace(temp_path, cache_path)
+            self._prune_video_cache(keep_path=cache_path)
+            return {"status": "ready", "path": cache_path, "source": path, "cached": False}
+        except Exception as error:
+            return {"status": "error", "msg": str(error)}
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
 
     def prepare_video_for_playback(self, path):
         try:
@@ -2644,7 +2733,7 @@ class Api:
         import subprocess
         try:
             filepath = os.path.normpath(filepath)
-            if IS_MACOS and app_path.lower().endswith(".app"):
+            if IS_MACOS and app_path.lower().rstrip("/\\").endswith(".app"):
                 subprocess.Popen(["open", "-a", app_path, filepath])
                 return {"status": "ok"}
             app_dir = os.path.dirname(app_path)

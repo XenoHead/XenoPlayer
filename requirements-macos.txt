@@ -1,0 +1,32 @@
+# XenoPlayer macOS Core dependencies
+#
+# The Mac Core build deliberately leaves out OCR/translation, manga-OCR,
+# voice control, and the PyQt collection viewer. Those can be added later.
+#
+# Install on macOS:
+#   python3 -m venv .venv-mac
+#   source .venv-mac/bin/activate
+#   python -m pip install --upgrade pip
+#   pip install -r requirements-macos.txt
+
+pywebview>=5.0
+pyobjc-core
+pyobjc-framework-Cocoa
+pyobjc-framework-WebKit
+pyobjc-framework-UniformTypeIdentifiers
+
+flask
+requests
+cloudscraper
+beautifulsoup4
+gallery-dl
+send2trash
+
+opencv-python
+numpy
+Pillow
+
+edge-tts
+aiohttp
+
+pyinstaller

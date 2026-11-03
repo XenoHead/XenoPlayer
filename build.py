@@ -5,6 +5,11 @@ import shutil
 import json
 from datetime import datetime
 
+if sys.platform == "darwin":
+    raise SystemExit(
+        "Use build_macos.py on macOS (this script builds the Windows one-file app)."
+    )
+
 def build():
     print("Checking for PyInstaller...")
     try:

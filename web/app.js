@@ -1,7 +1,9 @@
 let videoPlayer, audioPlayer, imageViewer, playlistContainer, fileNameDisplay, playBtn, prevBtn, nextBtn, cm, mlCm, omCm, mediaContainer, selectionBox, transContainer, loadingOverlay, observer;
 let currentIsAudio = false;
-const CONVERTIBLE_VIDEO_EXTS = ['avi', 'wmv', 'mkv', 'mov', 'flv', 'mpg', 'mpeg', 'm4v', 'ts'];
+let convertibleVideoExts = ['avi', 'wmv', 'mkv', 'mov', 'flv', 'mpg', 'mpeg', 'm4v', 'ts'];
+let audioConvertExts = [];
 const videoPlaybackOverrides = new Map();
+const audioPlaybackOverrides = new Map();
 let pendingVideoConversion = null;
 let normBtn, thresholdSlider, gainSlider, normContainer;
 
@@ -337,6 +339,14 @@ window.addEventListener('pywebviewready', function () {
 
     // --- App Initialization ---
     pywebview.api.get_startup_info().then(info => {
+        if (info) {
+            if (Array.isArray(info.convertible_video_exts)) {
+                convertibleVideoExts = info.convertible_video_exts;
+            }
+            if (Array.isArray(info.audio_convert_exts)) {
+                audioConvertExts = info.audio_convert_exts;
+            }
+        }
         if (info && info.art_path) {
             // Display the startup image
             const mediaUrl = `http://localhost:5050/media?path=${encodeURIComponent(info.art_path)}`;
@@ -488,14 +498,43 @@ function loadMedia(path, index) {
 
     const cleanPath = path.split('?')[0];
     const ext = cleanPath.split('.').pop().toLowerCase();
-    const overridePath = isOnline ? '' : videoPlaybackOverrides.get(path);
+    const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext);
+    const isAudio = ['mp3', 'wav', 'wave', 'm4a', 'm4b', 'aac', 'flac', 'ogg', 'oga', 'opus'].includes(ext);
+    const overridePath = isOnline
+        ? ''
+        : (isAudio ? audioPlaybackOverrides.get(path) : videoPlaybackOverrides.get(path));
     const playbackPath = overridePath || path;
     const mediaUrl = isOnline ? path : `http://localhost:5050/media?path=${encodeURIComponent(playbackPath)}`;
 
-    const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext);
-    const isAudio = ['mp3', 'wav', 'wave', 'm4a', 'm4b', 'aac', 'flac', 'ogg', 'oga', 'opus'].includes(ext);
+    // WKWebView cannot play every audio container. Convert once, then cache.
+    if (!isOnline && isAudio && !overridePath && audioConvertExts.includes(ext)) {
+        fileNameDisplay.textContent = fullDisplayName + '  -  Preparing audio...';
+        pywebview.api.prepare_audio_for_playback(path).then(res => {
+            if (res && res.status === 'ready') {
+                audioPlaybackOverrides.set(path, res.path);
+                loadMedia(path, index);
+                return;
+            }
+            if (res && res.status === 'native') {
+                audioPlaybackOverrides.set(path, path);
+                loadMedia(path, index);
+                return;
+            }
+            if (res && res.status === 'no_ffmpeg') {
+                if (confirm((res.msg || 'ffmpeg was not found.') + '\n\nOpen this audio in your default player instead?')) {
+                    pywebview.api.open_path_external(path);
+                }
+                return;
+            }
+            alert((res && res.msg) || 'Could not prepare this audio for playback.');
+        }).catch(error => {
+            alert('Could not prepare this audio:\n' + (error && error.message ? error.message : error));
+        });
+        return;
+    }
+
     const needsConversion = !isOnline && !overridePath && !isImage && !isAudio
-        && CONVERTIBLE_VIDEO_EXTS.includes(ext);
+        && convertibleVideoExts.includes(ext);
 
     if (needsConversion) {
         requestVideoConversion(path, index, fullDisplayName);
@@ -580,6 +619,7 @@ function requestVideoConversion(originalPath, index, displayName) {
         }
         if (res.status === 'native') {
             hideVideoConvertOverlay();
+            videoPlaybackOverrides.set(originalPath, originalPath);
             loadMedia(originalPath, index);
             return;
         }

@@ -31,11 +31,13 @@ Beyond standard playback, XenoPlayer is packed with advanced features including 
 * **Video:** `.mp4`, `.avi`, `.mkv`, `.mov`, `.wmv`, `.flv`, `.webm`, `.mpg`, `.mpeg`, `.ogg`
 * **Image:** `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`
 * **Archives:** `.cbz` comic archives and `.zip` archives containing images or playable video clips. Both are listed in the playlist and can be filtered with the ZIP/CBZ options. Image CBZ creation uses `.jpg`, `.jpeg`, `.png`, `.webp`, and `.gif`; video CBZ creation uses `.mp4`, `.webm`, and `.ogg`.
-  * Playback inside XenoPlayer's built-in viewer requires codecs WebView2 can decode (typically H.264/AAC MP4, VP8/VP9 WebM, and Theora/Vorbis OGG).
+  * Playback requires codecs the embedded webview can decode. On Windows that is typically H.264/AAC MP4, VP8/VP9 WebM, and Theora/Vorbis OGG. On macOS, MP4/M4V/MOV play natively; WebM, Ogg, MKV, AVI and other containers are converted to H.264/AAC MP4 with ffmpeg.
 
 ## 📁 Application Data
 
-By default, XenoPlayer reads and writes its data files (`web_settings.json`, `MAINLIST.json`, `reg_cache.json`, and `.env`) in the application's current working directory — the folder the app is launched from. If that folder is not writable, it falls back to the program folder. Existing files in the program folder are still read so settings aren't lost; the first save creates a copy in the working directory. Set the `XENO_DATA_DIR` environment variable to force a specific data folder.
+By default on Windows, XenoPlayer reads and writes its data files (`web_settings.json`, `MAINLIST.json`, `reg_cache.json`, and `.env`) in the application's current working directory — the folder the app is launched from. If that folder is not writable, it falls back to the program folder. Existing files in the program folder are still read so settings aren't lost; the first save creates a copy in the working directory. Set the `XENO_DATA_DIR` environment variable to force a specific data folder.
+
+On macOS, a `.app` bundle is read-only, so data is stored in `~/Library/Application Support/XenoPlayer/` instead. See [MACOS.md](MACOS.md) for the Mac build and test steps.
 
 ## 🔄 Update Checks
 
