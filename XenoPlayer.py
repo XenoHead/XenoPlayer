@@ -7131,7 +7131,73 @@ class RegKeyDialog:
     def __init__(self):
         self.result = None
 
+    @staticmethod
+    def _applescript_string(value):
+        return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ").replace("\r", " ") + '"'
+
+    def _mac_ask(self, prompt, title):
+        script = (
+            f"display dialog {self._applescript_string(prompt)} default answer \"\" "
+            f"with title {self._applescript_string(title)} "
+            'buttons {"Cancel", "Continue"} default button "Continue"'
+        )
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        if result.returncode != 0:
+            return None
+        output = (result.stdout or "").strip()
+        if "text returned:" in output:
+            return output.split("text returned:", 1)[1]
+        return ""
+
+    def _mac_alert(self, message, title, critical=False):
+        script = (
+            f"display alert {self._applescript_string(title)} "
+            f"message {self._applescript_string(message)} as "
+            f"{'critical' if critical else 'informational'}"
+        )
+        try:
+            subprocess.run(["osascript", "-e", script], capture_output=True, timeout=60)
+        except Exception:
+            pass
+
+    def _run_macos(self):
+        """Registration prompt using native dialogs, so Tk is not required."""
+        while self.result is None:
+            key = self._mac_ask(
+                "Enter your registration key to unlock XenoPlayer:",
+                "XenoPlayer - Registration",
+            )
+            if key is None:
+                self.result = False
+                break
+            key = key.strip()
+            if not key:
+                self._mac_alert("Please enter a registration key.", "XenoPlayer - Registration")
+                continue
+            ok, msg = validate_reg_key_online(key)
+            if ok:
+                save_reg_cache({
+                    "key_hash": _sha256_hex(key),
+                    "machine_id": machine_fingerprint(),
+                    "validated_at": datetime.now().isoformat(),
+                    "ttl_days": REG_KEY_TTL_DAYS,
+                })
+                self._mac_alert(
+                    "Registration key accepted. Welcome to XenoPlayer.",
+                    "XenoPlayer - Registration",
+                )
+                self.result = True
+            else:
+                self._mac_alert(f"Invalid key: {msg}", "XenoPlayer - Registration", critical=True)
+        return self.result
+
     def run(self):
+        if IS_MACOS:
+            return self._run_macos()
+
         import tkinter as tk
         from tkinter import simpledialog, messagebox
 
