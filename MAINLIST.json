@@ -31,24 +31,6 @@
             "notes": "Built-in tag search via HTML scraping. No public tag API; uses curated tag list."
         },
         {
-            "id": "porcore",
-            "name": "Porcore",
-            "domain": "https://porcore.com",
-            "notes": "{\"parser\":\"generic_html\",\"search_url\":\"https://porcore.com/video/2951/the-first-kiss/\",\"base_url\":\"https://porcore.com\",\"results_selector\":\"div.videoparams\",\"title_selector\":\"\",\"url_selector\":\"\",\"author_selector\":\"\",\"summary_selector\":\"\"}"
-        },
-        {
-            "id": "2e_hentai",
-            "name": "2E-hentai",
-            "domain": "https://e-hentai.org",
-            "notes": "{\"parser\":\"generic_html\",\"search_url\":\"https://e-hentai.org/s/4dfb114266/3673116-19\",\"base_url\":\"https://e-hentai.org\",\"results_selector\":\"div\",\"title_selector\":\"\",\"url_selector\":\"\",\"author_selector\":\"\",\"summary_selector\":\"\"}"
-        },
-        {
-            "id": "hentai_moon",
-            "name": "Hentai-moon",
-            "domain": "https://hentai-moon.com",
-            "notes": "{\"parser\":\"generic_html\",\"search_url\":\"https://hentai-moon.com/videos/991/cherry-gal-s-ep-2-d1\",\"base_url\":\"https://hentai-moon.com\",\"results_selector\":\"div.wrap\",\"title_selector\":\"\",\"url_selector\":\"\",\"author_selector\":\"\",\"summary_selector\":\"\"}"
-        },
-        {
             "id": "pixiv",
             "name": "Pixiv",
             "domain": "https://www.pixiv.net",
@@ -57,10 +39,10 @@
     ],
     "audio_sites": [
         {
-            "id": "liltsome1",
-            "name": "liltsome",
-            "domain": "liltsome.yerf.org",
-            "notes": ""
+            "id": "liltsome",
+            "name": "Liltsome",
+            "domain": "https://liltsome.yerf.org",
+            "notes": "{\"parser\":\"generic_html\",\"search_url\":\"https://liltsome.yerf.org\",\"base_url\":\"https://liltsome.yerf.org\",\"results_selector\":\"article.thumb-rating-explicit\",\"title_selector\":\"div.thumb-footer > div.thumb-footer-row > span.card-actions > a.card-vote-up\",\"url_selector\":\"div.thumb-footer > div.thumb-footer-row > span.card-actions > a.card-vote-up\",\"author_selector\":\"div.thumb-media-slot > div.audio-tile > span.audio-tile-artist\",\"summary_selector\":\"div.thumb-footer > div.thumb-footer-row > span.thumb-caption\",\"thumb_selector\":\"\"}"
         }
     ],
     "story_sites": [
