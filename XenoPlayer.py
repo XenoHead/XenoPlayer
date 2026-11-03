@@ -6779,6 +6779,9 @@ def run_server():
 
 REG_KEY_CACHE_FILE = os.path.join(APP_PWD, "reg_cache.json")
 REG_KEY_TTL_DAYS = 30
+DEFAULT_REG_KEY_VALIDATE_URL = (
+    "https://xenoplayer-regkeys.skotxeno.workers.dev/api/reg-key/validate"
+)
 
 
 def _sha256_hex(text):
@@ -6830,7 +6833,7 @@ def _dotenv_lookup(*names):
 
 
 def reg_key_validate_url():
-    return _dotenv_lookup("REG_KEY_VALIDATE_URL")
+    return _dotenv_lookup("REG_KEY_VALIDATE_URL") or DEFAULT_REG_KEY_VALIDATE_URL
 
 
 def load_reg_cache():
