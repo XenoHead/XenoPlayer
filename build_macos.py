@@ -147,11 +147,31 @@ def data_argument(source, destination):
     return f"{source}{os.pathsep}{destination}"
 
 
-def patch_info_plist(app_path):
-    """Allow WKWebView to reach the local Flask server over http://localhost."""
+def plist_set(plist, key, value):
+    for action in ("-replace", "-insert"):
+        result = subprocess.run(
+            ["plutil", action, key, "-string", str(value), str(plist)],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            return True
+    return False
+
+
+def patch_info_plist(app_path, version):
+    """Set bundle metadata and allow WKWebView to reach http://localhost."""
     plist = app_path / "Contents" / "Info.plist"
     if not plist.is_file():
         return
+    for key, value in (
+        ("CFBundleShortVersionString", version),
+        ("CFBundleVersion", version),
+        ("CFBundleDisplayName", APP_NAME),
+        ("LSMinimumSystemVersion", "11.0"),
+        ("LSApplicationCategoryType", "public.app-category.video"),
+    ):
+        plist_set(plist, key, value)
+
     ats = json.dumps({
         "NSAllowsLocalNetworking": True,
         "NSExceptionDomains": {
@@ -170,7 +190,7 @@ def patch_info_plist(app_path):
             capture_output=True, text=True,
         )
         if result.returncode == 0:
-            print(f"Patched ATS localhost exception into {plist}")
+            print(f"Patched Info.plist for {APP_NAME} {version} and localhost access.")
             return
     print("Warning: could not add the localhost ATS exception to Info.plist.")
 
@@ -324,7 +344,7 @@ def main():
     write_build_info(version)
     icns = make_icns()
     app_path = build_app(version, icns)
-    patch_info_plist(app_path)
+    patch_info_plist(app_path, version)
     resign_app(app_path)
     print(f"\nApp bundle: {app_path}")
     dmg = make_dmg(app_path, version)

@@ -37,8 +37,15 @@ jobs:
       - name: Show build outputs
         run: |
           ls -lh dist
-          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" dist/XenoPlayer.app/Contents/Info.plist || true
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" dist/XenoPlayer.app/Contents/Info.plist
+          /usr/libexec/PlistBuddy -c "Print :NSAppTransportSecurity" dist/XenoPlayer.app/Contents/Info.plist
           file dist/XenoPlayer.app/Contents/MacOS/XenoPlayer
+
+      - name: Verify app signature and DMG
+        run: |
+          codesign --verify --deep --strict --verbose=2 dist/XenoPlayer.app
+          codesign -dv --verbose=4 dist/XenoPlayer.app 2>&1 | head -20
+          hdiutil verify dist/*.dmg
 
       - name: Zip app bundle
         run: |
