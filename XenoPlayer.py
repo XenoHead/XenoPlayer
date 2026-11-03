@@ -52,21 +52,43 @@ if getattr(sys, 'frozen', False):
 else:
     app_dir = os.path.dirname(os.path.abspath(__file__))
 
+IS_WINDOWS = os.name == "nt"
+IS_MACOS = sys.platform == "darwin"
+IS_LINUX = sys.platform.startswith("linux")
+
+
+def _macos_app_support_dir():
+    """Writable per-user location for a macOS application bundle."""
+    return os.path.join(
+        os.path.expanduser("~"), "Library", "Application Support", "XenoPlayer"
+    )
+
+
 def _pick_app_pwd():
     """Pick the directory used for read/write application data.
 
-    Defaults to the application's current working directory (the folder the
-    app was launched from). Falls back to the executable/script folder if the
-    PWD is not writable. Set XENO_DATA_DIR to override both.
+    On macOS a .app bundle is read-only and its launch directory is unreliable,
+    so data lives in ~/Library/Application Support/XenoPlayer by default.
+    Windows keeps the historical behavior: the directory the app was launched
+    from, falling back to the executable/script folder. Set XENO_DATA_DIR to
+    override both.
     """
     candidates = []
     override = os.environ.get("XENO_DATA_DIR")
     if override:
+        override = os.path.abspath(os.path.expanduser(override))
         try:
             os.makedirs(override, exist_ok=True)
         except OSError:
             pass
         candidates.append(override)
+    if IS_MACOS:
+        mac_dir = _macos_app_support_dir()
+        try:
+            os.makedirs(mac_dir, exist_ok=True)
+        except OSError:
+            pass
+        candidates.append(mac_dir)
     candidates.extend([os.getcwd(), app_dir])
     seen = set()
     for candidate in candidates:
@@ -83,6 +105,78 @@ def _pick_app_pwd():
     return os.path.abspath(os.getcwd())
 
 APP_PWD = _pick_app_pwd()
+
+
+def subprocess_creationflags():
+    """Hide console windows on Windows; harmless everywhere else."""
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0) if IS_WINDOWS else 0
+
+
+def subprocess_group_kwargs(show_window=False):
+    """Start a subprocess in its own group so the whole tree can be killed."""
+    if IS_WINDOWS:
+        flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        if not show_window:
+            flags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        return {"creationflags": flags}
+    return {"start_new_session": True}
+
+
+def open_with_system(path):
+    """Open a file or folder with the platform's default handler."""
+    if IS_WINDOWS:
+        os.startfile(path)
+    elif IS_MACOS:
+        subprocess.Popen(["open", path])
+    else:
+        subprocess.Popen(["xdg-open", path])
+
+
+def reveal_with_system(path):
+    """Reveal a file in the platform file manager."""
+    path = os.path.abspath(path)
+    if IS_WINDOWS:
+        subprocess.Popen(f'explorer /select,"{os.path.normpath(path)}"')
+    elif IS_MACOS:
+        subprocess.Popen(["open", "-R", path])
+    else:
+        folder = path if os.path.isdir(path) else os.path.dirname(path)
+        subprocess.Popen(["xdg-open", folder])
+
+
+def helper_binary_path(name):
+    """Locate a bundled helper executable inside a onefile/onedir or .app build.
+
+    PyInstaller places a macOS .app's main executable in Contents/MacOS and
+    extracted onefile data in sys._MEIPASS. Helpers may sit beside either one.
+    """
+    filenames = [name]
+    if IS_WINDOWS and not name.lower().endswith(".exe"):
+        filenames.insert(0, name + ".exe")
+
+    search_dirs = []
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", "")
+        exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+        if meipass:
+            search_dirs.append(meipass)
+        search_dirs.append(exe_dir)
+        if IS_MACOS:
+            contents = os.path.dirname(exe_dir)
+            search_dirs.extend([
+                os.path.join(contents, "Frameworks"),
+                os.path.join(contents, "Resources"),
+                os.path.join(contents, "MacOS"),
+            ])
+    search_dirs.extend([app_dir])
+
+    for directory in search_dirs:
+        for filename in filenames:
+            candidate = os.path.join(directory, filename)
+            if os.path.isfile(candidate):
+                return candidate
+    return ""
+
 
 def app_data_read_paths(filename):
     """Where to look for an existing data file, newest location first."""
@@ -139,18 +233,34 @@ def natural_sort_key(s):
 def natural_sort_path_key(s):
     return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', os.path.normpath(s))]
 
-# Formats Chromium/WebView2 can play directly. Other containers are intentionally
-# not bundled because they would open to a black video element.
+# Formats the embedded webview can play directly. On Windows that is the
+# Chromium/WebView2 set. WKWebView on macOS relies on the system codecs, so
+# WebM/Ogg are converted through ffmpeg instead of opening to a black element.
 VIDEO_BUNDLE_EXTS = {'.mp4', '.webm', '.ogg'}
 IMAGE_BUNDLE_EXTS = {'.jpg', '.jpeg', '.png', '.webp', '.gif'}
 AUDIO_BUNDLE_EXTS = {
     '.mp3', '.m4a', '.m4b', '.wav', '.ogg', '.oga', '.opus',
     '.flac', '.aac', '.webm', '.mp4',
 }
-NATIVE_VIDEO_EXTS = {'.mp4', '.webm', '.ogg'}
-CONVERTIBLE_VIDEO_EXTS = {
-    '.avi', '.wmv', '.mkv', '.mov', '.flv', '.mpg', '.mpeg', '.m4v', '.ts',
-}
+if IS_MACOS:
+    NATIVE_VIDEO_EXTS = {'.mp4', '.m4v', '.mov'}
+    CONVERTIBLE_VIDEO_EXTS = {
+        '.mp4', '.m4v', '.mov', '.webm', '.ogg', '.avi', '.wmv', '.mkv',
+        '.flv', '.mpg', '.mpeg', '.ts', '.mts', '.m2ts', '.3gp', '.ogv',
+    }
+    # Codecs WKWebView handles reliably on supported macOS releases.
+    NATIVE_VIDEO_CODECS = {"h264", "hevc", "vp8", "vp9", "av1"}
+    NATIVE_AUDIO_CODECS = {
+        "", "aac", "mp3", "opus", "vorbis", "flac", "alac",
+        "pcm_s16le", "pcm_s16be", "pcm_s24le", "pcm_s24be",
+    }
+else:
+    NATIVE_VIDEO_EXTS = {'.mp4', '.webm', '.ogg'}
+    CONVERTIBLE_VIDEO_EXTS = {
+        '.avi', '.wmv', '.mkv', '.mov', '.flv', '.mpg', '.mpeg', '.m4v', '.ts',
+    }
+    NATIVE_VIDEO_CODECS = set()
+    NATIVE_AUDIO_CODECS = set()
 GITHUB_REPO = "XenoHead/XenoPlayer"
 GITHUB_REPO_URL = f"https://github.com/{GITHUB_REPO}"
 
@@ -202,9 +312,10 @@ class Api:
 
     def get_startup_info(self):
         art_path = resource_path('XenoHead_art.png')
+        platform_name = "macos" if IS_MACOS else ("windows" if IS_WINDOWS else "linux")
         if os.path.exists(art_path):
-            return {"art_path": art_path}
-        return {"art_path": None}
+            return {"art_path": art_path, "platform": platform_name}
+        return {"art_path": None, "platform": platform_name}
 
     def _git_run(self, args, cwd, timeout=20):
         git = shutil.which("git")
@@ -213,7 +324,7 @@ class Api:
         env = os.environ.copy()
         env["GIT_TERMINAL_PROMPT"] = "0"
         env["GCM_INTERACTIVE"] = "never"
-        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if IS_WINDOWS else 0
         try:
             return subprocess.run(
                 [git, "-C", cwd] + args,
@@ -539,7 +650,11 @@ class Api:
     def browse_exe_dialog(self):
         last_dir = self.settings.get("last_opened_dir", "")
         if last_dir and not os.path.exists(last_dir): last_dir = ""
-        result = self._window.create_file_dialog(webview.FileDialog.OPEN, directory=last_dir, allow_multiple=False, file_types=('Executables (*.exe)', 'All files (*.*)'))
+        if IS_MACOS:
+            file_types = ('Applications (*.app)', 'All files (*.*)')
+        else:
+            file_types = ('Executables (*.exe)', 'All files (*.*)')
+        result = self._window.create_file_dialog(webview.FileDialog.OPEN, directory=last_dir, allow_multiple=False, file_types=file_types)
         if result and len(result) > 0: return result[0]
         return None
 
@@ -553,7 +668,7 @@ class Api:
         return os.path.join(base, "XenoPlayer Drop")
 
     def _find_onionshare_cli(self):
-        exe = "onionshare-cli.exe" if os.name == "nt" else "onionshare-cli"
+        exe = "onionshare-cli.exe" if IS_WINDOWS else "onionshare-cli"
         configured = self.settings.get("onionshare_cli_path")
         candidates = []
         if configured: candidates.append(configured)
@@ -562,6 +677,13 @@ class Api:
             os.path.join(os.path.dirname(sys.executable), exe),
             os.path.join(app_dir, "onionshare", exe),
         ])
+        if IS_MACOS:
+            candidates.extend([
+                "/Applications/OnionShare.app/Contents/MacOS/onionshare-cli",
+                os.path.expanduser("~/Applications/OnionShare.app/Contents/MacOS/onionshare-cli"),
+                "/opt/homebrew/bin/onionshare-cli",
+                "/usr/local/bin/onionshare-cli",
+            ])
         for env in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
             base = os.environ.get(env)
             if base: candidates.append(os.path.join(base, "OnionShare", exe))
@@ -575,7 +697,7 @@ class Api:
         return None
 
     def _find_seven_zip(self):
-        names = ("7z.exe", "7za.exe", "7zz.exe") if os.name == "nt" else ("7z", "7zz", "7za")
+        names = ("7z.exe", "7za.exe", "7zz.exe") if IS_WINDOWS else ("7z", "7zz", "7za")
         configured = self.settings.get("seven_zip_path")
         candidates = []
         if configured: candidates.append(configured)
@@ -584,6 +706,11 @@ class Api:
                 os.path.join(app_dir, name),
                 os.path.join(os.path.dirname(sys.executable), name),
             ])
+            if IS_MACOS:
+                candidates.extend([
+                    f"/opt/homebrew/bin/{name}",
+                    f"/usr/local/bin/{name}",
+                ])
             # Non-system Program Files dirs on any fixed drive (e.g. D:\Program Files)
             for drive in self._windows_drive_roots():
                 candidates.append(os.path.join(drive, "Program Files", "7-Zip", name))
@@ -608,7 +735,7 @@ class Api:
 
     @staticmethod
     def _windows_drive_roots():
-        if os.name != "nt":
+        if not IS_WINDOWS:
             return []
         import string
         roots = []
@@ -1255,7 +1382,7 @@ class Api:
         if path:
             name = os.path.basename(path).lower()
             if name not in ("onionshare-cli.exe", "onionshare-cli"):
-                return self._onion_payload({"ok": False, "error": "Select onionshare-cli.exe, not the OnionShare GUI."})
+                return self._onion_payload({"ok": False, "error": "Select onionshare-cli, not the OnionShare GUI."})
             self.settings["onionshare_cli_path"] = path
             save_settings(self.settings)
         return self._onion_payload({"ok": True})
@@ -1265,7 +1392,7 @@ class Api:
         if path:
             name = os.path.basename(path).lower()
             if name not in ("7z.exe", "7za.exe", "7zz.exe", "7z", "7za", "7zz"):
-                return self._onion_payload({"ok": False, "error": "Select 7z.exe, not the 7-Zip File Manager."})
+                return self._onion_payload({"ok": False, "error": "Select the 7-Zip command-line tool, not the File Manager."})
             self.settings["seven_zip_path"] = path
             save_settings(self.settings)
         return self._onion_payload({"ok": True})
@@ -1274,9 +1401,7 @@ class Api:
         try:
             path = os.path.abspath(path or self._onion_default_receive_dir())
             os.makedirs(path, exist_ok=True)
-            if os.name == "nt": os.startfile(path)
-            elif sys.platform == "darwin": subprocess.Popen(["open", path])
-            else: subprocess.Popen(["xdg-open", path])
+            open_with_system(path)
             return {"status": "ok"}
         except Exception as e:
             return {"status": "error", "msg": str(e)}
@@ -1413,7 +1538,7 @@ class Api:
 
     def _find_ffmpeg(self):
         override = (self.settings.get("ffmpeg_path") or "").strip()
-        exe = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+        exe = "ffmpeg.exe" if IS_WINDOWS else "ffmpeg"
         candidates = []
         if override:
             candidates.append(override)
@@ -1424,10 +1549,17 @@ class Api:
             os.path.join(app_dir, "bin", exe),
             os.path.join(app_dir, "ffmpeg", "bin", exe),
         ])
+        if IS_MACOS:
+            candidates.extend([
+                os.path.join(app_dir, "ffmpeg", exe),
+                "/opt/homebrew/bin/ffmpeg",
+                "/usr/local/bin/ffmpeg",
+                "/opt/local/bin/ffmpeg",
+            ])
         which = shutil.which("ffmpeg")
         if which:
             candidates.append(which)
-        if os.name == "nt":
+        if IS_WINDOWS:
             candidates.extend([
                 os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "ffmpeg", "bin", exe),
                 os.path.join(os.environ.get("ProgramFiles", ""), "ffmpeg", "bin", exe),
@@ -1445,10 +1577,14 @@ class Api:
             return override
         ffmpeg = self._find_ffmpeg()
         if ffmpeg:
-            exe = "ffprobe.exe" if os.name == "nt" else "ffprobe"
+            exe = "ffprobe.exe" if IS_WINDOWS else "ffprobe"
             candidate = os.path.join(os.path.dirname(ffmpeg), exe)
             if os.path.isfile(candidate):
                 return candidate
+        if IS_MACOS:
+            for candidate in ("/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe"):
+                if os.path.isfile(candidate):
+                    return candidate
         return shutil.which("ffprobe") or ""
 
     def _video_cache_dir(self):
@@ -1526,7 +1662,7 @@ class Api:
 
     def _probe_video(self, ffprobe, path):
         try:
-            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if IS_WINDOWS else 0
             result = subprocess.run(
                 [
                     ffprobe, "-v", "error", "-print_format", "json",
@@ -1552,6 +1688,23 @@ class Api:
         except Exception:
             return {}
 
+    def _native_video_is_playable(self, path):
+        """Return False when a native container holds a codec WKWebView can't decode."""
+        if not IS_MACOS:
+            return True
+        ffprobe = self._find_ffprobe()
+        if not ffprobe:
+            # Without a probe, let WebKit make the first attempt.
+            return True
+        info = self._probe_video(ffprobe, path)
+        video_codec = info.get("video_codec")
+        audio_codec = info.get("audio_codec")
+        if video_codec and video_codec not in NATIVE_VIDEO_CODECS:
+            return False
+        if audio_codec and audio_codec not in NATIVE_AUDIO_CODECS:
+            return False
+        return True
+
     def prepare_video_for_playback(self, path):
         try:
             if not path:
@@ -1561,7 +1714,7 @@ class Api:
                 return {"status": "error", "msg": "Video file not found."}
 
             ext = os.path.splitext(path)[1].lower()
-            if ext in NATIVE_VIDEO_EXTS:
+            if ext in NATIVE_VIDEO_EXTS and self._native_video_is_playable(path):
                 return {"status": "native", "path": path}
             if ext not in CONVERTIBLE_VIDEO_EXTS:
                 return {
@@ -1581,8 +1734,10 @@ class Api:
                     "status": "no_ffmpeg",
                     "source": path,
                     "msg": (
-                        "AVI/WMV playback needs ffmpeg. Install ffmpeg and make sure "
-                        "it is on PATH, or set ffmpeg_path in web_settings.json."
+                        "This video format needs ffmpeg for playback. Install ffmpeg "
+                        "and make sure it is on PATH"
+                        + (" (for example: brew install ffmpeg)" if IS_MACOS else "")
+                        + ", or set ffmpeg_path in web_settings.json."
                     ),
                 }
 
@@ -1665,7 +1820,7 @@ class Api:
                 ]
             command += ["-f", "mp4", temp_path]
 
-            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if IS_WINDOWS else 0
             process = subprocess.Popen(
                 command,
                 stdout=subprocess.PIPE,
@@ -1745,12 +1900,7 @@ class Api:
         try:
             if not path or not os.path.exists(path):
                 return {"status": "error", "msg": "File not found."}
-            if os.name == "nt":
-                os.startfile(path)
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", path])
-            else:
-                subprocess.Popen(["xdg-open", path])
+            open_with_system(path)
             return {"status": "success"}
         except Exception as e:
             return {"status": "error", "msg": str(e)}
@@ -2485,19 +2635,22 @@ class Api:
         except Exception as e: return {"status": "error", "msg": str(e)}
 
     def open_folder_location(self, path):
-        import subprocess
         try:
-            subprocess.Popen(f'explorer /select,"{os.path.normpath(path)}"')
+            reveal_with_system(path)
             return {"status": "ok"}
         except Exception as e: return {"status": "error", "msg": str(e)}
 
     def open_with(self, filepath, app_path):
         import subprocess
         try:
+            filepath = os.path.normpath(filepath)
+            if IS_MACOS and app_path.lower().endswith(".app"):
+                subprocess.Popen(["open", "-a", app_path, filepath])
+                return {"status": "ok"}
             app_dir = os.path.dirname(app_path)
             # If the directory is valid and exists, set it as the working directory
             cwd = app_dir if app_dir and os.path.exists(app_dir) else None
-            subprocess.Popen([app_path, os.path.normpath(filepath)], cwd=cwd)
+            subprocess.Popen([app_path, filepath], cwd=cwd)
             return {"status": "ok"}
         except Exception as e: return {"status": "error", "msg": str(e)}
 
@@ -4963,8 +5116,9 @@ class Api:
 
         # CollectionViewer is an image-page reader. If the collection contains
         # videos, or only has images inside subfolders, use the main player so
-        # every supported media type is available.
-        if has_video or (has_image and not root_has_image):
+        # every supported media type is available. The separate PyQt helper is
+        # not shipped in the macOS core build, so macOS always uses the player.
+        if IS_MACOS or has_video or (has_image and not root_has_image):
             return self.load_selected_directory(directory, recursive=True)
 
         import subprocess
@@ -5372,8 +5526,12 @@ class Api:
     def get_collection_download_dir(self):
         d = self.settings.get("collection_download_dir", "")
         if not d:
-            base = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
-            d = os.path.join(base, "Downloads", "nhentai")
+            if IS_MACOS:
+                base = os.path.join(os.path.expanduser("~"), "Downloads", "XenoPlayer")
+            else:
+                base = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+                base = os.path.join(base, "Downloads")
+            d = os.path.join(base, "nhentai")
         return {"dir": d}
 
     def _log_download(self, title, path, media_type="collection", status="success"):
@@ -5418,14 +5576,30 @@ class Api:
                 os.makedirs(download_dir, exist_ok=True)
                 open(os.path.join(download_dir, ".collection"), 'w').close()
                 import subprocess, time
-                cmd = [sys.executable, "gallery_dl_module", "-d", download_dir, url] if getattr(sys, 'frozen', False) else [sys.executable, "-m", "gallery_dl", "-d", download_dir, url]
-                process = subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
-                while process.poll() is None:
+                returncode = 0
+                if getattr(sys, 'frozen', False) and IS_MACOS:
+                    # A frozen .app cannot run `python -m gallery_dl` in a child
+                    # process, so drive the library in this worker thread.
+                    try:
+                        import gallery_dl.config
+                        import gallery_dl.job
+                        gallery_dl.config.set(("extractor",), "base-directory", download_dir)
+                        job = gallery_dl.job.DownloadJob(url)
+                        job.run()
+                    except Exception:
+                        returncode = 1
                     if self.cancel_flags.get(title):
-                        process.terminate()
                         raise Exception("Cancelled by user")
-                    time.sleep(0.5)
-                if process.returncode != 0 and not self.cancel_flags.get(title):
+                else:
+                    cmd = [sys.executable, "gallery_dl_module", "-d", download_dir, url] if getattr(sys, 'frozen', False) else [sys.executable, "-m", "gallery_dl", "-d", download_dir, url]
+                    process = subprocess.Popen(cmd, creationflags=subprocess_creationflags())
+                    while process.poll() is None:
+                        if self.cancel_flags.get(title):
+                            process.terminate()
+                            raise Exception("Cancelled by user")
+                        time.sleep(0.5)
+                    returncode = process.returncode
+                if returncode != 0 and not self.cancel_flags.get(title):
                     # Fallback to custom scraper for unsupported urls (e.g. multporn.net)
                     scraped = self.scrape_custom_gallery(url)
                     if scraped.get("status") == "success" and scraped.get("playlist"):
@@ -5444,7 +5618,7 @@ class Api:
                             except Exception as e:
                                 print(f"Scrape download failed for item {index}: {e}")
                     else:
-                        raise Exception(f"gallery-dl failed (code {process.returncode}) and scraper fallback failed: {scraped.get('msg')}")
+                        raise Exception(f"gallery-dl failed (code {returncode}) and scraper fallback failed: {scraped.get('msg')}")
                 
                 # Flatten any nested subdirectories created by gallery-dl
                 import shutil
@@ -6086,9 +6260,21 @@ class Api:
     def translate_rect(self, path, x, y, w, h, ocr_mode, disp_w, disp_h, target_lang='English (en)', ocr_source_lang='auto'):
         if not path or not os.path.isfile(path): return {"status": "error"}
         from PIL import Image
-        import pytesseract
-        if os.name == 'nt' and not shutil.which('tesseract'):
-            for p_path in [r'C:\Program Files\Tesseract-OCR\tesseract.exe', r'D:\Programs\Tesseract-OCR\tesseract.exe']:
+        try:
+            import pytesseract
+        except ImportError:
+            return {
+                "status": "error",
+                "msg": "OCR is not included in this build. Install Tesseract and the Python OCR packages to enable it.",
+            }
+        if not shutil.which('tesseract'):
+            if IS_WINDOWS:
+                tess_candidates = [r'C:\Program Files\Tesseract-OCR\tesseract.exe', r'D:\Programs\Tesseract-OCR\tesseract.exe']
+            elif IS_MACOS:
+                tess_candidates = ['/opt/homebrew/bin/tesseract', '/usr/local/bin/tesseract']
+            else:
+                tess_candidates = ['/usr/bin/tesseract']
+            for p_path in tess_candidates:
                 if os.path.exists(p_path):
                     pytesseract.pytesseract.tesseract_cmd = p_path
                     break
@@ -6103,41 +6289,38 @@ class Api:
                 import subprocess
                 temp_img_path = os.path.join(tempfile.gettempdir(), "player_ocr_crop.png")
                 cropped.save(temp_img_path)
-                
+
                 if getattr(sys, 'frozen', False):
-                    # One-file builds extract the worker to _MEIPASS; older
-                    # onedir builds keep it beside the main executable.
-                    exe_dir = os.path.dirname(sys.executable)
-                    base_dir = sys._MEIPASS
-                    worker_candidates = [
-                        os.path.join(base_dir, "ocr_worker.exe"),
-                        os.path.join(base_dir, "ocr_worker", "ocr_worker.exe"),
-                        os.path.join(exe_dir, "ocr_worker", "ocr_worker.exe"),
-                        os.path.join(exe_dir, "ocr_worker.exe"),
-                    ]
-                    worker_exe = next(
-                        (candidate for candidate in worker_candidates if os.path.exists(candidate)),
-                        worker_candidates[0],
-                    )
+                    base_dir = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+                    worker_exe = helper_binary_path("ocr_worker")
+                    if not worker_exe:
+                        try: os.remove(temp_img_path)
+                        except Exception: pass
+                        return {
+                            "status": "error",
+                            "msg": "Japanese Manga OCR is not included in the macOS core build yet.",
+                        }
+                    cmd = [worker_exe, temp_img_path]
                 else:
                     base_dir = os.path.dirname(os.path.abspath(__file__))
-                    worker_exe = sys.executable
-                
+                    worker_script = os.path.join(base_dir, "ocr_worker.py")
+                    if not os.path.exists(worker_script):
+                        try: os.remove(temp_img_path)
+                        except Exception: pass
+                        return {"status": "error", "msg": "OCR worker script not found."}
+                    cmd = [sys.executable, worker_script, temp_img_path]
+
                 model_path = os.path.normpath(os.path.join(base_dir, 'manga_ocr_model'))
                 if not os.path.exists(os.path.join(model_path, "config.json")):
                     model_path = os.path.normpath(os.path.join(base_dir, '..', 'manga_ocr_model'))
-                
-                if getattr(sys, 'frozen', False):
-                    cmd = [worker_exe, temp_img_path, model_path]
-                else:
-                    cmd = [worker_exe, os.path.join(base_dir, "ocr_worker.py"), temp_img_path, model_path]
-                
+                cmd.append(model_path)
+
                 # Set PYTHONIOENCODING as belt-and-suspenders for the child process
                 env = os.environ.copy()
                 env["PYTHONIOENCODING"] = "utf-8"
                 result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8',
                                         env=env,
-                                        creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+                                        creationflags=subprocess_creationflags())
                 
                 try: os.remove(temp_img_path)
                 except: pass
@@ -6300,8 +6483,14 @@ class Api:
     def get_tesseract_languages(self):
         try:
             import pytesseract
-            if os.name == 'nt' and not shutil.which('tesseract'):
-                for p_path in [r'C:\Program Files\Tesseract-OCR\tesseract.exe', r'D:\Programs\Tesseract-OCR\tesseract.exe']:
+            if not shutil.which('tesseract'):
+                if IS_WINDOWS:
+                    tess_candidates = [r'C:\Program Files\Tesseract-OCR\tesseract.exe', r'D:\Programs\Tesseract-OCR\tesseract.exe']
+                elif IS_MACOS:
+                    tess_candidates = ['/opt/homebrew/bin/tesseract', '/usr/local/bin/tesseract']
+                else:
+                    tess_candidates = ['/usr/bin/tesseract']
+                for p_path in tess_candidates:
                     if os.path.exists(p_path):
                         pytesseract.pytesseract.tesseract_cmd = p_path
                         break

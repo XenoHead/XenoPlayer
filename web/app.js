@@ -2307,7 +2307,7 @@ function updatePlaylist() {
     pywebview.api.get_playlist().then(items => {
         playlist = items.map((item, i) => ({ ...item, originalIndex: i }));
         if (splitScreenActive) {
-            const videoExts = ['mp4', 'webm', 'ogg', 'mp3', 'wav', 'wave', 'm4a', 'm4b', 'aac', 'flac', 'oga', 'opus'];
+            const videoExts = ['mp4', 'm4v', 'mov', 'webm', 'ogg', 'mp3', 'wav', 'wave', 'm4a', 'm4b', 'aac', 'flac', 'oga', 'opus'];
             leftPlaylist = playlist.filter(f => {
                 const ext = f.path.split('.').pop().toLowerCase();
                 return videoExts.includes(ext);
@@ -5623,7 +5623,7 @@ function toggleSplitScreen() {
         document.getElementById('split-resizer').style.display = 'block';
         
         // Populate left playlist from current playlist, filtering to videos
-        const videoExts = ['mp4', 'webm', 'ogg', 'mp3', 'wav', 'wave'];
+        const videoExts = ['mp4', 'm4v', 'mov', 'webm', 'ogg', 'mp3', 'wav', 'wave'];
         leftPlaylist = playlist.filter(f => {
             const ext = f.path.split('.').pop().toLowerCase();
             return videoExts.includes(ext);
@@ -5753,7 +5753,7 @@ function browsePaneFolder(side) {
             }
             
             if (side === 'left') {
-                const videoExts = ['mp4', 'webm', 'ogg', 'mp3', 'wav', 'wave', 'm4a', 'm4b', 'aac', 'flac', 'oga', 'opus'];
+                const videoExts = ['mp4', 'm4v', 'mov', 'webm', 'ogg', 'mp3', 'wav', 'wave', 'm4a', 'm4b', 'aac', 'flac', 'oga', 'opus'];
                 leftPlaylist = files.filter(f => {
                     const ext = f.name.split('.').pop().toLowerCase();
                     return videoExts.includes(ext);
