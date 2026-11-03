@@ -47,6 +47,9 @@ jobs:
           codesign -dv --verbose=4 dist/XenoPlayer.app 2>&1 | head -20
           hdiutil verify dist/*.dmg
 
+      - name: Smoke test frozen app
+        run: dist/XenoPlayer.app/Contents/MacOS/XenoPlayer --smoke-test
+
       - name: Zip app bundle
         run: |
           ditto -c -k --sequesterRsrc --keepParent \

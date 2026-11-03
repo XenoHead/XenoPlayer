@@ -7053,6 +7053,37 @@ def run_server():
     logging.getLogger('werkzeug').setLevel(logging.ERROR)
     app.run(port=5050, debug=False, use_reloader=False)
 
+
+def run_smoke_test():
+    """Validate a frozen build without opening a GUI or asking for a key."""
+    import json as json_module
+    results = {}
+    web_index = resource_path(os.path.join("web", "index.html"))
+    results["web_index"] = os.path.isfile(web_index)
+    results["app_pwd"] = APP_PWD
+
+    api = Api()
+    info = api.get_startup_info()
+    results["platform"] = info.get("platform")
+    results["art"] = bool(info.get("art_path"))
+    results["native_video_exts"] = info.get("native_video_exts")
+    results["convertible_video_exts"] = info.get("convertible_video_exts")
+    results["audio_convert_exts"] = info.get("audio_convert_exts")
+    results["version"] = api._local_version_info().get("version", "")
+
+    sample = info.get("art_path") or web_index
+    try:
+        client = app.test_client()
+        response = client.get("/media", query_string={"path": sample})
+        results["media_status"] = response.status_code
+        response.close()
+    except Exception as error:
+        results["media_status"] = f"error: {error}"
+
+    print(json_module.dumps(results, indent=2))
+    ok = results["web_index"] and results["art"] and results.get("media_status") == 200
+    return 0 if ok else 1
+
 # --- REGISTRATION KEY SECURITY (Cloudflare-backed) ---
 
 REG_KEY_CACHE_FILE = os.path.join(APP_PWD, "reg_cache.json")
@@ -7341,6 +7372,9 @@ class RegKeyDialog:
 
 
 if __name__ == '__main__':
+    if "--smoke-test" in sys.argv:
+        sys.exit(run_smoke_test())
+
     # --- Registration key gate (keys stored/validated on Cloudflare) ---
     if not is_reg_unlocked():
         _dialog = RegKeyDialog()
