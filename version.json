@@ -1,5 +1,8 @@
 {
-    "version": "2.6.0",
-    "last_updated": "2026-07-10",
-    "changelog": []
+    "version": "2.6.1",
+    "last_updated": "2026-11-03",
+    "changelog": [
+        "Add non-AI video enhancement (denoise, deband, sharpen, Lanczos upscale) to the Tools menu.",
+        "Add the macOS Core build (.app/.dmg), WKWebView codec fallbacks, and Application Support data path."
+    ]
 }
