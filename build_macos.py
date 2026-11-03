@@ -119,13 +119,26 @@ def make_icns():
         (1024, "icon_512x512@2x.png"),
     ]
     for size, name in sizes:
-        run([
-            "sips", "-z", str(size), str(size), str(source),
-            "--out", str(iconset / name),
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            run([
+                "sips", "-s", "format", "png", "-z", str(size), str(size),
+                str(source), "--out", str(iconset / name),
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except subprocess.CalledProcessError as error:
+            print(f"Warning: sips could not resize the icon ({error}); building without one.")
+            shutil.rmtree(iconset, ignore_errors=True)
+            return None
 
-    run(["iconutil", "-c", "icns", str(iconset), "-o", str(icns)])
+    result = subprocess.run(
+        ["iconutil", "-c", "icns", str(iconset), "-o", str(icns)],
+        capture_output=True, text=True,
+    )
     shutil.rmtree(iconset, ignore_errors=True)
+    if result.returncode != 0 or not icns.exists():
+        print("Warning: could not generate XenoPlayer.icns; building without a custom icon.")
+        if result.stderr:
+            print(result.stderr.strip())
+        return None
     return icns
 
 
