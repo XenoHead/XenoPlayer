@@ -9,20 +9,29 @@ import urllib.request
 import urllib.error
 
 
-def load_env(path=".env"):
+def load_env(path=None):
+    """Load .env next to this script (falls back to the current directory)."""
+    candidates = []
+    if path:
+        candidates.append(path)
+    else:
+        candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+        candidates.append(os.path.join(os.getcwd(), ".env"))
     data = {}
-    if not os.path.exists(path):
-        return data
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, v = line.split("=", 1)
-                data[k.strip()] = v.strip()
-    except Exception:
-        pass
+    for candidate in candidates:
+        if not os.path.exists(candidate):
+            continue
+        try:
+            with open(candidate, "r", encoding="utf-8-sig") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, v = line.split("=", 1)
+                    data[k.strip()] = v.strip().strip('"').strip("'")
+            return data
+        except Exception:
+            continue
     return data
 
 
@@ -113,7 +122,6 @@ class KeyManager(tk.Tk):
 
         self.columns = ("id", "key_hash", "label", "machine_id", "active", "created_at", "last_used_at")
 
-        # Status bar
         self.status_var = tk.StringVar(value="Ready")
         status = ttk.Label(self, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
         status.pack(side=tk.BOTTOM, fill=tk.X)
@@ -142,6 +150,18 @@ class KeyManager(tk.Tk):
         scroll = ttk.Scrollbar(mid, orient=tk.VERTICAL, command=self.tree.yview)
         scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.tree.configure(yscrollcommand=scroll.set)
+
+        info = ttk.Frame(self, padding=(8, 0, 8, 0))
+        info.pack(fill=tk.X)
+        ttk.Label(
+            info,
+            text=(
+                f"Account: {ACCOUNT_ID}  |  D1: {DATABASE_ID}  |  "
+                f"CLOUDFLARE_API_TOKEN: {'set' if API_TOKEN else 'MISSING'}  |  "
+                f"Validate URL: {VALIDATE_URL or 'not set'}"
+            ),
+            foreground="#555",
+        ).pack(side=tk.LEFT)
 
         bottom = ttk.Frame(self, padding=8)
         bottom.pack(fill=tk.X)

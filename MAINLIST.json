@@ -75,12 +75,6 @@
             "name": "Sexstories",
             "domain": "https://www.sexstories.com",
             "notes": "{\"parser\":\"generic_html\",\"search_url\":\"https://www.sexstories.com/themes/107/Young\",\"base_url\":\"https://www.sexstories.com\",\"results_selector\":\"h4\",\"title_selector\":\"a\",\"url_selector\":\"a\",\"author_selector\":\"\",\"summary_selector\":\"\"}"
-        },
-        {
-            "id": "nifty",
-            "name": "Nifty-2",
-            "domain": "https://www.nifty.org",
-            "notes": "{\"parser\":\"generic_html\",\"search_url\":\"https://www.nifty.org/nifty/gay/incest/a-boys-lustful-desires/\",\"base_url\":\"https://www.nifty.org\",\"results_selector\":\"tr\",\"title_selector\":\"\",\"url_selector\":\"\",\"author_selector\":\"\",\"summary_selector\":\"\"}"
         }
     ]
 }

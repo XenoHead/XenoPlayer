@@ -2311,6 +2311,87 @@ function renderPlaylist() {
     }
 }
 
+let collectionDialogTarget = null;
+let collectionFileNameEdited = false;
+
+function getContextTargetPath() {
+    if (lastSelectedIndex !== -1 && playlist[lastSelectedIndex]) return playlist[lastSelectedIndex].path;
+    if (selectedIndices.size > 0) {
+        const idx = selectedIndices.values().next().value;
+        if (playlist[idx]) return playlist[idx].path;
+    }
+    return appState.current_path || null;
+}
+
+function showCollectionNameError(message) {
+    const el = document.getElementById('collection-name-error');
+    if (!el) return;
+    el.innerText = message;
+    el.style.display = 'block';
+}
+
+function closeCollectionNameModal() {
+    const modal = document.getElementById('collection-name-modal');
+    if (modal) modal.style.display = 'none';
+    collectionDialogTarget = null;
+    collectionFileNameEdited = false;
+}
+
+function openCollectionNameModal(targetPath) {
+    pywebview.api.get_collection_prompt(targetPath || null).then(res => {
+        if (!res || res.status !== 'success') {
+            alert((res && res.msg) ? res.msg : 'Select a folder or comic file first.');
+            return;
+        }
+        collectionDialogTarget = { path: res.path, kind: res.kind };
+        collectionFileNameEdited = false;
+
+        const nameInput = document.getElementById('collection-name-input');
+        nameInput.value = res.name || '';
+
+        const fileRow = document.getElementById('collection-file-row');
+        if (res.kind === 'archive') {
+            fileRow.style.display = 'block';
+            document.getElementById('collection-file-input').value = res.file_name || '';
+            document.getElementById('collection-file-ext').innerText = res.extension || '.cbz';
+        } else {
+            fileRow.style.display = 'none';
+        }
+
+        const errorEl = document.getElementById('collection-name-error');
+        if (errorEl) errorEl.style.display = 'none';
+        document.getElementById('collection-name-modal').style.display = 'block';
+        nameInput.focus();
+        nameInput.select();
+    });
+}
+
+function submitCollectionNameModal() {
+    if (!collectionDialogTarget) return;
+    const name = document.getElementById('collection-name-input').value.trim();
+    if (!name) {
+        showCollectionNameError('Enter a collection name.');
+        return;
+    }
+    const isArchive = collectionDialogTarget.kind === 'archive';
+    const fileName = isArchive ? document.getElementById('collection-file-input').value.trim() : null;
+    if (isArchive && !fileName) {
+        showCollectionNameError('Enter a file name for the comic.');
+        return;
+    }
+    const targetPath = collectionDialogTarget.path;
+    closeCollectionNameModal();
+    pywebview.api.mark_as_collection(targetPath, name, fileName).then(res => {
+        if (res && res.status === 'error') {
+            alert(res.msg || 'Could not save the collection.');
+            return;
+        }
+        appState = res;
+        renderState();
+        updatePlaylist();
+    });
+}
+
 function showContextMenu(x, y) {
     try {
         const cmLocal = document.getElementById('context-menu');
@@ -2386,11 +2467,16 @@ function showContextMenu(x, y) {
             cmLocal.appendChild(markCollectionBtn);
         }
 
-        if (appState.is_collection_folder) {
+        const collectionTargetPath = getContextTargetPath();
+        if (appState.is_collection_folder || appState.is_collection_archive) {
             markCollectionBtn.innerHTML = '<i class="fa-solid fa-book-open-reader"></i> Unmark as Collection';
             markCollectionBtn.onclick = () => {
                 cmLocal.style.display = 'none';
-                pywebview.api.unmark_as_collection().then(state => {
+                pywebview.api.unmark_as_collection(collectionTargetPath).then(state => {
+                    if (state && state.status === 'error') {
+                        alert(state.msg || 'Could not unmark the collection.');
+                        return;
+                    }
                     appState = state;
                     renderState();
                 });
@@ -2399,10 +2485,7 @@ function showContextMenu(x, y) {
             markCollectionBtn.innerHTML = '<i class="fa-solid fa-book"></i> Make Collection';
             markCollectionBtn.onclick = () => {
                 cmLocal.style.display = 'none';
-                pywebview.api.mark_as_collection().then(state => {
-                    appState = state;
-                    renderState();
-                });
+                openCollectionNameModal(collectionTargetPath);
             };
         }
         markCollectionBtn.style.display = 'block';
@@ -2584,6 +2667,28 @@ document.addEventListener('DOMContentLoaded', () => {
                 el.currentTime = (progressSlider.value / 100) * el.duration;
             }
         });
+    }
+
+    const collectionNameInput = document.getElementById('collection-name-input');
+    const collectionFileInput = document.getElementById('collection-file-input');
+    if (collectionNameInput && collectionFileInput) {
+        collectionNameInput.addEventListener('input', () => {
+            if (!collectionFileNameEdited) collectionFileInput.value = collectionNameInput.value;
+        });
+        collectionFileInput.addEventListener('input', () => {
+            collectionFileNameEdited = true;
+        });
+        const handleCollectionDialogKey = (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                submitCollectionNameModal();
+            } else if (event.key === 'Escape') {
+                event.preventDefault();
+                closeCollectionNameModal();
+            }
+        };
+        collectionNameInput.addEventListener('keydown', handleCollectionDialogKey);
+        collectionFileInput.addEventListener('keydown', handleCollectionDialogKey);
     }
 });
 
@@ -4105,7 +4210,18 @@ function renderCollectionLibrary() {
         card.title = 'Double-click to read | Right-click for options';
         card.ondblclick = () => {
             closeCollectionLibrary();
-            pywebview.api.open_collection_viewer(collection.path);
+            if (collection.kind === 'archive') {
+                pywebview.api.open_cbz_archive(collection.path).then(res => {
+                    if (res && res.status === 'error') {
+                        alert(res.msg);
+                        return;
+                    }
+                    updatePlaylist();
+                    updateState();
+                });
+            } else {
+                pywebview.api.open_collection_viewer(collection.path);
+            }
         };
         card.oncontextmenu = (e) => {
             e.preventDefault();
@@ -4171,7 +4287,7 @@ function renderCollectionLibrary() {
 
         imgContainer.appendChild(img);
 
-        if (collection.page_count !== undefined) {
+        if (collection.page_count !== undefined && collection.kind !== 'archive') {
             const pageBadge = document.createElement('div');
             pageBadge.innerHTML = `<i class="fa-regular fa-images"></i> ${collection.page_count}`;
             pageBadge.style.position = 'absolute';
@@ -4183,6 +4299,20 @@ function renderCollectionLibrary() {
             pageBadge.style.borderRadius = '4px';
             pageBadge.style.fontSize = '11px';
             imgContainer.appendChild(pageBadge);
+        }
+
+        if (collection.kind === 'archive') {
+            const kindBadge = document.createElement('div');
+            kindBadge.innerHTML = '<i class="fa-solid fa-file-zipper"></i> CBZ';
+            kindBadge.style.position = 'absolute';
+            kindBadge.style.top = '5px';
+            kindBadge.style.left = '5px';
+            kindBadge.style.background = 'rgba(0, 0, 0, 0.8)';
+            kindBadge.style.color = '#a6e3a1';
+            kindBadge.style.padding = '3px 6px';
+            kindBadge.style.borderRadius = '4px';
+            kindBadge.style.fontSize = '11px';
+            imgContainer.appendChild(kindBadge);
         }
 
         const title = document.createElement('div');
@@ -5611,6 +5741,7 @@ function renderFolderTree(listToRender, currentSubdirs) {
                     return;
                 }
                 updatePlaylist();
+                updateState();
             }).catch(error => alert(`Could not open folder: ${error}`));
         };
         

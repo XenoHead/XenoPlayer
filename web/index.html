@@ -402,6 +402,34 @@
             <button onclick="saveFavsModal()" style="margin-top: 15px; width: 100%;">Save Changes</button>
         </div>
     </div>
+
+    <div id="collection-name-modal" class="modal">
+        <div class="modal-content" style="max-width: 460px;">
+            <span class="close" onclick="closeCollectionNameModal()">&times;</span>
+            <h2 style="margin-top:0;">Name This Collection</h2>
+            <label for="collection-name-input"
+                style="display:block; width:100%; text-align:left; font-size:12px; color:#aaa; margin-bottom:4px;">Collection name</label>
+            <input type="text" id="collection-name-input" maxlength="120" style="width:100%; box-sizing:border-box;"
+                placeholder="Collection name">
+            <div id="collection-file-row" style="display:none; width:100%; text-align:left; margin-top:14px;">
+                <label for="collection-file-input"
+                    style="display:block; font-size:12px; color:#aaa; margin-bottom:4px;">Comic file name</label>
+                <div style="display:flex; align-items:center; gap:6px;">
+                    <input type="text" id="collection-file-input" maxlength="120" style="flex:1;"
+                        placeholder="File name">
+                    <span id="collection-file-ext" style="color:#aaa;">.cbz</span>
+                </div>
+                <div style="font-size:11px; color:#777; margin-top:4px;">Changing this renames the comic file on disk.
+                </div>
+            </div>
+            <div id="collection-name-error"
+                style="display:none; width:100%; text-align:left; color:#f38ba8; font-size:12px; margin-top:10px;"></div>
+            <div style="display:flex; width:100%; justify-content:flex-end; gap:8px; margin-top:18px;">
+                <button onclick="closeCollectionNameModal()" style="background:#444;">Cancel</button>
+                <button id="collection-name-save" onclick="submitCollectionNameModal()">Save</button>
+            </div>
+        </div>
+    </div>
     <!-- Options Modal -->
     <div id="options-modal" class="modal"
         style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:#333; padding:20px; z-index:1000; width:600px; border-radius: 8px;">

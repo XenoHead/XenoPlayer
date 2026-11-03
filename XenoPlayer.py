@@ -1176,6 +1176,20 @@ class Api:
             dir_path = os.path.dirname(current_path)
             if os.path.exists(os.path.join(dir_path, '.collection')):
                 is_collection = True
+
+        is_collection_archive = False
+        collection_name = ""
+        collection_target = self._collection_target(current_path) if current_path else None
+        if collection_target:
+            if collection_target["kind"] == "archive":
+                archive = collection_target["archive"]
+                sidecar = self._collection_sidecar_path(archive)
+                meta = self._read_collection_meta(sidecar)
+                is_collection_archive = os.path.exists(sidecar)
+                collection_name = (meta.get("name") or "").strip() or os.path.splitext(os.path.basename(archive))[0]
+            else:
+                meta = self._read_collection_meta(os.path.join(collection_target["dir"], "collection_info.json"))
+                collection_name = (meta.get("name") or "").strip() or os.path.basename(collection_target["dir"])
         
         favs_mode = self.settings.get("favs_mode", "folder")
         if favs_mode == "folder":
@@ -1196,6 +1210,8 @@ class Api:
             "current_path": current_path,
             "is_favorite": current_path in self.settings.get("favorites", []) if current_path else False,
             "is_collection_folder": is_collection,
+            "is_collection_archive": is_collection_archive,
+            "collection_name": collection_name,
             "favs_mode": favs_mode,
             "collection_sites": self.settings.get("collection_sites", []),
             "audio_sites": self.settings.get("audio_sites", []),
@@ -1425,10 +1441,114 @@ class Api:
         save_settings(self.settings)
         return self.get_state()
 
-    def mark_as_collection(self):
-        if not self.playlist: return {"status": "error"}
-        dir_path = os.path.dirname(self.playlist[0])
-        open(os.path.join(dir_path, ".collection"), 'w').close()
+    COLLECTION_ARCHIVE_EXTS = ('.cbz', '.cbr', '.cb7', '.cbt')
+
+    def _collection_sidecar_path(self, archive_path):
+        stem, _ = os.path.splitext(archive_path)
+        return stem + ".collection.json"
+
+    def _read_collection_meta(self, json_path):
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def _write_collection_meta(self, json_path, data):
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
+
+    def _sanitize_collection_name(self, name, fallback=""):
+        cleaned = "".join("_" if ch in '<>:"/\\|?*' else ch for ch in str(name or ""))
+        cleaned = cleaned.strip().strip(".").strip()
+        return cleaned or fallback
+
+    def _unique_file_path(self, path):
+        if not os.path.exists(path):
+            return path
+        stem, ext = os.path.splitext(path)
+        for index in range(2, 1000):
+            candidate = "{} ({}){}".format(stem, index, ext)
+            if not os.path.exists(candidate):
+                return candidate
+        return path
+
+    def _replace_path_references(self, old_path, new_path):
+        favorites = [new_path if fav == old_path else fav for fav in self.settings.get("favorites", [])]
+        self.settings["favorites"] = favorites
+        if self.settings.get("last_video") == old_path:
+            self.settings["last_video"] = new_path
+        save_settings(self.settings)
+
+    def _collection_target(self, path=None):
+        """Resolve what 'Make Collection' should act on.
+
+        An open CBZ archive always wins, otherwise the given path (or the first
+        playlist entry) decides between a folder and a comic archive.
+        """
+        if self._cbz_archive_path:
+            archive = self._cbz_archive_path
+            return {"kind": "archive", "dir": os.path.dirname(archive), "archive": archive}
+        if not path:
+            path = self.playlist[0] if self.playlist else None
+        if not path:
+            return None
+        ext = os.path.splitext(path)[1].lower()
+        if ext in self.COLLECTION_ARCHIVE_EXTS and os.path.isfile(path):
+            return {"kind": "archive", "dir": os.path.dirname(path), "archive": path}
+        dir_path = path if os.path.isdir(path) else os.path.dirname(path)
+        if not dir_path or not os.path.isdir(dir_path):
+            return None
+        return {"kind": "folder", "dir": dir_path, "archive": None}
+
+    def get_collection_prompt(self, path=None):
+        """Details used by the 'Make Collection' naming dialog."""
+        target = self._collection_target(path)
+        if not target:
+            return {"status": "error", "msg": "Right-click a folder or comic file first."}
+        if target["kind"] == "archive":
+            archive = target["archive"]
+            stem, ext = os.path.splitext(os.path.basename(archive))
+            sidecar = self._collection_sidecar_path(archive)
+            meta = self._read_collection_meta(sidecar)
+            return {
+                "status": "success",
+                "kind": "archive",
+                "path": archive,
+                "name": (meta.get("name") or "").strip() or stem,
+                "file_name": stem,
+                "extension": ext,
+                "is_collection": os.path.exists(sidecar),
+            }
+        dir_path = target["dir"]
+        meta = self._read_collection_meta(os.path.join(dir_path, "collection_info.json"))
+        return {
+            "status": "success",
+            "kind": "folder",
+            "path": dir_path,
+            "name": (meta.get("name") or "").strip() or os.path.basename(dir_path),
+            "file_name": "",
+            "extension": "",
+            "is_collection": os.path.exists(os.path.join(dir_path, ".collection")),
+        }
+
+    def mark_as_collection(self, path=None, name=None, archive_name=None):
+        target = self._collection_target(path)
+        if not target:
+            return {"status": "error", "msg": "No folder or comic file is selected."}
+        if target["kind"] == "archive":
+            return self._mark_archive_collection(target["archive"], name, archive_name)
+        dir_path = target["dir"]
+        collection_name = self._sanitize_collection_name(name, os.path.basename(dir_path))
+        try:
+            open(os.path.join(dir_path, ".collection"), "w").close()
+            json_path = os.path.join(dir_path, "collection_info.json")
+            data = self._read_collection_meta(json_path)
+            data["name"] = collection_name
+            self._write_collection_meta(json_path, data)
+        except Exception as e:
+            return {"status": "error", "msg": str(e)}
         known = self.settings.get("known_collection_folders", [])
         if dir_path not in known:
             known.append(dir_path)
@@ -1436,9 +1556,51 @@ class Api:
             save_settings(self.settings)
         return self.get_state()
 
-    def unmark_as_collection(self):
-        if not self.playlist: return {"status": "error"}
-        dir_path = os.path.dirname(self.playlist[0])
+    def _mark_archive_collection(self, archive, name, archive_name=None):
+        old_stem, ext = os.path.splitext(os.path.basename(archive))
+        collection_name = self._sanitize_collection_name(name, old_stem)
+        desired_stem = self._sanitize_collection_name(archive_name, old_stem)
+        final_path = archive
+        if desired_stem and desired_stem != old_stem:
+            candidate = self._unique_file_path(os.path.join(os.path.dirname(archive), desired_stem + ext))
+            try:
+                os.rename(archive, candidate)
+            except OSError as e:
+                return {"status": "error", "msg": "Could not rename the comic file: {}".format(e)}
+            final_path = candidate
+            if self._cbz_archive_path == archive:
+                self._cbz_archive_path = final_path
+            self._replace_path_references(archive, final_path)
+        old_sidecar = self._collection_sidecar_path(archive)
+        sidecar = self._collection_sidecar_path(final_path)
+        if old_sidecar != sidecar and os.path.exists(old_sidecar):
+            try:
+                os.remove(old_sidecar)
+            except Exception:
+                pass
+        try:
+            meta = self._read_collection_meta(sidecar)
+            meta["name"] = collection_name
+            meta["file"] = os.path.basename(final_path)
+            meta["updated_at"] = datetime.now().isoformat()
+            self._write_collection_meta(sidecar, meta)
+        except Exception as e:
+            return {"status": "error", "msg": str(e)}
+        return self.get_state()
+
+    def unmark_as_collection(self, path=None):
+        target = self._collection_target(path)
+        if not target:
+            return {"status": "error"}
+        if target["kind"] == "archive":
+            sidecar = self._collection_sidecar_path(target["archive"])
+            try:
+                if os.path.exists(sidecar):
+                    os.remove(sidecar)
+            except Exception as e:
+                return {"status": "error", "msg": str(e)}
+            return self.get_state()
+        dir_path = target["dir"]
         try: os.remove(os.path.join(dir_path, ".collection"))
         except: pass
         known = self.settings.get("known_collection_folders", [])
@@ -2182,6 +2344,8 @@ class Api:
 
     def rename_collection(self, path, newName):
         if not path: return {"status": "error"}
+        if os.path.isfile(path):
+            return self._rename_collection_archive(path, newName)
         parent = os.path.dirname(path)
         new_path = os.path.join(parent, newName)
         try:
@@ -2207,8 +2371,44 @@ class Api:
         except Exception as e:
             return {"status": "error", "msg": str(e)}
 
+    def _rename_collection_archive(self, archive, new_name):
+        old_stem, ext = os.path.splitext(os.path.basename(archive))
+        desired = self._sanitize_collection_name(new_name, old_stem)
+        final_path = archive
+        if desired != old_stem:
+            candidate = self._unique_file_path(os.path.join(os.path.dirname(archive), desired + ext))
+            try:
+                os.rename(archive, candidate)
+            except OSError as e:
+                return {"status": "error", "msg": str(e)}
+            final_path = candidate
+            if self._cbz_archive_path == archive:
+                self._cbz_archive_path = final_path
+            self._replace_path_references(archive, final_path)
+        old_sidecar = self._collection_sidecar_path(archive)
+        sidecar = self._collection_sidecar_path(final_path)
+        was_collection = os.path.exists(old_sidecar) or os.path.exists(sidecar)
+        meta = self._read_collection_meta(old_sidecar) if os.path.exists(old_sidecar) else self._read_collection_meta(sidecar)
+        if old_sidecar != sidecar and os.path.exists(old_sidecar):
+            try: os.remove(old_sidecar)
+            except Exception: pass
+        if was_collection:
+            meta["name"] = desired
+            meta["file"] = os.path.basename(final_path)
+            try: self._write_collection_meta(sidecar, meta)
+            except Exception: pass
+        return {"status": "success", "path": final_path, "name": desired}
+
     def unmark_folder_as_collection(self, path):
         if not path: return {"status": "error"}
+        if os.path.isfile(path):
+            sidecar = self._collection_sidecar_path(path)
+            try:
+                if os.path.exists(sidecar):
+                    os.remove(sidecar)
+            except Exception as e:
+                return {"status": "error", "msg": str(e)}
+            return {"status": "success"}
         try:
             collection_file = os.path.join(path, ".collection")
             if os.path.exists(collection_file):
@@ -2223,6 +2423,8 @@ class Api:
 
     def open_collection_viewer(self, path):
         if not path: return
+        if os.path.isfile(path) and os.path.splitext(path)[1].lower() in self.COLLECTION_ARCHIVE_EXTS:
+            return self.open_cbz_archive(path)
         directory = os.path.dirname(path) if os.path.isfile(path) else path
         import subprocess
         env = os.environ.copy()
@@ -3181,9 +3383,10 @@ class Api:
         known = self.settings.get("known_collection_folders", [])
         library = []
         dl_dir = self.get_collection_download_dir()["dir"]
+        parents = [dl_dir] + self.settings.get("saved_folders", [])
         
         # Auto-scan Download Locations Safely
-        for parent in [dl_dir] + self.settings.get("saved_folders", []):
+        for parent in parents:
             if parent and os.path.exists(parent) and os.path.isdir(parent):
                 try:
                     for sub in os.listdir(parent):
@@ -3218,14 +3421,64 @@ class Api:
                 try: mtime = os.path.getctime(d)
                 except: mtime = 0
                 
-                library.append({"path": d, "name": name, "thumb": first_image, "mtime": mtime, "page_count": page_count})
-                
+                library.append({"path": d, "name": name, "thumb": first_image, "mtime": mtime, "page_count": page_count, "kind": "folder"})
+
+        # Comic archives marked as collections (sidecar <name>.collection.json next to the file)
+        seen_archives = set()
+        for parent in parents:
+            if not parent or not os.path.isdir(parent):
+                continue
+            try:
+                entries = os.listdir(parent)
+            except Exception:
+                continue
+            for entry in entries:
+                if not entry.lower().endswith(".collection.json"):
+                    continue
+                sidecar = os.path.join(parent, entry)
+                meta = self._read_collection_meta(sidecar)
+                archive_name = (meta.get("file") or "").strip()
+                if not archive_name:
+                    base = entry[: -len(".collection.json")]
+                    for ext in self.COLLECTION_ARCHIVE_EXTS:
+                        if os.path.exists(os.path.join(parent, base + ext)):
+                            archive_name = base + ext
+                            break
+                if not archive_name:
+                    continue
+                archive = os.path.normpath(os.path.join(parent, archive_name))
+                if archive in seen_archives or not os.path.isfile(archive):
+                    continue
+                seen_archives.add(archive)
+                name = (meta.get("name") or "").strip() or os.path.splitext(archive_name)[0]
+                try: mtime = os.path.getmtime(archive)
+                except: mtime = 0
+                library.append({"path": archive, "name": name, "thumb": None, "mtime": mtime, "page_count": 0, "kind": "archive"})
+
         self.settings["known_collection_folders"] = valid_known
         save_settings(self.settings)
         return {"status": "success", "library": library}
 
     def delete_collection_folder(self, path):
         if not path: return {"status": "error"}
+        if os.path.isfile(path):
+            sidecar = self._collection_sidecar_path(path)
+            try:
+                import send2trash
+                send2trash.send2trash(path)
+            except Exception:
+                try:
+                    os.remove(path)
+                except Exception as e:
+                    return {"status": "error", "msg": str(e)}
+            try:
+                if os.path.exists(sidecar):
+                    os.remove(sidecar)
+            except Exception:
+                pass
+            if self._cbz_archive_path == path:
+                self._cleanup_cbz_archive()
+            return {"status": "success"}
         known = self.settings.get("known_collection_folders", [])
         if path in known: known.remove(path)
         self.settings["known_collection_folders"] = known
@@ -3941,8 +4194,33 @@ def machine_fingerprint():
     return _sha256_hex("|".join(parts))
 
 
+def _dotenv_lookup(*names):
+    """Return the first value found in the process environment, then in .env files."""
+    for name in names:
+        value = os.environ.get(name)
+        if value and value.strip():
+            return value.strip()
+    for base in (app_dir, os.getcwd()):
+        for relative_path in (".env", os.path.join("web", ".env")):
+            path = os.path.join(base, relative_path)
+            if not os.path.exists(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8-sig") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith("#") or "=" not in line:
+                            continue
+                        k, v = line.split("=", 1)
+                        if k.strip() in names:
+                            return v.strip().strip('"').strip("'")
+            except Exception:
+                pass
+    return ""
+
+
 def reg_key_validate_url():
-    return os.environ.get("REG_KEY_VALIDATE_URL", "").strip()
+    return _dotenv_lookup("REG_KEY_VALIDATE_URL")
 
 
 def load_reg_cache():
@@ -3992,14 +4270,34 @@ def validate_reg_key_online(key):
         "key_hash": key_hash,
         "machine_id": machine_fingerprint(),
     }).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        # A browser-like agent avoids Cloudflare's bot/browser-integrity block
+        # ("error code: 1010", HTTP 403) that targets non-browser clients.
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    access_id = os.environ.get("CF_ACCESS_CLIENT_ID", "").strip()
+    access_secret = os.environ.get("CF_ACCESS_CLIENT_SECRET", "").strip()
+    if access_id and access_secret:
+        headers["CF-Access-Client-Id"] = access_id
+        headers["CF-Access-Client-Secret"] = access_secret
     req = urllib.request.Request(
         url, data=payload,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
-            body = resp.read().decode("utf-8")
+            body = resp.read().decode("utf-8", "replace")
+            lowered = body.lower()
+            if "<html" in lowered and "cloudflare access" in lowered:
+                return False, (
+                    "The validation endpoint is protected by Cloudflare Access. "
+                    "Remove Access protection from /api/reg-key/validate, or set "
+                    "CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET in .env."
+                )
             if resp.status == 200:
                 data = json.loads(body)
                 if data.get("ok"):
@@ -4007,11 +4305,22 @@ def validate_reg_key_online(key):
                 return False, data.get("error", "Invalid registration key.")
             return False, f"Validation failed (HTTP {resp.status})."
     except urllib.error.HTTPError as e:
+        raw = e.read().decode("utf-8", "replace")
         try:
-            data = json.loads(e.read().decode("utf-8"))
-            return False, data.get("error", f"Validation failed (HTTP {e.code}).")
+            data = json.loads(raw)
         except Exception:
-            return False, f"Validation failed (HTTP {e.code})."
+            data = None
+        if isinstance(data, dict) and data.get("error"):
+            return False, data["error"]
+        lowered = (raw or "").lower()
+        location = str(e.headers.get("Location", "") if e.headers else "").lower()
+        if "cloudflareaccess" in location or "cloudflare-access" in lowered or "error code: 1010" in lowered:
+            return False, (
+                f"The validation endpoint is protected by Cloudflare Access (HTTP {e.code}). "
+                "Remove Access protection for /api/reg-key/validate or point "
+                "REG_KEY_VALIDATE_URL at an unprotected endpoint."
+            )
+        return False, f"Validation failed (HTTP {e.code})."
     except Exception as e:
         return False, f"Could not reach validation server: {e}"
 
