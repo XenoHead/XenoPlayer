@@ -167,6 +167,13 @@
                     </div>
                 </div>
                 <div class="dropdown">
+                    <button class="dropbtn">Tools</button>
+                    <div class="dropdown-content">
+                        <a href="#" onclick="openVideoEnhanceModal()"><i class="fa-solid fa-wand-magic-sparkles"
+                                style="margin-right: 8px; color: #cba6f7;"></i> Enhance Video...</a>
+                    </div>
+                </div>
+                <div class="dropdown">
                     <button class="dropbtn">Help</button>
                     <div class="dropdown-content">
                         <a href="#" onclick="openInstructionsModal()">Instructions</a>
@@ -327,6 +334,94 @@
                     class="fa-solid fa-trash"></i> Clear History</button>
             <button onclick="closeModals()"
                 style="background: #444; color: white; padding: 8px 15px; border: none; border-radius: 4px; cursor: pointer;">Close</button>
+        </div>
+    </div>
+
+    <!-- Video Enhancement Modal -->
+    <div id="video-enhance-modal" class="modal" style="display:none;">
+        <div class="modal-content" style="max-width: 640px; text-align: left; align-items: stretch;">
+            <span class="close" onclick="closeVideoEnhanceModal()">&times;</span>
+            <h2 style="margin-top:0; color:#cba6f7; text-align:center;">
+                <i class="fa-solid fa-wand-magic-sparkles"></i> Enhance Video
+            </h2>
+            <p class="enhance-note">
+                No AI. Uses ffmpeg filters to denoise, deband, sharpen, and upscale with
+                Lanczos. It can make a video cleaner or larger, but it cannot invent real detail.
+            </p>
+            <div class="enhance-row">
+                <label for="enhance-source">Source</label>
+                <input id="enhance-source" readonly placeholder="Choose a video..." />
+                <button type="button" onclick="enhancePickSource()">Choose...</button>
+            </div>
+            <div class="enhance-row">
+                <label for="enhance-output">Output</label>
+                <input id="enhance-output" readonly placeholder="Choose where to save..." />
+                <button type="button" onclick="enhancePickOutput()">Save As...</button>
+            </div>
+            <div class="enhance-grid">
+                <label>Preset
+                    <select id="enhance-preset" onchange="enhancePresetChanged()">
+                        <option value="clean">Clean (recommended)</option>
+                        <option value="sharpen">Sharpen</option>
+                        <option value="denoise">Denoise</option>
+                        <option value="anime">Anime</option>
+                        <option value="upscale">Upscale</option>
+                        <option value="upscale-clean">Upscale + clean</option>
+                        <option value="none">Re-encode only</option>
+                    </select>
+                </label>
+                <label>Size
+                    <select id="enhance-size" onchange="enhanceUpdateInfo()">
+                        <option value="1">Original</option>
+                        <option value="1.25">1.25x</option>
+                        <option value="1.5">1.5x</option>
+                        <option value="2">2x</option>
+                        <option value="3">3x</option>
+                        <option value="4">4x</option>
+                        <option value="height:720">720p</option>
+                        <option value="height:1080">1080p</option>
+                        <option value="height:1440">1440p</option>
+                        <option value="height:2160">2160p (4K)</option>
+                    </select>
+                </label>
+                <label>Quality (CRF)
+                    <input type="number" id="enhance-crf" min="0" max="51" value="18" title="Lower is better and larger. 18 is high quality." />
+                </label>
+                <label>Encoder speed
+                    <select id="enhance-speed">
+                        <option value="veryfast">Very fast</option>
+                        <option value="fast">Fast</option>
+                        <option value="medium" selected>Medium</option>
+                        <option value="slow">Slow (smaller)</option>
+                        <option value="slower">Slower</option>
+                    </select>
+                </label>
+            </div>
+            <label class="enhance-check">
+                <input type="checkbox" id="enhance-deinterlace" />
+                Deinterlace (DVD/TV sources)
+            </label>
+            <label class="enhance-check">
+                <input type="checkbox" id="enhance-copy-audio" />
+                Copy audio without re-encoding
+            </label>
+            <div id="enhance-info" class="enhance-info">No video selected.</div>
+            <div id="enhance-progress-wrap" style="display:none; width:100%; margin-top:10px;">
+                <div class="enhance-progress-track">
+                    <div id="enhance-progress-bar" class="enhance-progress-bar"></div>
+                </div>
+                <div id="enhance-status" class="enhance-status">Starting...</div>
+            </div>
+            <div class="enhance-actions">
+                <button id="enhance-start-btn" onclick="startVideoEnhance()">
+                    <i class="fa-solid fa-play"></i> Enhance
+                </button>
+                <button id="enhance-cancel-btn" onclick="cancelVideoEnhance()"
+                    style="display:none; background:#d32f2f;">
+                    <i class="fa-solid fa-stop"></i> Cancel
+                </button>
+                <button onclick="closeVideoEnhanceModal()" style="background:#444;">Close</button>
+            </div>
         </div>
     </div>
 

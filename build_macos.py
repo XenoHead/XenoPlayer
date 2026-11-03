@@ -228,6 +228,7 @@ def build_app(version, icns):
         "gallery_dl",
         "send2trash",
         "requests",
+        "enhance_video",
     ]
     excludes = [
         "torch", "torchvision", "transformers", "manga_ocr", "argostranslate",

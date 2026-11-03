@@ -600,6 +600,107 @@ video.zoom-double, img.zoom-double {
     color: white;
 }
 
+/* Video enhancement modal */
+.enhance-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    margin-bottom: 8px;
+}
+.enhance-row label {
+    width: 58px;
+    flex-shrink: 0;
+    text-align: right;
+    color: #a0a0b0;
+    font-size: 12px;
+}
+.enhance-row input {
+    flex: 1;
+    min-width: 0;
+}
+.enhance-row button {
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.enhance-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    width: 100%;
+    margin: 10px 0;
+    text-align: left;
+}
+.enhance-grid label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    color: #a0a0b0;
+}
+.enhance-grid select,
+.enhance-grid input {
+    width: 100%;
+    background: #222;
+    color: #cdd6f4;
+    border: 1px solid #45475a;
+    border-radius: 4px;
+    padding: 6px;
+}
+.enhance-check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    align-self: flex-start;
+    font-size: 12px;
+    color: #cdd6f4;
+    margin-top: 4px;
+}
+.enhance-note {
+    font-size: 11px;
+    color: #a0a0b0;
+    width: 100%;
+    line-height: 1.45;
+    margin: 0 0 12px 0;
+}
+.enhance-info {
+    width: 100%;
+    min-height: 18px;
+    margin-top: 8px;
+    font-size: 11px;
+    color: #89dceb;
+    text-align: left;
+}
+.enhance-progress-track {
+    width: 100%;
+    height: 10px;
+    background: #11111b;
+    border-radius: 5px;
+    overflow: hidden;
+}
+.enhance-progress-bar {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #89b4fa, #a6e3a1);
+    transition: width 0.2s ease;
+}
+.enhance-status {
+    margin-top: 5px;
+    font-size: 12px;
+    color: #a0a0b0;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.enhance-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    width: 100%;
+    margin-top: 10px;
+}
+
 /* Context Menu & Selection */
 .playlist-item.selected {
     background-color: #313244;

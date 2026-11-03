@@ -21,6 +21,7 @@ Beyond standard playback, XenoPlayer is packed with advanced features including 
   * Smart duplicate deletion—automatically finds and removes identical files to save space.
   * Mass rename files or rename them individually.
 * **Audio Normalization:** Built-in dynamic range compression to automatically boost quiet dialogue and lower loud sounds in videos.
+* **Video Enhancement:** **Tools → Enhance Video...** cleans up or enlarges a video using ffmpeg filters (denoise, deband, sharpen, and Lanczos upscaling) with no AI models. It can remove noise and restore edge contrast, but it cannot invent real detail. Requires ffmpeg.
 * **Favorites System:** Keep track of your favorite files. Play exclusively your favorites or filter them out to watch only unfavorited content.
 * **Live Thumbnails:** The playlist dynamically generates previews for your videos and images on the fly.
 * **Sharing Hub:** Share your library with friends over your network. Friends connect with their own email address — only `@xenohead.com` addresses are accepted.

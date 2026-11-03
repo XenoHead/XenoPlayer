@@ -5968,6 +5968,279 @@ function createVideoCbz() {
     createCbz('video');
 }
 
+// --- Video Enhancement (ffmpeg filters, no AI) ---
+let videoEnhanceRunning = false;
+let videoEnhanceToken = null;
+let videoEnhanceSourceInfo = null;
+const ENHANCE_VIDEO_EXTS = ['mp4', 'm4v', 'mov', 'mkv', 'webm', 'avi', 'wmv',
+    'flv', 'mpg', 'mpeg', 'ts', 'mts', 'm2ts', 'ogv'];
+
+function isEnhanceVideoPath(path) {
+    if (!path || path.startsWith('http://') || path.startsWith('https://')) return false;
+    const ext = path.split('?')[0].split('.').pop().toLowerCase();
+    return ENHANCE_VIDEO_EXTS.includes(ext);
+}
+
+function enhanceDefaultOutput(source) {
+    if (!source) return '';
+    const clean = source.replace(/[?#].*$/, '');
+    const dot = clean.lastIndexOf('.');
+    const slash = Math.max(clean.lastIndexOf('/'), clean.lastIndexOf('\\'));
+    if (dot > slash) return clean.slice(0, dot) + '_enhanced.mp4';
+    return clean + '_enhanced.mp4';
+}
+
+function enhanceSelectedSize() {
+    const value = document.getElementById('enhance-size').value;
+    if (value.startsWith('height:')) {
+        return { scale: 1, height: parseInt(value.split(':')[1], 10) || 0 };
+    }
+    return { scale: parseFloat(value) || 1, height: 0 };
+}
+
+function formatEnhanceDuration(seconds) {
+    seconds = Math.max(0, Math.round(seconds || 0));
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    if (hours > 0) return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    return `${minutes}:${String(secs).padStart(2, '0')}`;
+}
+
+function enhanceUpdateInfo() {
+    const infoEl = document.getElementById('enhance-info');
+    if (!infoEl) return;
+    const source = document.getElementById('enhance-source').value;
+    if (!source) {
+        infoEl.textContent = 'No video selected.';
+        return;
+    }
+    if (!isEnhanceVideoPath(source)) {
+        infoEl.textContent = 'That file does not look like a supported video.';
+        return;
+    }
+    if (!videoEnhanceSourceInfo) {
+        infoEl.textContent = 'Reading video details...';
+        return;
+    }
+
+    const width = videoEnhanceSourceInfo.width || 0;
+    const height = videoEnhanceSourceInfo.height || 0;
+    const duration = videoEnhanceSourceInfo.duration || 0;
+    let parts = [];
+    if (width && height) parts.push(`${width}\u00d7${height}`);
+    if (duration) parts.push(formatEnhanceDuration(duration));
+    const size = enhanceSelectedSize();
+    if (width && height && size.height) {
+        const targetWidth = Math.max(2, Math.round(width * size.height / height / 2) * 2);
+        parts.push(`\u2192 ${targetWidth}\u00d7${size.height}`);
+    } else if (width && height && size.scale !== 1) {
+        const targetWidth = Math.max(2, Math.round(width * size.scale / 2) * 2);
+        const targetHeight = Math.max(2, Math.round(height * size.scale / 2) * 2);
+        parts.push(`\u2192 ${targetWidth}\u00d7${targetHeight}`);
+    }
+    let text = parts.join('  \u00b7  ');
+    if (size.scale > 2) text += '  \u00b7  more than 2x adds no real detail';
+    else if (size.scale > 1 || size.height) text += '  \u00b7  upscaling interpolates, it does not add detail';
+    infoEl.textContent = text;
+}
+
+function enhanceRefreshInfo() {
+    const source = document.getElementById('enhance-source').value;
+    videoEnhanceSourceInfo = null;
+    enhanceUpdateInfo();
+    if (!source || !isEnhanceVideoPath(source)) return;
+    pywebview.api.video_enhance_info(source).then(info => {
+        if (info && info.status === 'ok') {
+            videoEnhanceSourceInfo = info;
+            enhanceUpdateInfo();
+        } else if (info && info.msg) {
+            document.getElementById('enhance-info').textContent = info.msg;
+        }
+    });
+}
+
+function enhancePresetChanged() {
+    const preset = document.getElementById('enhance-preset').value;
+    const size = document.getElementById('enhance-size');
+    if (preset.startsWith('upscale') && size.value === '1') size.value = '2';
+    enhanceUpdateInfo();
+}
+
+function openVideoEnhanceModal() {
+    document.getElementById('video-enhance-modal').style.display = 'block';
+    const sourceEl = document.getElementById('enhance-source');
+    const outputEl = document.getElementById('enhance-output');
+    if (!sourceEl.value && appState && isEnhanceVideoPath(appState.current_path)) {
+        sourceEl.value = appState.current_path;
+        outputEl.value = enhanceDefaultOutput(appState.current_path);
+        enhanceRefreshInfo();
+    }
+    if (videoEnhanceRunning) {
+        document.getElementById('enhance-progress-wrap').style.display = 'block';
+        document.getElementById('enhance-cancel-btn').style.display = 'inline-block';
+        document.getElementById('enhance-start-btn').disabled = true;
+    }
+    enhanceUpdateInfo();
+}
+
+function enhancePickSource() {
+    pywebview.api.video_enhance_pick_source().then(res => {
+        if (!res || res.status !== 'ok') return;
+        const sourceEl = document.getElementById('enhance-source');
+        const outputEl = document.getElementById('enhance-output');
+        const previousDefault = enhanceDefaultOutput(sourceEl.value);
+        sourceEl.value = res.path;
+        if (!outputEl.value || outputEl.value === previousDefault) {
+            outputEl.value = enhanceDefaultOutput(res.path);
+        }
+        enhanceRefreshInfo();
+    });
+}
+
+function enhancePickOutput() {
+    const source = document.getElementById('enhance-source').value;
+    if (!source) {
+        alert('Choose a source video first.');
+        return;
+    }
+    const current = document.getElementById('enhance-output').value;
+    const suggested = current ? current.split(/[/\\]/).pop() : enhanceDefaultOutput(source).split(/[/\\]/).pop();
+    pywebview.api.video_enhance_pick_output(source, suggested).then(res => {
+        if (res && res.status === 'ok') {
+            document.getElementById('enhance-output').value = res.path;
+        }
+    });
+}
+
+function setEnhanceBusy(busy) {
+    const start = document.getElementById('enhance-start-btn');
+    const cancel = document.getElementById('enhance-cancel-btn');
+    if (start) start.disabled = busy;
+    if (cancel) cancel.style.display = busy ? 'inline-block' : 'none';
+}
+
+function startVideoEnhance() {
+    if (videoEnhanceRunning) return;
+    const source = document.getElementById('enhance-source').value;
+    const output = document.getElementById('enhance-output').value;
+    if (!source) {
+        alert('Choose a source video.');
+        return;
+    }
+    if (!output) {
+        alert('Choose an output file.');
+        return;
+    }
+    if (!isEnhanceVideoPath(source)) {
+        alert('That source is not a supported video file.');
+        return;
+    }
+    const preset = document.getElementById('enhance-preset').value;
+    const size = enhanceSelectedSize();
+    const crf = parseInt(document.getElementById('enhance-crf').value, 10);
+    const speed = document.getElementById('enhance-speed').value;
+    const copyAudio = document.getElementById('enhance-copy-audio').checked;
+    const deinterlace = document.getElementById('enhance-deinterlace').checked;
+
+    videoEnhanceRunning = true;
+    videoEnhanceToken = null;
+    setEnhanceBusy(true);
+    document.getElementById('enhance-progress-wrap').style.display = 'block';
+    document.getElementById('enhance-progress-bar').style.width = '0%';
+    document.getElementById('enhance-status').textContent = 'Starting...';
+
+    pywebview.api.start_video_enhance(
+        source, output, preset, size.scale, size.height, crf, speed, copyAudio, deinterlace
+    ).then(res => {
+        if (res && res.status === 'started') {
+            videoEnhanceToken = res.token;
+            return;
+        }
+        videoEnhanceRunning = false;
+        setEnhanceBusy(false);
+        document.getElementById('enhance-status').textContent = 'Could not start.';
+        alert((res && (res.msg || res.error)) || 'Could not start the enhancement.');
+    }).catch(error => {
+        videoEnhanceRunning = false;
+        setEnhanceBusy(false);
+        document.getElementById('enhance-status').textContent = 'Could not start.';
+        alert('Could not start the enhancement:\n' + (error && error.message ? error.message : error));
+    });
+}
+
+function videoEnhanceProgress(token, percent, eta) {
+    if (videoEnhanceToken !== null && token !== videoEnhanceToken) return;
+    videoEnhanceToken = token;
+    videoEnhanceRunning = true;
+    const bar = document.getElementById('enhance-progress-bar');
+    const status = document.getElementById('enhance-status');
+    if (bar) bar.style.width = Math.max(0, Math.min(100, percent)) + '%';
+    if (status) {
+        let text = `Enhancing... ${percent}%`;
+        if (eta && eta > 0) {
+            text += `  \u00b7  ETA ${String(Math.floor(eta / 60)).padStart(2, '0')}:${String(eta % 60).padStart(2, '0')}`;
+        }
+        status.textContent = text;
+    }
+}
+
+function videoEnhanceFinished(token, path) {
+    if (videoEnhanceToken !== null && token !== videoEnhanceToken) return;
+    videoEnhanceRunning = false;
+    videoEnhanceToken = null;
+    setEnhanceBusy(false);
+    const bar = document.getElementById('enhance-progress-bar');
+    const status = document.getElementById('enhance-status');
+    if (bar) bar.style.width = '100%';
+    if (status) status.textContent = 'Done: ' + path;
+    if (confirm(`Enhanced video saved:\n${path}\n\nOpen it now?`)) {
+        pywebview.api.load_directory(path);
+    }
+}
+
+function videoEnhanceFailed(token, message) {
+    if (videoEnhanceToken !== null && token !== videoEnhanceToken) return;
+    videoEnhanceRunning = false;
+    videoEnhanceToken = null;
+    setEnhanceBusy(false);
+    const status = document.getElementById('enhance-status');
+    if (status) status.textContent = 'Failed: ' + message;
+    alert('Video enhancement failed:\n' + message);
+}
+
+function videoEnhanceCancelled(token) {
+    if (videoEnhanceToken !== null && token !== videoEnhanceToken) return;
+    videoEnhanceRunning = false;
+    videoEnhanceToken = null;
+    setEnhanceBusy(false);
+    const status = document.getElementById('enhance-status');
+    if (status) status.textContent = 'Cancelled.';
+}
+
+function cancelVideoEnhance() {
+    if (!videoEnhanceRunning) return;
+    document.getElementById('enhance-status').textContent = 'Cancelling...';
+    document.getElementById('enhance-cancel-btn').disabled = true;
+    pywebview.api.cancel_video_enhance().then(() => {
+        const cancel = document.getElementById('enhance-cancel-btn');
+        if (cancel) cancel.disabled = false;
+    });
+}
+
+function closeVideoEnhanceModal() {
+    if (videoEnhanceRunning) {
+        if (!confirm('An enhancement is still running. Cancel it and close?')) return;
+        pywebview.api.cancel_video_enhance();
+    }
+    videoEnhanceRunning = false;
+    videoEnhanceToken = null;
+    setEnhanceBusy(false);
+    document.getElementById('enhance-progress-wrap').style.display = 'none';
+    document.getElementById('enhance-progress-bar').style.width = '0%';
+    document.getElementById('video-enhance-modal').style.display = 'none';
+}
+
 // --- Folder Tree-view & Navigation Helpers ---
 let showFoldersActive = false;
 let currentSubdirs = [];

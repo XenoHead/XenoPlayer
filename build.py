@@ -151,6 +151,7 @@ def build():
         '--hidden-import=gallery_dl',
         '--hidden-import=flask',
         '--hidden-import=webview',
+        '--hidden-import=enhance_video',
         '--hidden-import=cv2',  
         '--noconfirm'
     ])

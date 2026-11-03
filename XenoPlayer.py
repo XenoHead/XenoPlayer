@@ -25,6 +25,21 @@ import urllib.error
 from datetime import datetime
 from flask import Flask, request, send_file, Response
 
+try:
+    from enhance_video import (
+        PRESETS as ENHANCE_PRESETS,
+        VIDEO_EXTS as ENHANCE_VIDEO_EXTS,
+        build_filter_chain as build_enhance_filter_chain,
+        probe_duration as probe_media_duration,
+        probe_size as probe_media_size,
+    )
+except Exception:
+    ENHANCE_PRESETS = {}
+    ENHANCE_VIDEO_EXTS = set()
+    build_enhance_filter_chain = None
+    probe_media_duration = None
+    probe_media_size = None
+
 class DummyWriter:
     encoding = 'utf-8'
     def write(self, *args, **kwargs): pass
@@ -314,6 +329,11 @@ class Api:
         self._video_conversion_cancel = None
         self._video_conversion_process = None
         self._video_conversion_source = ""
+        self._enhance_lock = threading.Lock()
+        self._enhance_token = 0
+        self._enhance_cancel = None
+        self._enhance_process = None
+        self._enhance_output = ""
         try:
             self._prune_video_cache()
         except Exception:
@@ -1984,6 +2004,248 @@ class Api:
                 except Exception:
                     pass
             self._video_conversion_process = None
+
+    # --- NON-AI VIDEO ENHANCEMENT ---
+
+    def video_enhance_pick_source(self):
+        last_dir = self.settings.get("last_opened_dir", "")
+        if not last_dir or not os.path.isdir(last_dir):
+            last_dir = ""
+        file_types = (
+            'Video Files (*.mp4;*.m4v;*.mov;*.mkv;*.webm;*.avi;*.wmv;'
+            '*.flv;*.mpg;*.mpeg;*.ts;*.mts;*.m2ts;*.ogv)',
+            'All files (*.*)',
+        )
+        result = self._window.create_file_dialog(
+            webview.FileDialog.OPEN, directory=last_dir,
+            allow_multiple=False, file_types=file_types,
+        )
+        if result and len(result) > 0:
+            path = result[0]
+            self.settings["last_opened_dir"] = os.path.dirname(path)
+            save_settings(self.settings)
+            return {"status": "ok", "path": path}
+        return {"status": "cancelled"}
+
+    def video_enhance_pick_output(self, source="", suggested=""):
+        source = os.path.abspath(source) if source else ""
+        directory = os.path.dirname(source) if source else self.settings.get("last_opened_dir", "")
+        if not directory or not os.path.isdir(directory):
+            directory = os.path.expanduser("~")
+        stem = os.path.splitext(os.path.basename(source))[0] if source else "video"
+        name = (suggested or f"{stem}_enhanced.mp4")
+        result = self._window.create_file_dialog(
+            webview.FileDialog.SAVE,
+            directory=directory,
+            save_filename=name,
+            file_types=('MP4 Video (*.mp4)', 'Matroska Video (*.mkv)', 'All files (*.*)'),
+        )
+        if result:
+            path = result[0] if isinstance(result, (list, tuple)) else result
+            path = os.path.abspath(path)
+            if not os.path.splitext(path)[1]:
+                path += ".mp4"
+            return {"status": "ok", "path": path}
+        return {"status": "cancelled"}
+
+    def video_enhance_info(self, source):
+        try:
+            if not source or not os.path.isfile(source):
+                return {"status": "error", "msg": "Video not found."}
+            ffprobe = self._find_ffprobe()
+            width = height = 0
+            duration = 0.0
+            if ffprobe:
+                width, height = probe_media_size(ffprobe, source) if probe_media_size else (0, 0)
+                duration = probe_media_duration(ffprobe, source) if probe_media_duration else 0.0
+            return {
+                "status": "ok", "path": source, "width": width,
+                "height": height, "duration": duration,
+            }
+        except Exception as error:
+            return {"status": "error", "msg": str(error)}
+
+    def start_video_enhance(self, source, output, preset="clean", scale=1.0,
+                            height=0, crf=18, speed="medium",
+                            copy_audio=False, deinterlace=False):
+        if not build_enhance_filter_chain:
+            return {"status": "error", "msg": "The video enhancement helper is unavailable."}
+        try:
+            source = os.path.abspath(source)
+            output = os.path.abspath(output)
+        except Exception:
+            return {"status": "error", "msg": "Choose an input and output file."}
+        if not os.path.isfile(source):
+            return {"status": "error", "msg": "The source video was not found."}
+        if ENHANCE_VIDEO_EXTS and os.path.splitext(source)[1].lower() not in ENHANCE_VIDEO_EXTS:
+            return {"status": "error", "msg": "That file type is not a supported video."}
+        if source == output:
+            return {"status": "error", "msg": "The output must be a different file."}
+        if preset not in ENHANCE_PRESETS:
+            return {"status": "error", "msg": "Unknown enhancement preset."}
+        if speed not in ("ultrafast", "superfast", "veryfast", "faster", "fast",
+                         "medium", "slow", "slower", "veryslow"):
+            return {"status": "error", "msg": "Unknown encoder speed."}
+        try:
+            scale = float(scale or 1.0)
+            height = int(height or 0)
+            crf = int(crf)
+        except (TypeError, ValueError):
+            return {"status": "error", "msg": "Invalid quality or size value."}
+        if scale <= 0 or scale > 4:
+            return {"status": "error", "msg": "Scale must be between 0.1 and 4."}
+        if height and height < 144:
+            return {"status": "error", "msg": "Target height must be at least 144."}
+        if crf < 0 or crf > 51:
+            return {"status": "error", "msg": "CRF must be between 0 and 51."}
+
+        ext = os.path.splitext(output)[1].lower()
+        if ext not in (".mp4", ".m4v", ".mov", ".mkv"):
+            output += ".mp4"
+            ext = ".mp4"
+        folder = os.path.dirname(output)
+        if not folder or not os.path.isdir(folder):
+            return {"status": "error", "msg": "The output folder does not exist."}
+
+        ffmpeg = self._find_ffmpeg()
+        if not ffmpeg:
+            return {
+                "status": "no_ffmpeg",
+                "msg": "ffmpeg is required. Install it and make sure it is on PATH, "
+                       "or set ffmpeg_path in web_settings.json.",
+            }
+
+        with self._enhance_lock:
+            if self._enhance_process is not None and self._enhance_process.poll() is None:
+                return {"status": "error", "msg": "An enhancement is already running."}
+            self._enhance_token += 1
+            token = self._enhance_token
+            cancel_event = threading.Event()
+            self._enhance_cancel = cancel_event
+            self._enhance_output = output
+
+        thread = threading.Thread(
+            target=self._run_video_enhance,
+            args=(token, source, output, preset, scale, height, crf, speed,
+                  bool(copy_audio), bool(deinterlace), cancel_event),
+            daemon=True,
+        )
+        thread.start()
+        return {"status": "started", "token": token, "output": output}
+
+    def cancel_video_enhance(self):
+        with self._enhance_lock:
+            event = self._enhance_cancel
+            process = self._enhance_process
+            if event is not None:
+                event.set()
+        if process is not None and process.poll() is None:
+            try:
+                process.terminate()
+            except Exception:
+                pass
+        return {"status": "ok"}
+
+    def _run_video_enhance(self, token, source, output, preset, scale, height,
+                           crf, speed, copy_audio, deinterlace, cancel_event):
+        process = None
+        temp_path = ""
+        try:
+            ffmpeg = self._find_ffmpeg()
+            ffprobe = self._find_ffprobe()
+            duration = probe_media_duration(ffprobe, source) if (ffprobe and probe_media_duration) else 0.0
+            filters = build_enhance_filter_chain(
+                preset, scale, None, height or None, deinterlace
+            )
+
+            base, ext = os.path.splitext(output)
+            temp_path = f"{base}.enhance-{token}{ext}"
+            command = [
+                ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                "-i", source,
+                "-map", "0:v:0", "-map", "0:a?", "-map_metadata", "0",
+                "-c:v", "libx264", "-preset", speed, "-crf", str(crf),
+                "-pix_fmt", "yuv420p",
+            ]
+            if filters:
+                command += ["-vf", filters]
+            if copy_audio:
+                command += ["-c:a", "copy"]
+            else:
+                command += ["-c:a", "aac", "-b:a", "192k"]
+            if ext.lower() in (".mp4", ".m4v", ".mov"):
+                command += ["-movflags", "+faststart"]
+            command += ["-progress", "pipe:1", "-nostats", temp_path]
+
+            process = subprocess.Popen(
+                command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, encoding="utf-8", errors="replace",
+                creationflags=subprocess_creationflags(),
+            )
+            with self._enhance_lock:
+                self._enhance_process = process
+
+            started = time.time()
+            last_error = ""
+            for line in process.stdout:
+                if cancel_event.is_set():
+                    try:
+                        process.terminate()
+                    except Exception:
+                        pass
+                    break
+                line = line.strip()
+                if line.startswith(("out_time_us=", "out_time_ms=")):
+                    try:
+                        seconds = int(line.split("=", 1)[1]) / 1_000_000.0
+                        if duration > 0:
+                            percent = min(99, max(0, int(seconds / duration * 100)))
+                            elapsed = max(0.1, time.time() - started)
+                            eta = int(elapsed * (100 - percent) / max(1, percent))
+                            self._video_js(
+                                f"videoEnhanceProgress({token}, {percent}, {eta})"
+                            )
+                    except Exception:
+                        pass
+                elif line and "=" not in line:
+                    last_error = line
+            process.wait()
+            with self._enhance_lock:
+                self._enhance_process = None
+
+            if cancel_event.is_set():
+                self._video_js(f"videoEnhanceCancelled({token})")
+                return
+            if process.returncode != 0 or not os.path.exists(temp_path) or os.path.getsize(temp_path) < 1024:
+                message = last_error or f"ffmpeg failed (exit code {process.returncode})."
+                self._video_js(
+                    f"videoEnhanceFailed({token}, {json.dumps(message)})"
+                )
+                return
+
+            os.replace(temp_path, output)
+            self._video_js(
+                f"videoEnhanceFinished({token}, {json.dumps(output)})"
+            )
+        except Exception as error:
+            self._video_js(
+                f"videoEnhanceFailed({token}, {json.dumps(str(error))})"
+            )
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+            if process is not None:
+                try:
+                    if process.poll() is None:
+                        process.kill()
+                except Exception:
+                    pass
+            with self._enhance_lock:
+                self._enhance_process = None
+                self._enhance_cancel = None
 
     def open_path_external(self, path):
         try:
@@ -7070,6 +7332,11 @@ def run_smoke_test():
     results["convertible_video_exts"] = info.get("convertible_video_exts")
     results["audio_convert_exts"] = info.get("audio_convert_exts")
     results["version"] = api._local_version_info().get("version", "")
+    results["enhance_presets"] = sorted(ENHANCE_PRESETS)
+    results["enhance_chain"] = (
+        build_enhance_filter_chain("clean", 1.0, None, None, False)
+        if build_enhance_filter_chain else ""
+    )
 
     sample = info.get("art_path") or web_index
     try:
