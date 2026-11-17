@@ -334,6 +334,8 @@ class Api:
         self._enhance_cancel = None
         self._enhance_process = None
         self._enhance_output = ""
+        self._story_tts_export_lock = threading.Lock()
+        self._story_tts_export_progress = None
         try:
             self._prune_video_cache()
         except Exception:
@@ -3737,6 +3739,44 @@ class Api:
                 return text
         return ""
 
+    def _extract_story_tags(self, soup):
+        import re
+
+        selectors = (
+            "dd.tags a.tag",
+            "dd.tags a",
+            ".tags a.tag",
+            ".tag-list a",
+            ".tags-list a",
+            ".story-tags a",
+            ".story_tags a",
+            ".post-tags a",
+            ".entry-tags a",
+            ".post-tag",
+            ".tag-item a",
+            ".genres a",
+            "a.tag",
+        )
+        ignored = {
+            "next", "prev", "previous", "home", "login", "register", "search",
+            "menu", "more", "less", "all", "popular", "random", "top", "new",
+        }
+        tags = []
+        seen = set()
+        for selector in selectors:
+            for element in soup.select(selector):
+                text = re.sub(r"\s+", " ", element.get_text(" ", strip=True)).strip()
+                if not text or len(text) > 60:
+                    continue
+                key = text.lower()
+                if key in ignored or key in seen:
+                    continue
+                seen.add(key)
+                tags.append(text)
+                if len(tags) >= 40:
+                    return tags
+        return tags
+
     def _extract_story_paragraphs(self, soup):
         import re
 
@@ -4247,6 +4287,92 @@ class Api:
                 return {"status": "error", "msg": f"Edge TTS failed: {error}"}
         except Exception as e:
             return {"status": "error", "msg": str(e)}
+
+    @staticmethod
+    def _strip_mp3_id3(data):
+        if len(data) >= 10 and data[:3] == b"ID3":
+            size = (
+                ((data[6] & 0x7F) << 21)
+                | ((data[7] & 0x7F) << 14)
+                | ((data[8] & 0x7F) << 7)
+                | (data[9] & 0x7F)
+            )
+            return data[10 + size:]
+        return data
+
+    def story_tts_export_progress(self):
+        return self._story_tts_export_progress or {"current": 0, "total": 0}
+
+    def story_tts_export(self, chunks, voice="en-US-AriaNeural", rate=1.0, title=""):
+        """Render every story chunk to Edge TTS audio and save it as one MP3."""
+        if not isinstance(chunks, (list, tuple)):
+            return {"status": "error", "msg": "No story text to export."}
+        texts = [str(chunk).strip() for chunk in chunks if str(chunk).strip()]
+        if not texts:
+            return {"status": "error", "msg": "No story text to export."}
+        if len(texts) > 5000:
+            return {"status": "error", "msg": "This story is too long to export at once."}
+        if not self._story_tts_export_lock.acquire(blocking=False):
+            return {"status": "error", "msg": "An audio export is already running."}
+        try:
+            try:
+                import edge_tts  # noqa: F401
+            except Exception:
+                return {
+                    "status": "unavailable",
+                    "msg": "edge-tts is not installed. Install it with: pip install edge-tts",
+                }
+            safe_title = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", (title or "").strip())
+            safe_title = safe_title.strip(" .")[:80] or "story"
+            directory = self.settings.get("last_opened_dir") or ""
+            if not directory or not os.path.isdir(directory):
+                directory = os.path.expanduser("~")
+            result = self._window.create_file_dialog(
+                webview.FileDialog.SAVE,
+                directory=directory,
+                save_filename=f"{safe_title}.mp3",
+                file_types=('MP3 Audio (*.mp3)', 'All files (*.*)'),
+            )
+            if not result:
+                return {"status": "cancelled"}
+            path = result[0] if isinstance(result, (list, tuple)) else result
+            path = os.path.abspath(path)
+            if not os.path.splitext(path)[1]:
+                path += ".mp3"
+
+            total = len(texts)
+            part_path = path + ".part"
+            completed = False
+            try:
+                with open(part_path, "wb") as output:
+                    for index, text in enumerate(texts):
+                        self._story_tts_export_progress = {"current": index + 1, "total": total}
+                        generated = self.edge_tts_generate(text, voice, rate)
+                        if not generated or generated.get("status") != "success":
+                            message = (generated or {}).get("msg") or "Audio generation failed."
+                            return {"status": "error", "msg": message}
+                        with open(generated["path"], "rb") as audio_file:
+                            data = audio_file.read()
+                        if index:
+                            data = self._strip_mp3_id3(data)
+                        output.write(data)
+                os.replace(part_path, path)
+                completed = True
+            except Exception as e:
+                return {"status": "error", "msg": f"Could not write the audio file: {e}"}
+            finally:
+                if not completed and os.path.exists(part_path):
+                    try:
+                        os.remove(part_path)
+                    except OSError:
+                        pass
+
+            self.settings["last_opened_dir"] = os.path.dirname(path)
+            save_settings(self.settings)
+            return {"status": "success", "path": path, "chunks": total}
+        finally:
+            self._story_tts_export_progress = None
+            self._story_tts_export_lock.release()
 
     def save_story_tts_settings(self, engine, voice, rate):
         self.settings["story_tts_engine"] = (

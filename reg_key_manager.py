@@ -87,20 +87,38 @@ def d1_query(sql):
     return rows
 
 
+LIST_SQL = (
+    "SELECT id, key_plain, key_hash, label, machine_id, active, created_at, last_used_at "
+    "FROM reg_keys ORDER BY created_at DESC;"
+)
+
+
+def ensure_plaintext_column():
+    """Add key_plain to databases created before it existed."""
+    try:
+        d1_query("ALTER TABLE reg_keys ADD COLUMN key_plain TEXT;")
+    except RuntimeError as e:
+        if "duplicate column" not in str(e).lower():
+            raise
+
+
 def list_keys():
-    return d1_query(
-        "SELECT id, key_hash, label, machine_id, active, created_at, last_used_at "
-        "FROM reg_keys ORDER BY created_at DESC;"
-    )
+    try:
+        return d1_query(LIST_SQL)
+    except RuntimeError as e:
+        if "no such column" not in str(e).lower():
+            raise
+        ensure_plaintext_column()
+        return d1_query(LIST_SQL)
 
 
 def create_key(label):
     plain = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(24))
     key_hash = sha256_hex(plain)
     d1_query(
-        "INSERT INTO reg_keys (id, key_hash, label, machine_id, active, created_at) "
-        "VALUES (lower(hex(randomblob(16))), '{hash}', '{label}', NULL, 1, datetime('now'));".format(
-            hash=key_hash, label=label.replace("'", "''")
+        "INSERT INTO reg_keys (id, key_hash, key_plain, label, machine_id, active, created_at) "
+        "VALUES (lower(hex(randomblob(16))), '{hash}', '{plain}', '{label}', NULL, 1, datetime('now'));".format(
+            hash=key_hash, plain=plain, label=label.replace("'", "''")
         )
     )
     return plain
@@ -120,7 +138,13 @@ class KeyManager(tk.Tk):
         self.title("XenoPlayer - Registration Key Manager")
         self.geometry("950x540")
 
-        self.columns = ("id", "key_hash", "label", "machine_id", "active", "created_at", "last_used_at")
+        self.columns = ("id", "key_plain", "key_hash", "label", "machine_id", "active", "created_at", "last_used_at")
+        self.headings = {"key_plain": "Key"}
+        self.widths = {"id": 110, "key_plain": 230, "key_hash": 120}
+
+        self.show_keys_var = tk.BooleanVar(value=False)
+        self.rows = []
+        self.rows_by_iid = {}
 
         self.status_var = tk.StringVar(value="Ready")
         status = ttk.Label(self, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
@@ -136,6 +160,10 @@ class KeyManager(tk.Tk):
         ttk.Button(top, text="Refresh", command=self.refresh).pack(side=tk.LEFT, padx=4)
         ttk.Button(top, text="Deactivate", command=self.on_deactivate).pack(side=tk.LEFT, padx=4)
         ttk.Button(top, text="Reactivate", command=self.on_reactivate).pack(side=tk.LEFT, padx=4)
+        ttk.Button(top, text="Copy Key", command=self.on_copy).pack(side=tk.LEFT, padx=4)
+        ttk.Checkbutton(
+            top, text="Show keys", variable=self.show_keys_var, command=self.render_rows
+        ).pack(side=tk.LEFT, padx=4)
         ttk.Button(top, text="Delete", command=self.on_delete).pack(side=tk.LEFT, padx=4)
 
         mid = ttk.Frame(self, padding=8)
@@ -143,9 +171,10 @@ class KeyManager(tk.Tk):
 
         self.tree = ttk.Treeview(mid, columns=self.columns, show="headings", selectmode="extended")
         for col in self.columns:
-            self.tree.heading(col, text=col.replace("_", " ").title())
-            self.tree.column(col, width=130 if col != "key_hash" else 280, anchor=tk.W)
+            self.tree.heading(col, text=self.headings.get(col, col.replace("_", " ").title()))
+            self.tree.column(col, width=self.widths.get(col, 110), anchor=tk.W)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.tree.bind("<Double-1>", self.on_double_click)
 
         scroll = ttk.Scrollbar(mid, orient=tk.VERTICAL, command=self.tree.yview)
         scroll.pack(side=tk.RIGHT, fill=tk.Y)
@@ -167,7 +196,7 @@ class KeyManager(tk.Tk):
         bottom.pack(fill=tk.X)
         ttk.Label(
             bottom,
-            text="Plaintext keys are shown only at creation. Copy them immediately. D1 API via Cloudflare REST (no Node required).",
+            text="Keys created from now on can be revealed with 'Show keys'. Keys created earlier only have their hash stored.",
         ).pack(side=tk.LEFT)
         ttk.Button(bottom, text="Close", command=self.destroy).pack(side=tk.RIGHT)
 
@@ -179,21 +208,62 @@ class KeyManager(tk.Tk):
 
     def refresh(self):
         self.set_status("Loading keys...")
-        for i in self.tree.get_children():
-            self.tree.delete(i)
         try:
-            rows = list_keys()
+            self.rows = list_keys()
         except Exception as e:
             messagebox.showerror("D1 Error", str(e))
             self.set_status("Error loading keys")
             return
-        for r in rows:
-            vals = [r.get(c, "") for c in self.columns]
-            self.tree.insert("", tk.END, values=vals)
-        self.set_status(f"{len(rows)} key(s) loaded")
+        self.render_rows()
+        self.set_status(f"{len(self.rows)} key(s) loaded")
+
+    def display_key(self, plain):
+        if not plain:
+            return "(not stored)"
+        if self.show_keys_var.get():
+            return plain
+        return f"{plain[:4]}...{plain[-4:]}"
+
+    def render_rows(self):
+        children = self.tree.get_children()
+        if children:
+            self.tree.delete(*children)
+        self.rows_by_iid = {}
+        for row in self.rows:
+            vals = []
+            for col in self.columns:
+                if col == "key_plain":
+                    vals.append(self.display_key(row.get("key_plain")))
+                else:
+                    vals.append(row.get(col, "") or "")
+            iid = self.tree.insert("", tk.END, values=vals)
+            self.rows_by_iid[iid] = row
 
     def selected_ids(self):
         return [self.tree.item(i, "values")[0] for i in self.tree.selection()]
+
+    def copy_key(self, row):
+        plain = row.get("key_plain") if row else None
+        if not plain:
+            self.set_status("This key's plaintext is not stored (created before reveal support)")
+            return
+        self.clipboard_clear()
+        self.clipboard_append(plain)
+        self.set_status(f"Copied key for {row.get('label') or 'unlabeled key'}")
+
+    def on_copy(self):
+        rows = [self.rows_by_iid.get(i) for i in self.tree.selection()]
+        rows = [r for r in rows if r]
+        if not rows:
+            messagebox.showwarning("None selected", "Select a key to copy.")
+            return
+        self.copy_key(rows[0])
+
+    def on_double_click(self, event):
+        if self.tree.identify_column(event.x) != f"#{self.columns.index('key_plain') + 1}":
+            return
+        row = self.rows_by_iid.get(self.tree.identify_row(event.y))
+        self.copy_key(row)
 
     def on_create(self):
         label = self.label_var.get().strip()
@@ -207,6 +277,7 @@ class KeyManager(tk.Tk):
             self.set_status("Create failed")
             return
         self.label_var.set("")
+        self.show_keys_var.set(True)
         self.refresh()
         self.show_plaintext(plain, label)
         self.set_status("Key created")
@@ -222,7 +293,7 @@ class KeyManager(tk.Tk):
         txt.configure(state="disabled")
         txt.pack(padx=16, pady=4, fill=tk.X)
         ttk.Label(
-            win, text="Copy this now — it will not be shown again.", foreground="#666"
+            win, text="Copy this now — it can also be revealed later with 'Show keys'.", foreground="#666"
         ).pack(pady=2)
         ttk.Button(win, text="OK", command=win.destroy).pack(pady=10)
 

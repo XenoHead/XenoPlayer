@@ -31,3 +31,5 @@ build_info.json
 web/node_modules/
 .wrangler/
 MAINLIST.json
+/.video_cache
+cloudflare/migrations/0004_reg_key_plaintext.sql

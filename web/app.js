@@ -554,8 +554,6 @@ function loadMedia(path, index) {
         imageViewer.style.display = 'block';
         imageViewer.src = mediaUrl;
 
-        playBtn.innerHTML = '<i class="fa-solid fa-play"></i>'; // Images don't play
-
         // Load collection info
         pywebview.api.get_collection_info(path).then(info => {
             collectionTranslations = info || {};
@@ -2836,6 +2834,15 @@ function cmMoveTo(target) {
 }
 
 function togglePlay() {
+    if (!splitScreenActive && imageViewer.style.display !== 'none') {
+        if (imageTimerInterval) {
+            stopImageTimer();
+        } else if (imageTimerValue() > 0) {
+            startImageTimer();
+        }
+        updateImagePlayButton();
+        return;
+    }
     const el = splitScreenActive ? videoPlayer : activeMedia();
     if (el.style.display !== 'none') {
         if (el.paused) {
@@ -2985,21 +2992,44 @@ audioPlayer.addEventListener('ended', onEnded);
 
 let imageTimerInterval = null;
 
-function updateImageTimer() {
+function imageTimerValue() {
+    const input = document.getElementById('image-timer');
+    return input ? (parseInt(input.value, 10) || 0) : 0;
+}
+
+function stopImageTimer() {
     if (imageTimerInterval) {
         clearInterval(imageTimerInterval);
         imageTimerInterval = null;
     }
-    const val = parseInt(document.getElementById('image-timer').value, 10) || 0;
-    if (val > 0 && imageViewer.style.display !== 'none') {
-        imageTimerInterval = setInterval(() => {
-            if (splitScreenActive) {
-                navigatePaneImage(1);
-            } else {
-                handleNextMedia();
-            }
-        }, val * 1000);
+}
+
+function startImageTimer() {
+    stopImageTimer();
+    const seconds = imageTimerValue();
+    if (seconds <= 0) return;
+    imageTimerInterval = setInterval(() => {
+        if (splitScreenActive) {
+            navigatePaneImage(1);
+        } else {
+            handleNextMedia();
+        }
+    }, seconds * 1000);
+}
+
+function updateImagePlayButton() {
+    if (splitScreenActive || imageViewer.style.display === 'none') return;
+    playBtn.innerHTML = imageTimerInterval
+        ? '<i class="fa-solid fa-pause"></i>'
+        : '<i class="fa-solid fa-play"></i>';
+}
+
+function updateImageTimer() {
+    stopImageTimer();
+    if (imageTimerValue() > 0 && imageViewer.style.display !== 'none') {
+        startImageTimer();
     }
+    updateImagePlayButton();
 }
 
 // --- Keyboard & Mouse Shortcuts ---
@@ -6867,6 +6897,7 @@ let storyEdgePrefetch = new Map();
 let storyEdgePrefetchPromises = new Map();
 let storyTtsSession = 0;
 let storyTtsInitialized = false;
+let storyTtsExporting = false;
 
 function openStoryReader(item) {
     if (!item || !item.url) {
@@ -6881,6 +6912,7 @@ function openStoryReader(item) {
     const content = document.getElementById('story-reader-content');
     if (!modal || !body || !titleEl || !authorEl) return;
 
+    hideStoryDock();
     stopStoryTts();
     storyTtsChunks = [];
     storyTtsParagraphs = [];
@@ -6979,6 +7011,10 @@ function renderStoryReader(data) {
 
     setStoryTtsButton(false);
     setStoryTtsStatus(storyTtsChunks.length ? 'Ready' : 'No text');
+    updateStoryDockMeta();
+    const preview = paragraphs.find(paragraph => (paragraph.text || '').trim());
+    setStoryDockSnippet(preview ? preview.text : '');
+    updateStoryTtsDownloadState();
     const content = document.getElementById('story-reader-content');
     if (content) content.scrollTop = 0;
     populateStoryVoiceOptions();
@@ -6990,6 +7026,7 @@ function renderStoryReader(data) {
 
 function closeStoryReader() {
     stopStoryTts();
+    hideStoryDock();
     const modal = document.getElementById('story-reader-modal');
     if (modal) modal.style.display = 'none';
     const body = document.getElementById('story-reader-body');
@@ -7003,6 +7040,51 @@ function openStoryInBrowser() {
     if (storyReaderData && storyReaderData.url) {
         pywebview.api.open_external_url(storyReaderData.url);
     }
+}
+
+function hideStoryDock() {
+    const dock = document.getElementById('story-reader-dock');
+    if (dock) dock.classList.remove('visible');
+}
+
+function showStoryDock() {
+    const dock = document.getElementById('story-reader-dock');
+    if (!dock) return;
+    dock.classList.add('visible');
+    updateStoryDockMeta();
+    updateStoryTtsDownloadState();
+}
+
+function updateStoryDockMeta() {
+    const title = document.getElementById('story-dock-title');
+    if (!title) return;
+    const headerTitle = document.getElementById('story-reader-title');
+    title.textContent = (storyReaderData && storyReaderData.title)
+        || (headerTitle && headerTitle.textContent)
+        || 'Story';
+}
+
+function setStoryDockSnippet(text) {
+    const snippet = document.getElementById('story-dock-snippet');
+    if (snippet) snippet.textContent = text || '';
+}
+
+function dockStoryReader() {
+    if (!storyReaderData || !storyTtsChunks.length) {
+        alert('Load a story before docking the reader.');
+        return;
+    }
+    const modal = document.getElementById('story-reader-modal');
+    if (modal) modal.style.display = 'none';
+    showStoryDock();
+    const chunk = storyTtsChunks[storyTtsIndex];
+    if (chunk) setStoryDockSnippet(chunk.text);
+}
+
+function undockStoryReader() {
+    const modal = document.getElementById('story-reader-modal');
+    hideStoryDock();
+    if (modal && storyReaderData) modal.style.display = 'flex';
 }
 
 function buildStoryTtsChunks(paragraphs) {
@@ -7075,6 +7157,7 @@ async function ensureStoryTtsEngine() {
     }
     populateStoryVoiceOptions(appState && appState.story_tts_voice);
     setStoryTtsStatus(storyTtsEngine === 'edge' ? 'Edge Neural ready' : 'System voice ready');
+    updateStoryTtsDownloadState();
     if (storyTtsEngine === 'edge' && storyEdgeAvailable && storyTtsChunks.length) {
         prefetchEdgeChunk(0);
     }
@@ -7163,6 +7246,7 @@ function onStoryTtsEngineChanged() {
     populateStoryVoiceOptions();
     saveStoryTtsSettings();
     setStoryTtsStatus(storyTtsEngine === 'edge' ? 'Edge Neural ready' : 'System voice ready');
+    updateStoryTtsDownloadState();
 }
 
 function initStoryTtsAudio() {
@@ -7194,6 +7278,8 @@ function initStoryTtsAudio() {
 function setStoryTtsStatus(text) {
     const status = document.getElementById('story-tts-status');
     if (status) status.textContent = text;
+    const dockStatus = document.getElementById('story-dock-status');
+    if (dockStatus) dockStatus.textContent = text;
 }
 
 function setStoryTtsButton(playing) {
@@ -7202,6 +7288,12 @@ function setStoryTtsButton(playing) {
         button.innerHTML = playing
             ? '<i class="fa-solid fa-pause"></i> <span>Pause</span>'
             : '<i class="fa-solid fa-play"></i> <span>Read</span>';
+    }
+    const dockButton = document.getElementById('story-dock-play');
+    if (dockButton) {
+        dockButton.innerHTML = playing
+            ? '<i class="fa-solid fa-pause"></i>'
+            : '<i class="fa-solid fa-play"></i>';
     }
 }
 
@@ -7213,13 +7305,16 @@ function clearStoryTtsHighlight() {
 
 function highlightStoryParagraph(index) {
     const body = document.getElementById('story-reader-body');
-    if (!body) return;
-    body.querySelectorAll('.story-paragraph.tts-active').forEach(el => el.classList.remove('tts-active'));
-    const target = body.querySelector(`[data-tts-index="${index}"]`);
-    if (target) {
-        target.classList.add('tts-active');
-        target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    if (body) {
+        body.querySelectorAll('.story-paragraph.tts-active').forEach(el => el.classList.remove('tts-active'));
+        const target = body.querySelector(`[data-tts-index="${index}"]`);
+        if (target) {
+            target.classList.add('tts-active');
+            target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }
     }
+    const chunk = storyTtsChunks[storyTtsIndex];
+    if (chunk) setStoryDockSnippet(chunk.text);
 }
 
 function toggleStoryTts() {
@@ -7445,6 +7540,83 @@ function stopStoryTts() {
     clearStoryTtsHighlight();
     setStoryTtsButton(false);
     setStoryTtsStatus('Ready');
+}
+
+function updateStoryTtsDownloadState() {
+    const available = storyTtsEngine === 'edge' && storyEdgeAvailable;
+    const disabled = !available || storyTtsExporting;
+    const title = available
+        ? 'Save the story audio as an MP3'
+        : 'Audio download requires the Edge Neural engine';
+    const main = document.getElementById('story-tts-download');
+    if (main) {
+        main.disabled = disabled;
+        main.title = title;
+        main.innerHTML = storyTtsExporting
+            ? '<i class="fa-solid fa-spinner fa-spin"></i> <span>Saving...</span>'
+            : '<i class="fa-solid fa-download"></i> <span>Save audio</span>';
+    }
+    const dock = document.getElementById('story-dock-download');
+    if (dock) {
+        dock.disabled = disabled;
+        dock.title = title;
+        dock.innerHTML = storyTtsExporting
+            ? '<i class="fa-solid fa-spinner fa-spin"></i>'
+            : '<i class="fa-solid fa-download"></i>';
+    }
+}
+
+async function downloadStoryTtsAudio() {
+    if (storyTtsExporting) return;
+    if (!storyTtsChunks.length) {
+        alert('There is no story text to export.');
+        return;
+    }
+    if (storyTtsEngine !== 'edge' || !storyEdgeAvailable) {
+        alert('Saving audio requires the Edge Neural engine. Set Engine to Edge Neural and try again.');
+        return;
+    }
+    const voiceSelect = document.getElementById('story-tts-voice');
+    const rateInput = document.getElementById('story-tts-rate');
+    const voice = (voiceSelect && voiceSelect.value) ? voiceSelect.value : 'en-US-AriaNeural';
+    const rate = rateInput ? (parseFloat(rateInput.value) || 1) : 1;
+    const title = (storyReaderData && storyReaderData.title) || 'story';
+    const texts = storyTtsChunks.map(chunk => chunk.text);
+
+    storyTtsExporting = true;
+    updateStoryTtsDownloadState();
+    setStoryTtsStatus(`Preparing audio (0 of ${texts.length})...`);
+    const poll = setInterval(async () => {
+        try {
+            const progress = await pywebview.api.story_tts_export_progress();
+            if (progress && progress.total) {
+                setStoryTtsStatus(`Generating audio ${progress.current || 0} of ${progress.total}...`);
+            }
+        } catch (error) {
+            // Progress polling is best-effort.
+        }
+    }, 800);
+
+    try {
+        const res = await pywebview.api.story_tts_export(texts, voice, rate, title);
+        if (!res || res.status === 'cancelled') {
+            setStoryTtsStatus('Audio save cancelled');
+            return;
+        }
+        if (res.status !== 'success') {
+            setStoryTtsStatus('Audio save failed');
+            alert((res && res.msg) || 'Could not save the audio.');
+            return;
+        }
+        setStoryTtsStatus(`Saved audio: ${res.path}`);
+    } catch (error) {
+        setStoryTtsStatus('Audio save failed');
+        alert('Could not save the audio: ' + (error && error.message ? error.message : error));
+    } finally {
+        clearInterval(poll);
+        storyTtsExporting = false;
+        updateStoryTtsDownloadState();
+    }
 }
 
 (function initStoryReaderEvents() {

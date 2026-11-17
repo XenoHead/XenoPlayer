@@ -274,6 +274,23 @@
                 </div>
             </div>
 
+            <div id="story-reader-dock" aria-live="polite">
+                <div id="story-dock-info">
+                    <div id="story-dock-head">
+                        <span id="story-dock-title">Story</span>
+                        <span id="story-dock-status"></span>
+                    </div>
+                    <div id="story-dock-snippet"></div>
+                </div>
+                <div class="story-dock-actions">
+                    <button id="story-dock-play" onclick="toggleStoryTts()" title="Read aloud"><i class="fa-solid fa-play"></i></button>
+                    <button onclick="stopStoryTts()" title="Stop"><i class="fa-solid fa-stop"></i></button>
+                    <button id="story-dock-download" onclick="downloadStoryTtsAudio()" title="Save the story audio as an MP3"><i class="fa-solid fa-download"></i></button>
+                    <button onclick="undockStoryReader()" title="Expand reader"><i class="fa-solid fa-up-right-and-down-left-from-center"></i></button>
+                    <button onclick="closeStoryReader()" title="Close reader"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+            </div>
+
             <div id="bottom-controls">
                 <div id="transport-controls" style="display:flex; align-items:center; gap:10px; flex:1; min-width:0; max-width:680px;">
                     <button onclick="handlePrevMedia()" title="Previous"><i class="fa-solid fa-backward-step"></i></button>
@@ -1081,6 +1098,7 @@
                     <div id="story-reader-meta"></div>
                 </div>
                 <div class="story-reader-header-actions">
+                    <button onclick="dockStoryReader()" title="Dock to player"><i class="fa-solid fa-window-minimize"></i></button>
                     <button onclick="openStoryInBrowser()" title="Open in browser"><i class="fa-solid fa-arrow-up-right-from-square"></i></button>
                     <button onclick="closeStoryReader()" title="Close"><i class="fa-solid fa-xmark"></i></button>
                 </div>
@@ -1092,6 +1110,7 @@
                 <div class="story-reader-tts-controls">
                     <button id="story-tts-play" onclick="toggleStoryTts()" title="Read aloud"><i class="fa-solid fa-play"></i> <span>Read</span></button>
                     <button onclick="stopStoryTts()" title="Stop"><i class="fa-solid fa-stop"></i></button>
+                    <button id="story-tts-download" onclick="downloadStoryTtsAudio()" title="Save the story audio as an MP3"><i class="fa-solid fa-download"></i> <span>Save audio</span></button>
                     <label for="story-tts-engine">Engine</label>
                     <select id="story-tts-engine" onchange="onStoryTtsEngineChanged()"
                         title="Edge Neural uses Microsoft's online voices; System uses offline voices installed in Windows.">

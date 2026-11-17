@@ -434,6 +434,89 @@ video.zoom-double, img.zoom-double {
     font-size: 11px;
 }
 
+/* Docked story reader bar (3 lines tall, sits above the player controls) */
+#story-reader-dock {
+    display: none;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 14px;
+    padding: 6px 16px;
+    background: #181825;
+    border-top: 1px solid #313244;
+}
+
+#story-reader-dock.visible {
+    display: flex;
+}
+
+#story-dock-info {
+    flex: 1;
+    min-width: 0;
+}
+
+#story-dock-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    font-size: 11px;
+}
+
+#story-dock-title {
+    color: #fab387;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 45%;
+}
+
+#story-dock-status {
+    color: #89b4fa;
+    margin-left: auto;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#story-dock-snippet {
+    margin-top: 2px;
+    font-size: 12px;
+    line-height: 1.35;
+    max-height: calc(1.35em * 3);
+    overflow: hidden;
+    color: #cdd6f4;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    white-space: pre-wrap;
+}
+
+.story-dock-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.story-dock-actions button {
+    background: #313244;
+    border: 1px solid #45475a;
+    color: #cdd6f4;
+    border-radius: 4px;
+    padding: 6px 10px;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.story-dock-actions button:hover {
+    background: #45475a;
+}
+
+.story-dock-actions button:disabled,
+.story-reader-tts-controls button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
 @media (max-width: 700px) {
     .story-reader-shell {
         width: 100%;
